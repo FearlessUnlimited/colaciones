@@ -1,0 +1,2802 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colaciones — Costeo</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍲</text></svg>">
+<style>
+:root {
+  --bg: #f6f5f1; --surface: #ffffff; --surface2: #f0eee8; --ink: #1f2421; --mut: #6b726d; --line: #e2dfd6;
+  --accent: #0f766e; --accent-ink: #ffffff; --accent-soft: #d7efec;
+  --good: #1f7a3f; --good-soft: #dcf0e2; --warn: #b45309; --warn-soft: #fdecc8; --bad: #b42318; --bad-soft: #fde1de; --info: #1d5fa8; --info-soft: #dce9f7;
+  --sim: #7c3aed; --sim-soft: #ece4fd; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 14px rgba(0,0,0,.05);
+  --seg0: #0f766e; --seg1: #2563a8; --seg2: #b45309; --seg3: #7c3aed; --seg4: #be185d; --seg5: #4d7c0f; --seg6: #0e7490; --seg7: #9ca3af;
+  --radius: 10px; --font: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181a; --surface: #1d2326; --surface2: #262d30; --ink: #e8ece9; --mut: #96a09a; --line: #333c40;
+    --accent: #2dd4bf; --accent-ink: #062a26; --accent-soft: #123a36;
+    --good: #5fd08a; --good-soft: #17341f; --warn: #f0b05a; --warn-soft: #3b2c10; --bad: #ff8a7d; --bad-soft: #3d1b18; --info: #7db7f0; --info-soft: #17283a;
+    --sim: #b69cff; --sim-soft: #2a2145; --shadow: 0 1px 2px rgba(0,0,0,.4);
+    --seg0: #2dd4bf; --seg1: #6aa8f0; --seg2: #f0b05a; --seg3: #b69cff; --seg4: #f472b6; --seg5: #a3d65c; --seg6: #5ad1e6; --seg7: #7b848a;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; font: 14px/1.45 var(--font); color: var(--ink); background: var(--bg); }
+h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
+h3 { font-size: 15px; } h4 { font-size: 13px; margin: 14px 0 6px; color: var(--mut); text-transform: uppercase; letter-spacing: .04em; }
+a { color: var(--accent); }
+p { margin: 0 0 8px; }
+small { font-size: 12px; color: var(--mut); }
+button, input, select, textarea { font: inherit; color: inherit; }
+input[type=text], input[type=email], input[type=password], input:not([type]), select, textarea {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; min-width: 0; max-width: 100%;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+textarea { width: 100%; resize: vertical; }
+input.num { text-align: right; }
+input.sim { border-color: var(--sim); background: var(--sim-soft); }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.w60 { width: 60px; } .w70 { width: 74px; } .w80 { width: 88px; } .w90 { width: 96px; } .w200 { width: 160px; }
+input.wide { width: 100%; } input.ing { width: 100%; min-width: 180px; } input.alt { width: 120px; }
+
+/* header */
+.top { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 16px; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 190px; }
+.brand b { display: block; font-size: 15px; } .brand small { display: block; line-height: 1.1; }
+.logo { font-size: 24px; }
+.tabs { display: flex; gap: 2px; overflow-x: auto; flex: 1 1 auto; scrollbar-width: thin; }
+.tab { padding: 7px 12px; border-radius: 8px; color: var(--ink); text-decoration: none; white-space: nowrap; font-weight: 500; }
+.tab:hover { background: var(--surface2); }
+.tab.on { background: var(--accent); color: var(--accent-ink); }
+.tools { display: flex; align-items: center; gap: 8px; }
+.saved { white-space: nowrap; } .saved.bad { color: var(--bad); }
+.esc-banner { flex-basis: 100%; background: var(--sim-soft); color: var(--ink); border: 1px solid var(--sim); border-radius: 8px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.main { max-width: 1500px; margin: 0 auto; padding: 16px; }
+
+/* controles */
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 12px; cursor: pointer; font-weight: 500; }
+.btn:hover:not(:disabled) { background: var(--surface2); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+.btn.danger { color: var(--bad); border-color: var(--bad); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.small { padding: 3px 8px; font-size: 12px; border-radius: 7px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 11px; cursor: pointer; font-size: 13px; }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 600; }
+.chip.small { padding: 1px 8px; font-size: 12px; }
+.chips.big .chip { padding: 7px 16px; font-size: 14px; }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--surface2); color: var(--mut); }
+.badge.bad { background: var(--bad-soft); color: var(--bad); } .badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.good { background: var(--good-soft); color: var(--good); } .badge.info { background: var(--info-soft); color: var(--info); }
+.bar { display: inline-block; width: 70px; height: 7px; background: var(--surface2); border-radius: 4px; overflow: hidden; vertical-align: middle; }
+.bar .fill { display: block; height: 100%; background: var(--accent); } .bar .fill.good { background: var(--good); } .bar .fill.warn { background: var(--warn); } .bar .fill.bad { background: var(--bad); }
+.cellbar { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.empty { color: var(--mut); padding: 18px; text-align: center; }
+.mut { color: var(--mut); } .strong { font-weight: 700; } .small { font-size: 12px; }
+.good-t { color: var(--good); } .bad-t { color: var(--bad); } .warn-t { color: var(--warn); } .sim-t { color: var(--sim); }
+.nowrap { white-space: nowrap; } .r { text-align: right; } .c { text-align: center; } .spacer { flex: 1; }
+.row { display: flex; align-items: center; } .gap { gap: 10px; } .wrap { flex-wrap: wrap; } .mt { margin-top: 10px; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+.help { color: var(--mut); font-size: 12.5px; } ul.help, ol.help { padding-left: 18px; margin: 6px 0; }
+label { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--mut); }
+label.chk { flex-direction: row; align-items: center; gap: 6px; color: var(--ink); } label.block { width: 100%; }
+
+/* tarjetas */
+.card { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); min-width: 0; }
+.card-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); border-left: 4px solid var(--line); }
+.kpi.good { border-left-color: var(--good); } .kpi.warn { border-left-color: var(--warn); } .kpi.bad { border-left-color: var(--bad); }
+.kpi-l { font-size: 12px; color: var(--mut); } .kpi-v { font-size: 24px; font-weight: 700; line-height: 1.2; margin: 2px 0; } .kpi-s { font-size: 12px; color: var(--mut); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 14px; }
+.cost-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.cost-grid > div { display: flex; flex-direction: column; } .cost-grid b { font-size: 16px; } .cost-grid .tot b { font-size: 19px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; } .tag { background: var(--surface2); border-radius: 6px; padding: 2px 8px; font-size: 12px; text-decoration: none; color: var(--ink); } .tag:hover { background: var(--accent-soft); }
+.checks { display: flex; flex-direction: column; gap: 4px; } .checks > div { padding: 6px 10px; border-radius: 8px; font-size: 13px; }
+.chk-error { background: var(--bad-soft); } .chk-warn { background: var(--warn-soft); } .chk-info { background: var(--info-soft); }
+.alerts { display: flex; flex-direction: column; gap: 6px; }
+.alert { display: flex; gap: 8px; padding: 7px 10px; border-radius: 8px; background: var(--surface2); }
+.alert.bad { background: var(--bad-soft); } .alert.warn { background: var(--warn-soft); } .alert.info { background: var(--info-soft); } .alert.good { background: var(--good-soft); }
+.alert.link { cursor: pointer; } .alert.link:hover { filter: brightness(.97); }
+
+/* layout dividido */
+.split { display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 14px; align-items: start; }
+.split.wide { grid-template-columns: 1fr; } .split.wide:has(.drawer) { grid-template-columns: minmax(0, 1fr) 380px; }
+.pane-list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 8px; position: sticky; top: 74px; max-height: calc(100vh - 90px); }
+.pane-detail, .pane-wide { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.scroll { overflow: auto; flex: 1; min-height: 120px; } .scroll-x { overflow-x: auto; }
+.filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .filters select { min-width: 0; flex: 1 1 140px; } .filters .search { flex: 1; min-width: 140px; }
+.drawer { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; position: sticky; top: 74px; max-height: calc(100vh - 90px); overflow: auto; }
+.x { border: 0; background: transparent; font-size: 22px; line-height: 1; cursor: pointer; color: var(--mut); }
+.alt-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+
+/* tablas */
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl th { text-align: left; font-size: 12px; color: var(--mut); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.tbl th.r { text-align: right; } .tbl th.c { text-align: center; }
+.tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.tbl.compact td { padding: 4px 6px; } .tbl.compact th { padding: 4px 6px; }
+.tbl tfoot td { font-weight: 600; border-top: 2px solid var(--line); }
+.tbl.sel tbody tr { cursor: pointer; } .tbl.sel tbody tr:hover, .tbl tr.link:hover { background: var(--surface2); }
+.tbl tr.link { cursor: pointer; } .tbl td.link { cursor: pointer; }
+.tbl tr.on { background: var(--accent-soft); } .tbl tr.off { opacity: .55; } .tbl tr.warnrow td { background: var(--warn-soft); } .tbl tr.usada td:first-child { border-left: 3px solid var(--accent); }
+.tbl th.sortable { cursor: pointer; user-select: none; } .tbl th.on { color: var(--ink); }
+.nm { font-weight: 600; }
+.tbl.platos td input.num { padding: 3px 6px; }
+
+/* composición */
+.comp { display: flex; flex-direction: column; gap: 6px; }
+.stackbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--surface2); }
+.seg { display: block; height: 100%; min-width: 2px; }
+.seg0, .dot.seg0 { background: var(--seg0); } .seg1, .dot.seg1 { background: var(--seg1); } .seg2, .dot.seg2 { background: var(--seg2); } .seg3, .dot.seg3 { background: var(--seg3); }
+.seg4, .dot.seg4 { background: var(--seg4); } .seg5, .dot.seg5 { background: var(--seg5); } .seg6, .dot.seg6 { background: var(--seg6); } .seg7, .dot.seg7 { background: var(--seg7); }
+.wf-ing, .dot.wf-ing { background: var(--seg1); } .wf-env, .dot.wf-env { background: var(--seg2); } .wf-oh, .dot.wf-oh { background: var(--seg3); } .wf-com, .dot.wf-com { background: var(--seg4); }
+.wf-iva, .dot.wf-iva { background: var(--seg7); } .wf-mg, .dot.wf-mg { background: var(--good); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--mut); }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+
+/* plan y compras */
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.dia { background: var(--surface2); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.dia-h { display: flex; justify-content: space-between; align-items: baseline; }
+.plan-it { display: flex; align-items: center; gap: 6px; background: var(--surface); border-radius: 7px; padding: 3px 6px; } .plan-it .nm { flex: 1; font-weight: 500; font-size: 13px; }
+.total-bar { text-align: right; font-size: 17px; padding: 6px 4px; }
+
+/* parámetros */
+.params { display: flex; flex-direction: column; } .param { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.param:last-child { border-bottom: 0; }
+
+/* cocina */
+.lista { list-style: none; margin: 0; padding: 0; } .lista li { padding: 6px 8px; border-radius: 6px; cursor: pointer; } .lista li:hover { background: var(--surface2); } .lista li.on { background: var(--accent-soft); font-weight: 600; }
+.grp { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--mut); margin: 10px 8px 2px; }
+.ficha { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 26px; font-size: 16px; }
+.ficha-h { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; } .ficha h2 { font-size: 26px; }
+.ficha .desc { color: var(--mut); } .ficha-t td, .ficha-t th { font-size: 16px; } .ficha .pasos { white-space: pre-wrap; line-height: 1.6; }
+tr.subhead td { font-weight: 700; background: var(--surface2); } tr.hijo td { color: var(--mut); padding-left: 22px; }
+
+/* acceso (modo nube) */
+.acceso { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.acceso-box { width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 24px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 14px; }
+.acceso-box h2 { font-size: 20px; } .acceso-box .btn.primary { padding: 10px; }
+.acc-msg { font-size: 13px; min-height: 18px; } .acc-msg.bad { color: var(--bad); } .acc-msg.good { color: var(--good); }
+.user { display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+
+/* overlays */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+.modal { background: var(--surface); border-radius: 12px; max-width: 520px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
+.modal-h { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 0; } .modal-b { padding: 12px 16px; } .modal-f { padding: 0 16px 14px; display: flex; justify-content: flex-end; gap: 8px; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 9px; z-index: 200; box-shadow: var(--shadow); transition: opacity .4s; } .toast.out { opacity: 0; }
+details summary { cursor: pointer; color: var(--accent); margin: 6px 0; }
+
+@media (max-width: 980px) {
+  .split, .split.wide, .split.wide:has(.drawer) { grid-template-columns: minmax(0, 1fr); }
+  .pane-list, .drawer { position: static; max-height: none; } .pane-list .scroll { max-height: 320px; }
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .top { position: static; } .tabs { flex-wrap: wrap; overflow: visible; } .main { padding: 10px; } .top { padding: 8px 10px; } .brand small { display: none; } .brand { min-width: 0; }
+  .ficha { padding: 14px; } .param { flex-direction: column; align-items: flex-start; }
+}
+@media print {
+  body { background: #fff; color: #000; } .top, .noprint, .pane-list, .btn, .toast, .esc-banner { display: none !important; }
+  .main { padding: 0; max-width: none; } .split, .split.cocina { display: block; } .card, .ficha { box-shadow: none; border: 0; break-inside: avoid; }
+  .ficha { page-break-after: always; padding: 0; } .tbl td, .tbl th { color: #000; }
+}
+
+</style>
+</head>
+<body>
+<div id="app"><p style="padding:20px">Cargando…</p></div>
+<noscript>Esta aplicación necesita JavaScript.</noscript>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+/* sin datos incrustados: vienen de la nube */
+window.SEED = null; window.INFORME = null;
+/* src/config.cloud.js */
+/* Conexión a Supabase. La clave "publishable" es pública por diseño: la seguridad la dan el login y las reglas RLS. */
+window.CLOUD = {
+  url: 'https://mnwqlfqskmgnenvttixs.supabase.co',
+  key: 'sb_publishable_eJ7034OktygacSH63kj50A_53jlNzMP'
+};
+
+/* src/engine.js */
+/* Motor de costeo — funciones puras, sin DOM. Funciona en navegador (global Engine) y en Node (require).
+ *
+ * Convención de costeo (corrige los errores del Sheet original):
+ *  - La cantidad de cada línea de receta es peso/volumen UTILIZABLE tal como se compra (lentejas SECAS,
+ *    arroz CRUDO, carne cruda sin hueso). Todas las cantidades están en la unidad base del insumo (g, ml, un).
+ *  - El rendimiento (<=100%) es solo merma de limpieza/pelado; la merma de cocción NO se aplica al costo.
+ *  - Costo neto por unidad base = precio del formato / (cantidad del formato * rendimiento).
+ */
+(function (root) {
+  'use strict';
+
+  const DEFAULT_PARAMS = {
+    imprevistosPct: 5,        // % sobre ingredientes (condimentos menores, mermas operativas)
+    gasPorPorcion: 150,       // CLP gas/energía por porción
+    manoObraPorPorcion: 0,    // CLP mano de obra por porción (0 = trabajo propio no valorizado)
+    repartoPorPedido: 0,      // CLP costo de reparto por pedido (bencina/moto)
+    ivaOn: false,             // true = el PVP incluye IVA y el margen se calcula sobre el neto
+    ivaPct: 19,
+    comisionPct: 0,           // % comisión de pago (transferencia/tarjeta) sobre PVP
+    foodCostObjetivo: 35,     // % objetivo de ingredientes sobre precio neto
+    foodCostAlerta: 42,       // % sobre el cual el plato se marca en alerta
+    redondeo: 100,            // el PVP sugerido se redondea hacia arriba a múltiplos de esto
+    modoOferta: 'preferida',  // preferida | barata | promedio
+    precioViejoDias: 30,      // días tras los cuales un precio se considera desactualizado
+    porcionesSemana: 100,     // volumen semanal supuesto (reparto parejo) para estimar ahorros
+    costosFijosMes: 0,        // CLP costos fijos mensuales (para punto de equilibrio)
+    diasOperacionMes: 22,
+    trilogiaPrecio: 2000,     // precio adicional del combo Entrada+Ensalada+Postre
+    hoy: null                 // ISO yyyy-mm-dd; null = fecha actual
+  };
+
+  const TIPOS_VENDIBLES = ['plato', 'entrada', 'ensalada', 'postre', 'acompanamiento'];
+  const DIETA_NIVEL = { vegano: 0, vegetariano: 1, omni: 2 };
+  const LINEA_NIVEL_MAX = { 'Vegano': 0, 'Vegetariano': 1 };
+
+  function params(state, opts) {
+    return Object.assign({}, DEFAULT_PARAMS, state.params || {}, (opts && opts.params) || {});
+  }
+
+  function hoyISO(p) {
+    return p.hoy || new Date().toISOString().slice(0, 10);
+  }
+
+  function diasEntre(a, b) {
+    return Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+  }
+
+  /* ---------- índice / contexto ---------- */
+  function makeCtx(state, opts) {
+    opts = opts || {};
+    const ctx = {
+      state: state, opts: opts, p: params(state, opts),
+      insumos: new Map(), ofertas: new Map(), ofertasPorInsumo: new Map(), recetas: new Map(),
+      memoInsumo: new Map(), memoReceta: new Map(), errors: []
+    };
+    (state.insumos || []).forEach(function (i) { ctx.insumos.set(i.id, i); });
+    (state.ofertas || []).forEach(function (o) {
+      ctx.ofertas.set(o.id, o);
+      if (!ctx.ofertasPorInsumo.has(o.insumoId)) ctx.ofertasPorInsumo.set(o.insumoId, []);
+      ctx.ofertasPorInsumo.get(o.insumoId).push(o);
+    });
+    (state.recetas || []).forEach(function (r) { ctx.recetas.set(r.id, r); });
+    return ctx;
+  }
+
+  /* ---------- insumos y ofertas ---------- */
+  function precioOferta(ctx, o) {
+    const ov = ctx.opts.precios && ctx.opts.precios[o.id];
+    return ov != null ? ov : o.precio;
+  }
+
+  // costo neto por unidad base de una oferta
+  function costoNetoOferta(ctx, o) {
+    const ins = ctx.insumos.get(o.insumoId);
+    const rend = o.rendimiento != null ? o.rendimiento : (ins && ins.rendimiento != null ? ins.rendimiento : 1);
+    const denom = (o.formatoQty || 0) * (rend || 1);
+    return denom > 0 ? precioOferta(ctx, o) / denom : 0;
+  }
+
+  function ofertasDisponibles(ctx, insumoId) {
+    return (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return o.disponible !== false; });
+  }
+
+  // oferta/costo vigente de un insumo según modo (preferida | barata | promedio) o fijación de escenario
+  function costoInsumo(ctx, insumoId) {
+    if (ctx.memoInsumo.has(insumoId)) return ctx.memoInsumo.get(insumoId);
+    let res = { unit: 0, oferta: null, missing: true, modo: ctx.p.modoOferta };
+    const pin = ctx.opts.ofertaElegida && ctx.opts.ofertaElegida[insumoId];
+    let lista = ofertasDisponibles(ctx, insumoId);
+    if (!lista.length) lista = ctx.ofertasPorInsumo.get(insumoId) || [];
+    if (pin && ctx.ofertas.get(pin)) {
+      const o = ctx.ofertas.get(pin);
+      res = { unit: costoNetoOferta(ctx, o), oferta: o, missing: false, modo: 'fijada' };
+    } else if (lista.length) {
+      const costos = lista.map(function (o) { return { o: o, c: costoNetoOferta(ctx, o) }; });
+      const barata = costos.reduce(function (a, b) { return b.c < a.c ? b : a; });
+      if (ctx.p.modoOferta === 'barata') {
+        res = { unit: barata.c, oferta: barata.o, missing: false, modo: 'barata' };
+      } else if (ctx.p.modoOferta === 'promedio') {
+        const avg = costos.reduce(function (s, x) { return s + x.c; }, 0) / costos.length;
+        res = { unit: avg, oferta: null, missing: false, modo: 'promedio' };
+      } else {
+        const pref = costos.find(function (x) { return x.o.preferida; }) || barata;
+        res = { unit: pref.c, oferta: pref.o, missing: false, modo: 'preferida' };
+      }
+      if (res.unit <= 0) res.missing = true; // precio 0 = sin precio
+    }
+    ctx.memoInsumo.set(insumoId, res);
+    return res;
+  }
+
+  /* ---------- recetas ---------- */
+  function costoReceta(ctx, id, stack) {
+    stack = stack || [];
+    if (ctx.memoReceta.has(id)) return ctx.memoReceta.get(id);
+    const r = ctx.recetas.get(id);
+    const vacio = { id: id, lote: 0, porPorcion: 0, min: 0, max: 0, lineas: [], faltantes: [], ciclo: false };
+    if (!r) return vacio;
+    if (stack.indexOf(id) >= 0) {
+      ctx.errors.push('Ciclo de sub-recetas: ' + stack.concat(id).join(' → '));
+      return Object.assign({}, vacio, { ciclo: true });
+    }
+    const porciones = r.porciones > 0 ? r.porciones : 1;
+    const sust = (ctx.opts.sust && ctx.opts.sust[id]) || {};
+    const out = { id: id, lote: 0, porPorcion: 0, min: 0, max: 0, lineas: [], faltantes: [], ciclo: false };
+    const st = stack.concat(id);
+
+    (r.lineas || []).forEach(function (ln, idx) {
+      const ref = sust[idx] || ln.ref;
+      const fila = costoLinea(ctx, ln.tipo, ref, ln.cantidad, st);
+      // alternativas declaradas en la línea → rango min/max
+      let mn = fila.subtotal, mx = fila.subtotal;
+      if (ln.alternativas && ln.alternativas.length) {
+        ln.alternativas.forEach(function (alt) {
+          const f2 = costoLinea(ctx, ln.tipo, alt, ln.cantidad, st);
+          if (f2.subtotal < mn) mn = f2.subtotal;
+          if (f2.subtotal > mx) mx = f2.subtotal;
+        });
+      }
+      fila.idx = idx; fila.nota = ln.nota || ''; fila.refOriginal = ln.ref; fila.sustituido = !!sust[idx];
+      fila.min = mn; fila.max = mx; fila.borrador = !!ln.borrador;
+      out.lote += fila.subtotal; out.min += mn; out.max += mx;
+      if (fila.ciclo) out.ciclo = true;
+      if (fila.missing) out.faltantes.push(fila.nombre);
+      out.lineas.push(fila);
+    });
+
+    if (!(r.lineas && r.lineas.length) && r.costoManual != null) {
+      out.lote = r.costoManual * porciones; out.min = out.lote; out.max = out.lote; out.manual = true;
+    }
+    out.porPorcion = out.lote / porciones;
+    out.minPorPorcion = out.min / porciones;
+    out.maxPorPorcion = out.max / porciones;
+    out.lineas.forEach(function (f) { f.porPorcion = f.subtotal / porciones; });
+    ctx.memoReceta.set(id, out);
+    return out;
+  }
+
+  function costoLinea(ctx, tipo, ref, cantidad, stack) {
+    cantidad = Number(cantidad) || 0;
+    if (tipo === 'receta') {
+      const sub = costoReceta(ctx, ref, stack);
+      const rr = ctx.recetas.get(ref);
+      return { tipo: 'receta', ref: ref, nombre: rr ? rr.nombre : ('(receta ' + ref + ')'), cantidad: cantidad,
+        unidad: 'porc', unitCost: sub.porPorcion, subtotal: cantidad * sub.porPorcion, oferta: null,
+        missing: !rr || sub.faltantes.length > 0, ciclo: !!sub.ciclo };
+    }
+    const ins = ctx.insumos.get(ref);
+    const c = costoInsumo(ctx, ref);
+    return { tipo: 'insumo', ref: ref, nombre: ins ? ins.nombre : ('(insumo ' + ref + ')'), cantidad: cantidad,
+      unidad: ins ? ins.unidad : '', unitCost: c.unit, subtotal: cantidad * c.unit, oferta: c.oferta, missing: c.missing || !ins };
+  }
+
+  /* ---------- plato (receta vendible) ---------- */
+  function costoPlato(ctx, id, guarnicionId) {
+    const r = ctx.recetas.get(id);
+    const p = ctx.p;
+    const rc = costoReceta(ctx, id);
+    const gid = guarnicionId !== undefined ? guarnicionId : (r ? r.guarnicionDefault : null);
+    const g = gid ? costoReceta(ctx, gid) : null;
+    const guarn = g ? g.porPorcion : 0;
+
+    let envase = 0, envaseFalta = false;
+    if (r && r.envaseId) {
+      const e = costoInsumo(ctx, r.envaseId);
+      envase = e.unit * (r.envaseCant || 1);
+      envaseFalta = e.missing;
+    } else if (r && r.envaseManual != null) {
+      envase = r.envaseManual;
+    } else { envaseFalta = true; }
+
+    const base = rc.porPorcion + guarn;
+    const imprev = base * p.imprevistosPct / 100;
+    const insumosTot = base + imprev;
+    const overhead = (p.gasPorPorcion || 0) + (p.manoObraPorPorcion || 0);
+    const pvp = r ? Number(r.pvp) || 0 : 0;
+    const pvpNeto = p.ivaOn ? pvp / (1 + p.ivaPct / 100) : pvp;
+    const comision = pvp * p.comisionPct / 100;
+    const costoDirecto = insumosTot + envase;
+    const costoTotal = costoDirecto + overhead + comision;
+    const margen = pvpNeto - costoTotal;
+    const margenPct = pvpNeto > 0 ? margen / pvpNeto * 100 : null;
+    const foodCostPct = pvpNeto > 0 ? insumosTot / pvpNeto * 100 : null;
+
+    // PVP sugerido por food cost objetivo (redondeado hacia arriba)
+    const netoSug = insumosTot / (p.foodCostObjetivo / 100);
+    let sug = p.ivaOn ? netoSug * (1 + p.ivaPct / 100) : netoSug;
+    const rnd = p.redondeo > 0 ? p.redondeo : 1;
+    const pvpSugerido = insumosTot > 0 ? Math.ceil(sug / rnd) * rnd : 0;
+    // PVP mínimo (margen $0)
+    const k = (p.ivaOn ? 1 / (1 + p.ivaPct / 100) : 1) - p.comisionPct / 100;
+    const pvpMinimo = k > 0 ? (costoDirecto + overhead) / k : 0;
+
+    return {
+      id: id, nombre: r ? r.nombre : '', insumos: rc.porPorcion, guarnicion: guarn, guarnicionId: gid || null,
+      envase: envase, imprevistos: imprev, overhead: overhead, comision: comision,
+      costoDirecto: costoDirecto, costoTotal: costoTotal, pvp: pvp, pvpNeto: pvpNeto,
+      margen: margen, margenPct: margenPct, foodCostPct: foodCostPct,
+      pvpSugerido: pvpSugerido, pvpMinimo: pvpMinimo,
+      rango: { min: (rc.minPorPorcion + guarn) * (1 + p.imprevistosPct / 100) + envase + overhead + comision,
+               max: (rc.maxPorPorcion + guarn) * (1 + p.imprevistosPct / 100) + envase + overhead + comision },
+      faltantes: rc.faltantes.concat(g ? g.faltantes : []), envaseFalta: envaseFalta, ciclo: rc.ciclo
+    };
+  }
+
+  function esVendible(r) { return TIPOS_VENDIBLES.indexOf(r.tipo) >= 0; }
+
+  function calcularTodo(state, opts) {
+    const ctx = makeCtx(state, opts);
+    const out = new Map();
+    state.recetas.forEach(function (r) { if (esVendible(r)) out.set(r.id, costoPlato(ctx, r.id)); });
+    out.ctx = ctx;
+    return out;
+  }
+
+  /* ---------- guarniciones ---------- */
+  function opcionesGuarnicion(ctx, id) {
+    const r = ctx.recetas.get(id);
+    if (!r) return [];
+    const ids = (r.guarnicionesPermitidas || []).slice();
+    return ids.map(function (gid) {
+      const c = costoPlato(ctx, id, gid);
+      const gr = ctx.recetas.get(gid);
+      return { id: gid, nombre: gr ? gr.nombre : gid, costoGuarnicion: c.guarnicion, costoTotal: c.costoTotal,
+        margen: c.margen, margenPct: c.margenPct, esDefecto: gid === r.guarnicionDefault };
+    });
+  }
+
+  /* ---------- explosión de insumos (cantidades utilizables) ---------- */
+  function explotar(ctx, id, mult, acc, stack) {
+    acc = acc || new Map(); stack = stack || [];
+    const r = ctx.recetas.get(id);
+    if (!r || stack.indexOf(id) >= 0) return acc;
+    const porciones = r.porciones > 0 ? r.porciones : 1;
+    const sust = (ctx.opts.sust && ctx.opts.sust[id]) || {};
+    (r.lineas || []).forEach(function (ln, idx) {
+      const ref = sust[idx] || ln.ref;
+      const q = (Number(ln.cantidad) || 0) * mult / porciones;
+      if (ln.tipo === 'receta') {
+        const sr = ctx.recetas.get(ref); const sp = sr && sr.porciones > 0 ? sr.porciones : 1;
+        // ln.cantidad = porciones consumidas de la sub-receta; explotar su lote proporcional
+        explotar(ctx, ref, q * sp, acc, stack.concat(id));
+      } else {
+        acc.set(ref, (acc.get(ref) || 0) + q);
+      }
+    });
+    return acc;
+  }
+
+  // insumos por 1 porción vendida (incluye guarnición por defecto y envase)
+  function explotarPlato(ctx, id, porciones) {
+    porciones = porciones == null ? 1 : porciones;
+    const r = ctx.recetas.get(id);
+    const acc = explotar(ctx, id, porciones, new Map(), []);
+    if (r && r.guarnicionDefault) explotar(ctx, r.guarnicionDefault, porciones, acc, []);
+    if (r && r.envaseId) acc.set(r.envaseId, (acc.get(r.envaseId) || 0) + (r.envaseCant || 1) * porciones);
+    return acc;
+  }
+
+  function usosDeInsumo(ctx, insumoId) {
+    const res = [];
+    ctx.state.recetas.forEach(function (r) {
+      if (!esVendible(r)) return;
+      const q = explotarPlato(ctx, r.id, 1).get(insumoId);
+      if (q) res.push({ recetaId: r.id, nombre: r.nombre, linea: r.linea, tipo: r.tipo, cantidad: q });
+    });
+    return res.sort(function (a, b) { return b.cantidad - a.cantidad; });
+  }
+
+  /* ---------- impacto de un cambio (precio, oferta fijada, sustitución) ---------- */
+  function impacto(state, cambio, opts) {
+    const base = calcularTodo(state, opts);
+    const merged = Object.assign({}, opts || {});
+    ['precios', 'ofertaElegida', 'sust', 'params'].forEach(function (k) {
+      if (cambio[k]) merged[k] = Object.assign({}, (opts && opts[k]) || {}, cambio[k]);
+    });
+    if (cambio.sust) {
+      merged.sust = Object.assign({}, (opts && opts.sust) || {});
+      Object.keys(cambio.sust).forEach(function (rid) {
+        merged.sust[rid] = Object.assign({}, (opts && opts.sust && opts.sust[rid]) || {}, cambio.sust[rid]);
+      });
+    }
+    const nuevo = calcularTodo(state, merged);
+    const filas = [];
+    base.forEach(function (b, id) {
+      const n = nuevo.get(id);
+      if (!n) return;
+      const d = n.costoTotal - b.costoTotal;
+      if (Math.abs(d) > 0.005) {
+        filas.push({ id: id, nombre: b.nombre, costoAntes: b.costoTotal, costoDespues: n.costoTotal, delta: d,
+          margenAntes: b.margen, margenDespues: n.margen, margenPctAntes: b.margenPct, margenPctDespues: n.margenPct });
+      }
+    });
+    filas.sort(function (a, b) { return Math.abs(b.delta) - Math.abs(a.delta); });
+    return { filas: filas, afectados: filas.length, deltaMedio: filas.length ? filas.reduce(function (s, f) { return s + f.delta; }, 0) / filas.length : 0 };
+  }
+
+  /* ---------- dieta ---------- */
+  function nivelDieta(ins) { return DIETA_NIVEL[ins && ins.dieta] != null ? DIETA_NIVEL[ins.dieta] : 0; }
+
+  // insumos (directos o vía sub-recetas) que violan la línea dietaria de la receta
+  function violacionesDieta(ctx, id) {
+    const r = ctx.recetas.get(id);
+    if (!r || LINEA_NIVEL_MAX[r.linea] == null) return [];
+    const maxNivel = LINEA_NIVEL_MAX[r.linea];
+    const acc = explotarPlato(ctx, id, 1);
+    const out = [];
+    acc.forEach(function (q, insId) {
+      const ins = ctx.insumos.get(insId);
+      if (ins && ins.categoria !== 'Envases' && nivelDieta(ins) > maxNivel) out.push(ins.nombre);
+    });
+    return out;
+  }
+
+  function dietaCompatible(ctx, receta, insumo) {
+    if (!receta || LINEA_NIVEL_MAX[receta.linea] == null) return true;
+    return nivelDieta(insumo) <= LINEA_NIVEL_MAX[receta.linea];
+  }
+
+  /* ---------- alternativas de producto ---------- */
+  // Para cada línea de insumo de una receta: otras ofertas del mismo insumo + sustitutos de la misma familia
+  function alternativasReceta(ctx, id) {
+    const r = ctx.recetas.get(id);
+    if (!r) return [];
+    const porciones = r.porciones > 0 ? r.porciones : 1;
+    const res = [];
+    (r.lineas || []).forEach(function (ln, idx) {
+      if (ln.tipo !== 'insumo') return;
+      const ins = ctx.insumos.get(ln.ref);
+      if (!ins) return;
+      const actual = costoInsumo(ctx, ln.ref);
+      const q = (Number(ln.cantidad) || 0) / porciones;
+      const opciones = [];
+      (ctx.ofertasPorInsumo.get(ln.ref) || []).forEach(function (o) {
+        if (o.disponible === false) return;
+        if (actual.oferta && o.id === actual.oferta.id) return;
+        const c = costoNetoOferta(ctx, o);
+        opciones.push({ tipo: 'oferta', insumoId: ln.ref, ofertaId: o.id, nombre: ins.nombre, lugar: o.lugar, marca: o.marca,
+          unit: c, deltaPorPorcion: (c - actual.unit) * q });
+      });
+      if (ins.familia) {
+        ctx.state.insumos.forEach(function (s) {
+          if (s.id === ins.id || s.familia !== ins.familia || s.unidad !== ins.unidad) return;
+          if (!dietaCompatible(ctx, r, s)) return;
+          const c = costoInsumo(ctx, s.id);
+          if (c.missing) return;
+          opciones.push({ tipo: 'sustituto', insumoId: s.id, ofertaId: c.oferta ? c.oferta.id : null, nombre: s.nombre,
+            lugar: c.oferta ? c.oferta.lugar : '', marca: c.oferta ? c.oferta.marca : '', unit: c.unit,
+            deltaPorPorcion: (c.unit - actual.unit) * q });
+        });
+      }
+      opciones.sort(function (a, b) { return a.deltaPorPorcion - b.deltaPorPorcion; });
+      res.push({ idx: idx, ref: ln.ref, nombre: ins.nombre, cantidad: ln.cantidad, unidad: ins.unidad, actual: actual,
+        costoLinea: (Number(ln.cantidad) || 0) * actual.unit / porciones, opciones: opciones });
+    });
+    return res;
+  }
+
+  // porciones semanales por plato: plan semanal si existe, si no reparto parejo de porcionesSemana
+  function volumenSemanal(ctx) {
+    const vol = new Map();
+    const plan = ctx.state.plan;
+    let usoPlan = false;
+    if (plan) {
+      Object.keys(plan).forEach(function (dia) {
+        (plan[dia] || []).forEach(function (it) {
+          if (!ctx.recetas.get(it.recetaId)) return;
+          vol.set(it.recetaId, (vol.get(it.recetaId) || 0) + (Number(it.porciones) || 0)); usoPlan = true;
+        });
+      });
+    }
+    if (!usoPlan) {
+      const activos = ctx.state.recetas.filter(function (r) { return r.tipo === 'plato' && r.activo !== false; });
+      activos.forEach(function (r) { vol.set(r.id, ctx.p.porcionesSemana / (activos.length || 1)); });
+    }
+    return { vol: vol, usoPlan: usoPlan };
+  }
+
+  function usoSemanalInsumos(ctx) {
+    const v = volumenSemanal(ctx);
+    const total = new Map();
+    v.vol.forEach(function (porc, rid) {
+      explotarPlato(ctx, rid, porc).forEach(function (q, ins) { total.set(ins, (total.get(ins) || 0) + q); });
+    });
+    return { uso: total, usoPlan: v.usoPlan };
+  }
+
+  // ahorro posible por comprar cada insumo en su oferta más barata
+  function ahorrosPosibles(ctx) {
+    const u = usoSemanalInsumos(ctx);
+    const res = [];
+    ctx.state.insumos.forEach(function (ins) {
+      const ofs = ofertasDisponibles(ctx, ins.id);
+      if (ofs.length < 2) return;
+      const actual = costoInsumo(ctx, ins.id);
+      if (actual.missing) return;
+      const costos = ofs.map(function (o) { return { o: o, c: costoNetoOferta(ctx, o) }; }).filter(function (x) { return x.c > 0; });
+      if (!costos.length) return;
+      const mejor = costos.reduce(function (a, b) { return b.c < a.c ? b : a; });
+      const dif = actual.unit - mejor.c;
+      const semanal = u.uso.get(ins.id) || 0;
+      if (dif > 0.0001 && (!actual.oferta || mejor.o.id !== actual.oferta.id)) {
+        res.push({ insumoId: ins.id, nombre: ins.nombre, actual: actual, mejor: mejor.o, mejorUnit: mejor.c,
+          ahorroUnit: dif, ahorroPct: actual.unit > 0 ? dif / actual.unit * 100 : 0,
+          usoSemanal: semanal, ahorroMes: dif * semanal * 4.33 });
+      }
+    });
+    res.sort(function (a, b) { return b.ahorroMes - a.ahorroMes; });
+    return { filas: res, usoPlan: u.usoPlan };
+  }
+
+  // peso de cada insumo en el costo total de la carta (por volumen semanal)
+  function pesoEnCosto(ctx) {
+    const u = usoSemanalInsumos(ctx);
+    const filas = [];
+    let total = 0;
+    u.uso.forEach(function (q, id) {
+      const ins = ctx.insumos.get(id); if (!ins) return;
+      const c = costoInsumo(ctx, id);
+      const costo = q * c.unit; total += costo;
+      filas.push({ insumoId: id, nombre: ins.nombre, categoria: ins.categoria, costoSemana: costo });
+    });
+    filas.forEach(function (f) { f.pct = total > 0 ? f.costoSemana / total * 100 : 0; });
+    filas.sort(function (a, b) { return b.costoSemana - a.costoSemana; });
+    return { filas: filas, total: total };
+  }
+
+  /* ---------- lista de compras ---------- */
+  function listaCompras(ctx, items) {
+    // items: [{recetaId, porciones}]
+    const acc = new Map();
+    items.forEach(function (it) {
+      if (!ctx.recetas.get(it.recetaId)) return;
+      explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0).forEach(function (q, ins) {
+        acc.set(ins, (acc.get(ins) || 0) + q);
+      });
+    });
+    const filas = [];
+    acc.forEach(function (usable, insId) {
+      const ins = ctx.insumos.get(insId); if (!ins) return;
+      const c = costoInsumo(ctx, insId);
+      const o = c.oferta;
+      const rend = o ? (o.rendimiento != null ? o.rendimiento : (ins.rendimiento != null ? ins.rendimiento : 1)) : 1;
+      const comprarBase = rend > 0 ? usable / rend : usable;
+      const formato = o && o.formatoQty > 0 ? o.formatoQty : 0;
+      const packs = formato > 0 ? Math.ceil(comprarBase / formato - 1e-9) : 0;
+      filas.push({ insumoId: insId, nombre: ins.nombre, categoria: ins.categoria, unidad: ins.unidad,
+        usable: usable, comprarBase: comprarBase, lugar: o ? o.lugar : '(sin oferta)', formatoLabel: o ? o.formatoLabel : '',
+        formatoQty: formato, packs: packs, precioPack: o ? precioOferta(ctx, o) : 0,
+        costo: formato > 0 ? packs * precioOferta(ctx, o) : usable * c.unit, costoTeorico: usable * c.unit, missing: c.missing });
+    });
+    filas.sort(function (a, b) { return a.lugar === b.lugar ? a.nombre.localeCompare(b.nombre) : a.lugar.localeCompare(b.lugar); });
+    return filas;
+  }
+
+  /* ---------- chequeos de calidad de receta ---------- */
+  function chequeos(ctx, id) {
+    const r = ctx.recetas.get(id);
+    const out = [];
+    if (!r) return out;
+    const rc = costoReceta(ctx, id);
+    const nIns = (r.lineas || []).length;
+    if (r.tipo === 'plato' && nIns < 5 && !rc.manual) out.push({ nivel: 'warn', msg: 'Pocos ingredientes (' + nIns + '): revisa condimentos, sofrito y verduras' });
+    if (rc.manual) out.push({ nivel: 'info', msg: 'Costo manual: conviértela en receta para que reaccione a los precios' });
+    if (rc.faltantes.length) out.push({ nivel: 'error', msg: 'Insumos sin precio: ' + rc.faltantes.join(', ') });
+    if (rc.ciclo) out.push({ nivel: 'error', msg: 'Referencia circular entre sub-recetas' });
+    if (esVendible(r)) {
+      if (!r.pvp) out.push({ nivel: 'warn', msg: 'Sin PVP definido' });
+      if (!r.envaseId && r.envaseManual == null) out.push({ nivel: 'warn', msg: 'Sin envase asignado' });
+      if (r.tipo === 'plato' && !r.pasos) out.push({ nivel: 'info', msg: 'Sin pasos de preparación para cocina' });
+    }
+    const dv = violacionesDieta(ctx, id);
+    if (dv.length) out.push({ nivel: 'error', msg: 'Incompatible con línea ' + r.linea + ': ' + dv.join(', ') });
+    if ((r.lineas || []).some(function (l) { return l.borrador; })) out.push({ nivel: 'info', msg: 'Contiene líneas en borrador por revisar' });
+    return out;
+  }
+
+  /* ---------- punto de equilibrio ---------- */
+  function puntoEquilibrio(ctx, platos) {
+    const act = [];
+    platos.forEach(function (c, id) {
+      const r = ctx.recetas.get(id);
+      if (r && r.tipo === 'plato' && r.activo !== false && c.pvp > 0) act.push(c);
+    });
+    if (!act.length) return null;
+    const margenProm = act.reduce(function (s, c) { return s + c.margen; }, 0) / act.length;
+    const fijos = ctx.p.costosFijosMes || 0;
+    const porcMes = margenProm > 0 ? fijos / margenProm : null;
+    return { margenProm: margenProm, fijos: fijos, porcionesMes: porcMes,
+      porcionesDia: porcMes != null ? porcMes / (ctx.p.diasOperacionMes || 22) : null };
+  }
+
+  const Engine = {
+    DEFAULT_PARAMS: DEFAULT_PARAMS, TIPOS_VENDIBLES: TIPOS_VENDIBLES,
+    makeCtx: makeCtx, params: params, hoyISO: hoyISO, diasEntre: diasEntre,
+    costoNetoOferta: costoNetoOferta, ofertasDisponibles: ofertasDisponibles, costoInsumo: costoInsumo,
+    costoReceta: costoReceta, costoPlato: costoPlato, calcularTodo: calcularTodo, esVendible: esVendible,
+    opcionesGuarnicion: opcionesGuarnicion, explotar: explotar, explotarPlato: explotarPlato, usosDeInsumo: usosDeInsumo,
+    impacto: impacto, violacionesDieta: violacionesDieta, dietaCompatible: dietaCompatible,
+    alternativasReceta: alternativasReceta, volumenSemanal: volumenSemanal, usoSemanalInsumos: usoSemanalInsumos,
+    ahorrosPosibles: ahorrosPosibles, pesoEnCosto: pesoEnCosto, listaCompras: listaCompras, chequeos: chequeos,
+    puntoEquilibrio: puntoEquilibrio
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = Engine;
+  else root.Engine = Engine;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+/* src/cloud.js */
+/* Nube (Supabase): sesión, perfil/rol y sincronización del estado de la app.
+ *
+ * El estado de la app (insumos, ofertas, recetas, plan, parámetros, escenarios) se reparte en tablas:
+ *   insumos, recetas, plan           → legibles por todos los roles
+ *   ofertas, recetas_precios, ajustes → solo admin/gerente (aquí está el dinero)
+ * Cada cambio local se compara con la última versión sincronizada y solo se envían las filas
+ * que cambiaron (upsert) o desaparecieron (delete). La seguridad la aplica la base de datos (RLS).
+ */
+(function (root) {
+  'use strict';
+  const ORDEN_UPSERT = ['insumos', 'recetas', 'ofertas', 'recetas_precios', 'plan', 'ajustes'];
+  const ORDEN_DELETE = ['ofertas', 'recetas_precios', 'plan', 'ajustes', 'insumos', 'recetas'];
+  const TABLAS_TODOS = ['insumos', 'recetas', 'plan'];
+  const TABLAS_STAFF = ['insumos', 'ofertas', 'recetas', 'recetas_precios', 'plan', 'ajustes'];
+  const CAMPOS_PRECIO = ['pvp', 'costoManual', 'envaseManual'];
+  const LOTE = 200;
+
+  // JSON con llaves ordenadas: jsonb reordena las llaves, así comparamos contenido y no orden
+  function canon(v) {
+    if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+    if (v && typeof v === 'object') {
+      return '{' + Object.keys(v).filter(function (k) { return v[k] !== undefined; }).sort()
+        .map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+    }
+    return v === undefined ? 'null' : JSON.stringify(v);
+  }
+
+  function sinCampos(o, campos) {
+    const r = {};
+    Object.keys(o).forEach(function (k) { if (campos.indexOf(k) < 0 && o[k] !== undefined) r[k] = o[k]; });
+    return r;
+  }
+
+  // estado de la app → filas por tabla
+  function aFilas(state) {
+    const f = { insumos: [], ofertas: [], recetas: [], recetas_precios: [], plan: [], ajustes: [] };
+    (state.insumos || []).forEach(function (i) { f.insumos.push({ id: i.id, data: sinCampos(i, ['id']) }); });
+    (state.ofertas || []).forEach(function (o) { f.ofertas.push({ id: o.id, insumo_id: o.insumoId, data: sinCampos(o, ['id', 'insumoId']) }); });
+    (state.recetas || []).forEach(function (r) {
+      f.recetas.push({ id: r.id, data: sinCampos(r, ['id'].concat(CAMPOS_PRECIO)) });
+      const p = {};
+      CAMPOS_PRECIO.forEach(function (k) { if (r[k] !== undefined && r[k] !== null) p[k] = r[k]; });
+      f.recetas_precios.push({ id: r.id, data: p });
+    });
+    f.plan.push({ id: 'semana', data: state.plan || {} });
+    f.ajustes.push({ id: 'params', data: state.params || {} });
+    f.ajustes.push({ id: 'escenarios', data: { lista: state.escenarios || [] } });
+    return f;
+  }
+
+  const porId = function (a, b) { return String(a.id).localeCompare(String(b.id), 'es', { numeric: true }); };
+
+  // filas por tabla → estado de la app
+  function desdeFilas(f) {
+    const precios = new Map((f.recetas_precios || []).map(function (x) { return [x.id, x.data || {}]; }));
+    const aj = new Map((f.ajustes || []).map(function (x) { return [x.id, x.data || {}]; }));
+    const plan = (f.plan || []).find(function (x) { return x.id === 'semana'; });
+    return {
+      meta: { version: 1, origen: 'nube' },
+      params: aj.get('params') || {},
+      insumos: (f.insumos || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id }, x.data); }),
+      ofertas: (f.ofertas || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id, insumoId: x.insumo_id }, x.data); }),
+      recetas: (f.recetas || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id }, x.data, precios.get(x.id) || {}); }),
+      plan: plan ? plan.data : { lun: [], mar: [], mie: [], jue: [], vie: [] },
+      escenarios: (aj.get('escenarios') || {}).lista || []
+    };
+  }
+
+  function mapa(filas) {
+    const m = new Map();
+    ORDEN_UPSERT.forEach(function (t) { (filas[t] || []).forEach(function (row) { m.set(t + '|' + row.id, { t: t, row: row, json: canon(row) }); }); });
+    return m;
+  }
+
+  function diferencias(snap, actual) {
+    const ups = {}, dels = {};
+    actual.forEach(function (v, k) { if (!snap.has(k) || snap.get(k) !== v.json) (ups[v.t] = ups[v.t] || []).push(v.row); });
+    snap.forEach(function (json, k) {
+      if (!actual.has(k)) { const i = k.indexOf('|'); const t = k.slice(0, i); (dels[t] = dels[t] || []).push(k.slice(i + 1)); }
+    });
+    return { ups: ups, dels: dels };
+  }
+
+  /* ---------- sincronizador (independiente del navegador; testeable con un cliente simulado) ---------- */
+  function crearSync(cliente, onEstado) {
+    let snap = new Map();              // key → json de lo último confirmado por el servidor
+    let enCurso = false, siguiente = null, pendiente = false;
+    const avisar = function (estado, msg) { if (onEstado) onEstado(estado, msg); };
+
+    async function seleccionarTodo(t) {
+      const cols = t === 'ofertas' ? 'id,insumo_id,data' : 'id,data';
+      let desde = 0; const out = [];
+      for (;;) {
+        const r = await cliente.from(t).select(cols).order('id').range(desde, desde + 999);
+        if (r.error) throw r.error;
+        out.push.apply(out, r.data || []);
+        if (!r.data || r.data.length < 1000) break;
+        desde += 1000;
+      }
+      return out;
+    }
+
+    async function pasada(state) {
+      const actual = mapa(aFilas(state));
+      const d = diferencias(snap, actual);
+      for (const t of ORDEN_UPSERT) {
+        const filas = d.ups[t] || [];
+        for (let i = 0; i < filas.length; i += LOTE) {
+          const r = await cliente.from(t).upsert(filas.slice(i, i + LOTE));
+          if (r.error) throw r.error;
+        }
+      }
+      for (const t of ORDEN_DELETE) {
+        const ids = d.dels[t] || [];
+        for (let i = 0; i < ids.length; i += LOTE) {
+          const r = await cliente.from(t).delete().in('id', ids.slice(i, i + LOTE));
+          if (r.error) throw r.error;
+        }
+      }
+      const nuevo = new Map(); actual.forEach(function (v, k) { nuevo.set(k, v.json); });
+      snap = nuevo;
+      return Object.keys(d.ups).reduce(function (s, t) { return s + d.ups[t].length; }, 0) + Object.keys(d.dels).reduce(function (s, t) { return s + d.dels[t].length; }, 0);
+    }
+
+    return {
+      // carga el estado completo visible para este rol; la base de comparación son las filas reales del servidor
+      cargar: async function (staff) {
+        const r = await this.traer(staff);
+        snap = r.base;
+        return r.state;
+      },
+      // trae el estado remoto; cambio=true si difiere de lo último sincronizado
+      traer: async function (staff) {
+        const tablas = staff ? TABLAS_STAFF : TABLAS_TODOS;
+        const f = {};
+        const res = await Promise.all(tablas.map(seleccionarTodo));
+        tablas.forEach(function (t, i) { f[t] = res[i]; });
+        const base = new Map(); mapa(f).forEach(function (v, k) { base.set(k, v.json); });
+        let cambio = base.size !== snap.size;
+        if (!cambio) base.forEach(function (j, k) { if (snap.get(k) !== j) cambio = true; });
+        return { state: desdeFilas(f), base: base, cambio: cambio };
+      },
+      // acepta un estado traído del servidor como nueva base
+      aceptar: function (base) { snap = base; },
+      // guarda los cambios del estado (encola si ya hay un guardado en curso)
+      guardar: async function (state) {
+        pendiente = true;
+        if (enCurso) { siguiente = state; return; }
+        enCurso = true; avisar('guardando');
+        let s = state, cambios = 0;
+        try {
+          while (s) { siguiente = null; cambios += await pasada(s); s = siguiente; }
+          pendiente = false; avisar('ok', cambios);
+        } catch (e) {
+          avisar('error', (e && (e.message || e.details)) || String(e));
+          throw e;
+        } finally { enCurso = false; }
+      },
+      pendiente: function () { return pendiente || enCurso; },
+      tamañoBase: function () { return snap.size; }
+    };
+  }
+
+  const Nube = { canon: canon, aFilas: aFilas, desdeFilas: desdeFilas, diferencias: diferencias, mapa: mapa, crearSync: crearSync, CAMPOS_PRECIO: CAMPOS_PRECIO };
+  if (typeof module !== 'undefined' && module.exports) module.exports = Nube;
+  else root.Nube = Nube;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+/* src/store.js */
+/* Estado de la app: persistencia en localStorage, deshacer, respaldo JSON. */
+(function () {
+  'use strict';
+  const KEY = 'colaciones.v1';
+  const listeners = [];
+  let state = null, undoStack = [], redoStack = [], lastKey = null, lastAt = 0, saveTimer = null;
+  let storageOk = true, lastSaved = null, backend = null, version = 0;
+
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  function ensure(s) {
+    s.params = s.params || {};
+    s.plan = s.plan || { lun: [], mar: [], mie: [], jue: [], vie: [] };
+    ['lun', 'mar', 'mie', 'jue', 'vie'].forEach(function (d) { s.plan[d] = s.plan[d] || []; });
+    s.escenarios = s.escenarios || [];
+    if (s.escenarioActivo === undefined) s.escenarioActivo = null;
+    s.meta = s.meta || { version: 1 };
+    return s;
+  }
+
+  function load() {
+    let raw = null;
+    try { raw = localStorage.getItem(KEY); } catch (e) { storageOk = false; }
+    if (raw) {
+      try { state = ensure(JSON.parse(raw)); return state; } catch (e) { /* datos dañados: usar seed */ }
+    }
+    state = ensure(clone(window.SEED));
+    return state;
+  }
+
+  function doSave() {
+    saveTimer = null;
+    if (backend) { backend(state); return; }   // modo nube: el backend guarda y avisa el estado
+    try { localStorage.setItem(KEY, JSON.stringify(state)); storageOk = true; lastSaved = new Date(); }
+    catch (e) { storageOk = false; }
+    listeners.forEach(function (f) { f('saved'); });
+  }
+  function scheduleSave() { if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 250); }
+
+  function notify() { listeners.forEach(function (f) { f('change'); }); }
+
+  // key agrupa ediciones consecutivas (tipeo) en un solo paso de deshacer
+  function mutate(fn, key) {
+    const now = Date.now();
+    if (!key || key !== lastKey || now - lastAt > 1500) {
+      undoStack.push(JSON.stringify(state)); if (undoStack.length > 60) undoStack.shift();
+      redoStack = [];
+    }
+    lastKey = key || null; lastAt = now;
+    version++;
+    fn(state);
+    scheduleSave(); notify();
+  }
+
+  function undo() {
+    if (!undoStack.length) return false;
+    redoStack.push(JSON.stringify(state));
+    state = ensure(JSON.parse(undoStack.pop())); lastKey = null; version++;
+    scheduleSave(); notify(); return true;
+  }
+  function redo() {
+    if (!redoStack.length) return false;
+    undoStack.push(JSON.stringify(state));
+    state = ensure(JSON.parse(redoStack.pop())); lastKey = null; version++;
+    scheduleSave(); notify(); return true;
+  }
+
+  function uid(prefix) {
+    return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  }
+
+  function exportJSON() { return JSON.stringify(state, null, 1); }
+  function importJSON(text) {
+    const s = JSON.parse(text);
+    if (!s || !Array.isArray(s.insumos) || !Array.isArray(s.recetas) || !Array.isArray(s.ofertas)) throw new Error('El archivo no tiene el formato de respaldo (insumos, ofertas, recetas).');
+    undoStack.push(JSON.stringify(state));
+    state = ensure(s); version++; scheduleSave(); notify();
+  }
+  function reset() {
+    undoStack.push(JSON.stringify(state));
+    state = ensure(clone(window.SEED)); version++; scheduleSave(); notify();
+  }
+
+  // reemplaza el estado completo (carga inicial o cambios de otro usuario); no se guarda de vuelta
+  function establecer(s) {
+    state = ensure(s); undoStack = []; redoStack = []; lastKey = null;
+    notify();
+  }
+
+  window.Store = {
+    usarBackend: function (fn) { backend = fn; }, establecer: establecer, version: function () { return version; },
+    enModoNube: function () { return !!backend; }, guardadoProgramado: function () { return !!saveTimer; },
+    load: load, get: function () { return state; }, mutate: mutate, undo: undo, redo: redo,
+    canUndo: function () { return undoStack.length > 0; }, canRedo: function () { return redoStack.length > 0; },
+    subscribe: function (f) { listeners.push(f); }, uid: uid, exportJSON: exportJSON, importJSON: importJSON, reset: reset,
+    storageOk: function () { return storageOk; }, lastSaved: function () { return lastSaved; }, flush: function () { if (saveTimer) { clearTimeout(saveTimer); doSave(); } }
+  };
+})();
+
+/* src/ui/core.js */
+/* Núcleo de UI: helpers DOM, formato, enrutador, render con foco preservado, escenarios, modales. */
+(function () {
+  'use strict';
+  const E = window.Engine, Store = window.Store;
+  const App = window.App = { views: {}, route: { name: 'panel', arg: null }, version: 0, cache: {}, ui: { filtros: {} } };
+
+  /* ---------- DOM ---------- */
+  function append(el, k) {
+    if (k == null || k === false) return;
+    if (Array.isArray(k)) k.forEach(function (x) { append(el, x); });
+    else if (k.nodeType) el.appendChild(k);
+    else el.appendChild(document.createTextNode(String(k)));
+  }
+  function h(tag, props) {
+    const el = document.createElement(tag);
+    let value;
+    if (props) {
+      Object.keys(props).forEach(function (k) {
+        const v = props[k];
+        if (v == null || v === false) return;
+        if (k === 'class') el.className = v;
+        else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+        else if (k.slice(0, 2) === 'on' && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+        else if (k === 'value') value = v;
+        else if (k === 'checked' || k === 'disabled' || k === 'readOnly' || k === 'selected') el[k] = !!v;
+        else if (k === 'html') el.innerHTML = v;
+        else el.setAttribute(k, v === true ? '' : v);
+      });
+    }
+    for (let i = 2; i < arguments.length; i++) append(el, arguments[i]);
+    if (value !== undefined) el.value = value;
+    return el;
+  }
+  App.h = h;
+
+  /* ---------- formato ---------- */
+  const nf = new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 });
+  const nf1 = new Intl.NumberFormat('es-CL', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+  const nf2 = new Intl.NumberFormat('es-CL', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+  App.clp = function (n) { return n == null || isNaN(n) ? '—' : (n < 0 ? '−$' : '$') + nf.format(Math.abs(Math.round(n))); };
+  App.clpU = function (n) { return n == null || isNaN(n) ? '—' : (Math.abs(n) < 10 ? '$' + nf2.format(n) : '$' + nf.format(Math.round(n))); };
+  App.pct = function (n) { return n == null || isNaN(n) ? '—' : nf1.format(n) + '%'; };
+  App.num = function (n, d) { return n == null || isNaN(n) ? '—' : new Intl.NumberFormat('es-CL', { maximumFractionDigits: d == null ? 1 : d }).format(n); };
+  App.sg = function (n, f) { f = f || App.clp; if (n == null || isNaN(n)) return '—'; return (n > 0.004 ? '+' : '') + f(n); };
+  App.parseNum = function (s) {
+    if (typeof s === 'number') return s;
+    const t = String(s == null ? '' : s).replace(/\$/g, '').replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+    const n = parseFloat(t); return isNaN(n) ? null : n;
+  };
+  App.cantidad = function (q, unidad) {   // 1500 g → "1,5 kg"
+    if ((unidad === 'g' || unidad === 'ml') && Math.abs(q) >= 1000) return nf2.format(q / 1000).replace(/,00$/, '') + (unidad === 'g' ? ' kg' : ' L');
+    return App.num(q, q < 10 ? 2 : 1) + ' ' + unidad;
+  };
+  App.hoy = function () { return E.hoyISO(E.params(Store.get())); };
+
+  /* ---------- controles ---------- */
+  // input numérico "en vivo": llama onChange(n) en cada tecla válida
+  App.numInput = function (o) {
+    const el = h('input', { type: 'text', inputmode: 'decimal', class: 'num ' + (o.cls || ''), value: o.value == null ? '' : String(o.value).replace('.', ','),
+      'data-fk': o.fk, 'data-num': '1', placeholder: o.ph || '', title: o.title || '', disabled: o.disabled,
+      onfocus: function (ev) { ev.target.select(); },
+      onblur: o.onBlur || null,
+      oninput: function (ev) {
+        const raw = ev.target.value.trim();
+        if (raw === '') { if (o.onEmpty) o.onEmpty(); return; }
+        const n = App.parseNum(raw);
+        if (n != null && !isNaN(n) && o.onChange) o.onChange(n);
+      } });
+    return el;
+  };
+  App.textInput = function (o) {
+    return h('input', { type: 'text', class: o.cls || '', value: o.value == null ? '' : o.value, 'data-fk': o.fk, placeholder: o.ph || '', list: o.list, title: o.title || '',
+      oninput: function (ev) { o.onChange(ev.target.value); }, onchange: o.onCommit ? function (ev) { o.onCommit(ev.target.value); } : null });
+  };
+  App.select = function (o) {  // o.options: [[value,label],...]
+    const sel = h('select', { class: o.cls || '', 'data-fk': o.fk, onchange: function (ev) { o.onChange(ev.target.value); } },
+      o.options.map(function (op) { return h('option', { value: op[0] }, op[1]); }));
+    sel.value = o.value == null ? '' : o.value;
+    return sel;
+  };
+  App.btn = function (label, fn, cls, title) { return h('button', { class: 'btn ' + (cls || ''), onclick: fn, title: title || '', type: 'button' }, label); };
+  App.chip = function (label, active, fn, cls) { return h('button', { class: 'chip' + (active ? ' on' : '') + (cls ? ' ' + cls : ''), onclick: fn, type: 'button' }, label); };
+  App.badge = function (txt, kind) { return h('span', { class: 'badge ' + (kind || '') }, txt); };
+  App.bar = function (pctVal, kind, max) {
+    const w = Math.max(0, Math.min(100, (pctVal || 0) / (max || 100) * 100));
+    return h('span', { class: 'bar' }, h('span', { class: 'fill ' + (kind || ''), style: { width: w + '%' } }));
+  };
+  App.empty = function (txt) { return h('div', { class: 'empty' }, txt); };
+  App.card = function (title, body, cls, right) {
+    return h('section', { class: 'card ' + (cls || '') }, (title || right) ? h('div', { class: 'card-h' }, h('h3', null, title), right || null) : null, body);
+  };
+  App.kpi = function (label, value, sub, kind) {
+    return h('div', { class: 'kpi ' + (kind || '') }, h('div', { class: 'kpi-l' }, label), h('div', { class: 'kpi-v' }, value), sub ? h('div', { class: 'kpi-s' }, sub) : null);
+  };
+
+  /* ---------- toast / modal ---------- */
+  App.toast = function (msg) {
+    const t = h('div', { class: 'toast' }, msg);
+    document.body.appendChild(t);
+    setTimeout(function () { t.classList.add('out'); }, 2200);
+    setTimeout(function () { t.remove(); }, 2700);
+  };
+  App.modal = function (title, body, actions) {
+    const ov = h('div', { class: 'overlay', onclick: function (ev) { if (ev.target === ov) close(); } });
+    function close() { ov.remove(); }
+    ov.appendChild(h('div', { class: 'modal', role: 'dialog', 'aria-label': title },
+      h('div', { class: 'modal-h' }, h('h3', null, title), h('button', { class: 'x', onclick: close, 'aria-label': 'Cerrar' }, '×')),
+      h('div', { class: 'modal-b' }, body),
+      actions ? h('div', { class: 'modal-f' }, actions(close)) : null));
+    document.body.appendChild(ov);
+    return close;
+  };
+  App.confirm = function (msg, onYes, labelYes, danger) {
+    App.modal('Confirmar', h('p', null, msg), function (close) {
+      return [App.btn('Cancelar', close), App.btn(labelYes || 'Aceptar', function () { close(); onYes(); }, danger ? 'danger' : 'primary')];
+    });
+  };
+  App.prompt = function (title, def, onOk, ph) {
+    const inp = h('input', { type: 'text', value: def || '', placeholder: ph || '', class: 'wide', onkeydown: function (ev) { if (ev.key === 'Enter') ev.target.closest('.modal').querySelector('.primary').click(); } });
+    const close = App.modal(title, inp, function (close) {
+      return [App.btn('Cancelar', close), App.btn('Aceptar', function () { const v = inp.value.trim(); if (v) { close(); onOk(v); } }, 'primary')];
+    });
+    setTimeout(function () { inp.focus(); inp.select(); }, 30);
+    return close;
+  };
+  App.descargar = function (nombre, texto, tipo) {
+    const blob = new Blob([texto], { type: tipo || 'application/json' });
+    const a = h('a', { href: URL.createObjectURL(blob), download: nombre });
+    document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  };
+
+  // elegir un archivo .json de respaldo e importarlo (en la nube reemplaza los datos de todos)
+  App.importarRespaldo = function () {
+    const inp = h('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' }, onchange: function (ev) {
+      const f = ev.target.files[0]; inp.remove(); if (!f) return;
+      const rd = new FileReader();
+      rd.onload = function () {
+        const go = function () {
+          try { Store.importJSON(rd.result); App.toast('Respaldo importado'); }
+          catch (e) { App.modal('No se pudo importar', h('p', null, String(e.message || e)), function (c) { return [App.btn('Cerrar', c, 'primary')]; }); }
+        };
+        if (App.nube.activo) App.confirm('Esto reemplaza los datos en la nube para TODOS los usuarios con el contenido de "' + f.name + '". ¿Continuar?', go, 'Reemplazar', true);
+        else go();
+      };
+      rd.readAsText(f);
+    } });
+    document.body.appendChild(inp); inp.click();
+  };
+
+  /* ---------- datos derivados con caché ---------- */
+  App.escenario = function () {
+    const s = Store.get();
+    return s.escenarioActivo ? s.escenarios.find(function (e) { return e.id === s.escenarioActivo; }) || null : null;
+  };
+  App.opts = function () {
+    const e = App.escenario();
+    return e ? { precios: e.precios || {}, ofertaElegida: e.ofertaElegida || {}, sust: e.sust || {} } : {};
+  };
+  App.ctx = function () {
+    if (App.cache.ctxV !== App.version) { App.cache.ctx = E.makeCtx(Store.get(), App.opts()); App.cache.ctxV = App.version; }
+    return App.cache.ctx;
+  };
+  App.ctxBase = function () {
+    if (App.cache.baseV !== App.version) { App.cache.base = E.makeCtx(Store.get(), {}); App.cache.baseV = App.version; }
+    return App.cache.base;
+  };
+  App.calc = function () {
+    if (App.cache.calcV !== App.version) { App.cache.calc = E.calcularTodo(Store.get(), App.opts()); App.cache.calcV = App.version; }
+    return App.cache.calc;
+  };
+  App.calcBase = function () {
+    if (!App.escenario()) return App.calc();
+    if (App.cache.calcBV !== App.version) { App.cache.calcB = E.calcularTodo(Store.get(), {}); App.cache.calcBV = App.version; }
+    return App.cache.calcB;
+  };
+  App.receta = function (id) { return Store.get().recetas.find(function (r) { return r.id === id; }); };
+  App.insumo = function (id) { return Store.get().insumos.find(function (i) { return i.id === id; }); };
+  App.ofertasDe = function (id) { return Store.get().ofertas.filter(function (o) { return o.insumoId === id; }); };
+
+  /* ---------- escenarios ---------- */
+  App.ensureEscenario = function () {
+    if (App.escenario()) return App.escenario();
+    const id = Store.uid('E');
+    Store.mutate(function (s) {
+      s.escenarios.push({ id: id, nombre: 'Escenario ' + (s.escenarios.length + 1), precios: {}, ofertaElegida: {}, sust: {}, creado: App.hoy() });
+      s.escenarioActivo = id;
+    });
+    return App.escenario();
+  };
+  // cambio: {precios:{ofertaId:n}, ofertaElegida:{insumoId:ofertaId}, sust:{recetaId:{idx:insumoId}}}
+  App.simular = function (cambio) {
+    App.ensureEscenario();
+    const id = Store.get().escenarioActivo;
+    Store.mutate(function (s) {
+      const e = s.escenarios.find(function (x) { return x.id === id; });
+      e.precios = Object.assign(e.precios || {}, cambio.precios || {});
+      e.ofertaElegida = Object.assign(e.ofertaElegida || {}, cambio.ofertaElegida || {});
+      e.sust = e.sust || {};
+      if (cambio.sust) Object.keys(cambio.sust).forEach(function (rid) { e.sust[rid] = Object.assign(e.sust[rid] || {}, cambio.sust[rid]); });
+    });
+    App.toast('Cambio agregado al ' + App.escenario().nombre);
+  };
+  App.aplicarEscenario = function (id) {
+    Store.mutate(function (s) {
+      const e = s.escenarios.find(function (x) { return x.id === id; }); if (!e) return;
+      Object.keys(e.precios || {}).forEach(function (oid) {
+        const o = s.ofertas.find(function (x) { return x.id === oid; });
+        if (o) { App.registrarPrecio(o, e.precios[oid]); o.precio = e.precios[oid]; o.fecha = App.hoy(); }
+      });
+      Object.keys(e.ofertaElegida || {}).forEach(function (insId) {
+        s.ofertas.forEach(function (o) { if (o.insumoId === insId) o.preferida = (o.id === e.ofertaElegida[insId]); });
+      });
+      Object.keys(e.sust || {}).forEach(function (rid) {
+        const r = s.recetas.find(function (x) { return x.id === rid; }); if (!r) return;
+        Object.keys(e.sust[rid]).forEach(function (idx) { if (r.lineas[idx]) { r.lineas[idx].ref = e.sust[rid][idx]; r.lineas[idx].nota = 'sustituido'; } });
+      });
+      s.escenarios = s.escenarios.filter(function (x) { return x.id !== id; });
+      s.escenarioActivo = null;
+    });
+    App.toast('Escenario aplicado a los datos reales');
+  };
+  App.registrarPrecio = function (o, nuevo) {
+    if (o.precio === nuevo) return;
+    o.historial = o.historial || [];
+    o.historial.push({ fecha: o.fecha || App.hoy(), precio: o.precio });
+    if (o.historial.length > 30) o.historial.shift();
+  };
+
+  /* ---------- render ---------- */
+  function captureFocus() {
+    const a = document.activeElement;
+    if (a && a.dataset && a.dataset.fk) return { fk: a.dataset.fk, s: a.selectionStart, e: a.selectionEnd, v: a.value, num: a.dataset.num };
+    return null;
+  }
+  function restoreFocus(f) {
+    if (!f) return;
+    const el = document.querySelector('[data-fk="' + String(f.fk).replace(/"/g, '\\"') + '"]');
+    if (!el) return;
+    if (f.num && App.parseNum(f.v) === App.parseNum(el.value)) el.value = f.v;
+    el.focus();
+    try { if (f.s != null) el.setSelectionRange(f.s, f.e); } catch (e) { /* inputs sin selección */ }
+  }
+
+  const NAV = [['panel', 'Panel'], ['platos', 'Platos y PVP'], ['recetas', 'Recetas'], ['insumos', 'Insumos y compras'], ['alternativas', 'Alternativas'],
+    ['cocina', 'Cocina'], ['compras', 'Lista de compras'], ['ajustes', 'Ajustes'], ['usuarios', 'Usuarios']];
+
+  function headerNode() {
+    const s = Store.get(), esc = App.escenario(), staff = App.esStaff();
+    const guardado = App.nube.activo ? App.textoGuardado() : Store.storageOk() ? (Store.lastSaved() ? 'Guardado ' + Store.lastSaved().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : 'Autoguardado activo') : 'Sin autoguardado: exporta un respaldo';
+    return h('header', { class: 'top' },
+      h('div', { class: 'brand' }, h('span', { class: 'logo' }, '🍲'), h('div', null, h('b', null, 'Colaciones Cerro Jiménez'), h('small', null, 'Costeo, recetas y compras'))),
+      h('nav', { class: 'tabs', role: 'tablist' }, NAV.filter(function (n) { return App.puedeVer(n[0]); }).map(function (n) {
+        return h('a', { href: '#/' + n[0], class: 'tab' + (App.route.name === n[0] ? ' on' : ''), role: 'tab' }, n[1]);
+      })),
+      h('div', { class: 'tools' },
+        !staff ? null : App.select({ cls: 'esc-sel', fk: 'esc-sel', value: s.escenarioActivo || '', options: [['', 'Datos reales']].concat(s.escenarios.map(function (e) { return [e.id, '🧪 ' + e.nombre]; })),
+          onChange: function (v) { Store.mutate(function (st) { st.escenarioActivo = v || null; }); } }),
+        !staff ? null : h('button', { class: 'btn ghost', onclick: function () { Store.undo(); }, disabled: !Store.canUndo(), title: 'Deshacer (Ctrl+Z)' }, '↶ Deshacer'),
+        !staff ? null : h('small', { class: 'saved' + ((App.nube.activo ? App.nube.guardado.estado === 'error' : !Store.storageOk()) ? ' bad' : '') }, guardado),
+        App.usuarioHeader ? App.usuarioHeader() : null),
+      esc ? h('div', { class: 'esc-banner' }, h('b', null, '🧪 Simulación: ' + esc.nombre), ' — los números de toda la app incluyen este escenario; tus datos reales no cambian.',
+        App.btn('Aplicar a datos reales', function () { App.confirm('¿Aplicar los cambios de "' + esc.nombre + '" a tus precios y recetas reales?', function () { App.aplicarEscenario(esc.id); }, 'Aplicar'); }, 'small primary'),
+        App.btn('Salir', function () { Store.mutate(function (st) { st.escenarioActivo = null; }); }, 'small'),
+        App.btn('Descartar', function () { Store.mutate(function (st) { st.escenarios = st.escenarios.filter(function (x) { return x.id !== esc.id; }); st.escenarioActivo = null; }); }, 'small danger')) : null);
+  }
+
+  App.render = function () {
+    const f = captureFocus();
+    const scrolls = {};
+    document.querySelectorAll('[data-sk]').forEach(function (el) { scrolls[el.dataset.sk] = el.scrollTop; });
+    const y = window.scrollY;
+    const root = document.getElementById('app');
+    if (App.nube.activo && App.nube.fase !== 'listo') { root.replaceChildren(App.pantallaAcceso()); document.title = 'Colaciones'; return; }
+    const view = App.views[App.route.name] || App.views.panel;
+    let body;
+    try { body = view(App.route.arg); }
+    catch (err) { console.error(err); body = h('div', { class: 'card' }, h('h3', null, 'Error al mostrar la vista'), h('pre', null, String(err && err.stack || err))); }
+    root.replaceChildren(headerNode(), h('main', { class: 'main view-' + App.route.name }, body));
+    document.querySelectorAll('[data-sk]').forEach(function (el) { if (scrolls[el.dataset.sk] != null) el.scrollTop = scrolls[el.dataset.sk]; });
+    window.scrollTo(0, y);
+    restoreFocus(f);
+    document.title = 'Colaciones — ' + (NAV.find(function (n) { return n[0] === App.route.name; }) || ['', ''])[1];
+  };
+
+  App.go = function (name, arg) {
+    location.hash = '#/' + name + (arg ? '/' + encodeURIComponent(arg) : '');
+  };
+  function parseHash() {
+    const m = location.hash.replace(/^#\/?/, '').split('/');
+    let name = App.views[m[0]] ? m[0] : App.vistaInicial();
+    if (!App.puedeVer(name) && (!App.nube.activo || App.nube.fase === 'listo')) name = App.vistaInicial();
+    const arg = m[1] ? decodeURIComponent(m[1]) : null;
+    const cambio = App.route.name !== name || App.route.arg !== arg;
+    App.route = { name: name, arg: arg };
+    if (cambio) { window.scrollTo(0, 0); }
+    App.render();
+  }
+
+  App.start = function () {
+    if (App.nube.activo) App.iniciarNube(); else Store.load();
+    Store.subscribe(function (ev) {
+      if (ev === 'change') { App.version++; App.render(); }
+      else if (ev === 'saved' && !App.nube.activo) { const el = document.querySelector('.saved'); if (el && Store.lastSaved()) el.textContent = 'Guardado ' + Store.lastSaved().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }); }
+    });
+    window.addEventListener('hashchange', parseHash);
+    window.addEventListener('beforeunload', function () { Store.flush(); });
+    document.addEventListener('keydown', function (ev) {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z' && !/INPUT|TEXTAREA/.test((document.activeElement || {}).tagName || '')) { ev.preventDefault(); Store.undo(); }
+    });
+    parseHash();
+  };
+})();
+
+/* src/ui/acceso.js */
+/* Modo nube: sesión (Supabase Auth), roles, carga/sincronización y gestión de usuarios. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, Store = window.Store;
+  const N = App.nube = { activo: !!window.CLOUD, fase: 'iniciando', sb: null, user: null, perfil: null, sync: null,
+    guardado: { estado: 'ok', msg: '', hora: null }, error: null, reintento: null };
+  const ROLES = [['', 'Sin acceso'], ['cocina', 'Cocina'], ['gerente', 'Gerente'], ['admin', 'Admin']];
+  const ROL_TXT = { admin: 'Admin', gerente: 'Gerente', cocina: 'Cocina' };
+
+  App.rol = function () { return N.activo ? (N.perfil && N.perfil.rol) || null : 'admin'; };
+  App.esStaff = function () { const r = App.rol(); return r === 'admin' || r === 'gerente'; };
+  App.puedeVer = function (vista) {
+    const r = App.rol();
+    if (vista === 'usuarios') return N.activo && r === 'admin';
+    if (r === 'cocina') return vista === 'cocina';
+    return !!r;
+  };
+  App.vistaInicial = function () { return App.rol() === 'cocina' ? 'cocina' : 'panel'; };
+
+  function vacio() { return { meta: { version: 1 }, params: {}, insumos: [], ofertas: [], recetas: [], plan: { lun: [], mar: [], mie: [], jue: [], vie: [] }, escenarios: [], escenarioActivo: null }; }
+  const claveEsc = function () { return 'colaciones.esc.' + (N.user ? N.user.id : ''); };
+
+  /* ---------- estado de guardado ---------- */
+  function onEstado(estado, msg) {
+    N.guardado = { estado: estado, msg: msg, hora: estado === 'ok' ? new Date() : N.guardado.hora };
+    const el = document.querySelector('.saved');
+    if (el) { el.textContent = App.textoGuardado(); el.className = 'saved' + (estado === 'error' ? ' bad' : ''); }
+    if (estado === 'error' && !N.reintento) {
+      N.reintento = setTimeout(function () { N.reintento = null; if (N.fase === 'listo' && App.esStaff()) guardar(Store.get()); }, 8000);
+    }
+  }
+  App.textoGuardado = function () {
+    const g = N.guardado;
+    if (g.estado === 'guardando') return '☁ Guardando…';
+    if (g.estado === 'error') return '⚠ Sin guardar: reintentando (' + (g.msg || 'error') + ')';
+    return g.hora ? '☁ Guardado ' + g.hora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : '☁ Sincronizado';
+  };
+  function guardar(state) { if (App.esStaff()) N.sync.guardar(state).catch(function () { /* onEstado ya avisó y programó reintento */ }); }
+
+  /* ---------- sesión y carga ---------- */
+  async function leerPerfil() {
+    const r = await N.sb.from('perfiles').select('id,email,nombre,rol').eq('id', N.user.id).maybeSingle();
+    if (r.error) throw r.error;
+    return r.data;
+  }
+
+  async function cargarTodo() {
+    if (!N.user) return;
+    const uid = N.user.id;
+    const vigente = function () { return N.user && N.user.id === uid; };   // la sesión pudo cerrarse mientras cargaba
+    N.fase = 'cargando'; App.render();
+    try {
+      const perfil = await leerPerfil();
+      if (!vigente()) return;
+      N.perfil = perfil;
+      if (!N.perfil || !N.perfil.rol) { N.fase = 'sinrol'; App.render(); return; }
+      const st = await N.sync.cargar(App.esStaff());
+      if (!vigente()) return;
+      let esc = null; try { esc = localStorage.getItem(claveEsc()) || null; } catch (e) { /* sin almacenamiento */ }
+      st.escenarioActivo = st.escenarios.some(function (e) { return e.id === esc; }) ? esc : null;
+      N.fase = 'listo';
+      Store.establecer(st);
+      if (!App.puedeVer(App.route.name)) App.go(App.vistaInicial()); else App.render();
+    } catch (e) {
+      if (!vigente()) return;
+      N.fase = 'error'; N.error = (e && e.message) || String(e); App.render();
+    }
+  }
+
+  async function manejarSesion(ev, session) {
+    if (ev === 'PASSWORD_RECOVERY') { N.user = session && session.user; N.fase = 'recuperar'; App.render(); return; }
+    if (!session) {
+      N.user = null; N.perfil = null; N.fase = 'login'; Store.establecer(vacio()); App.ui.usuarios = null;
+      App.render(); return;
+    }
+    if (N.user && N.user.id === session.user.id && (N.fase === 'listo' || N.fase === 'cargando' || N.fase === 'recuperar')) { N.user = session.user; return; }
+    N.user = session.user;
+    await cargarTodo();
+  }
+
+  // trae cambios de otros usuarios si no hay ediciones locales en curso
+  async function refrescar() {
+    const ocupado = function () { return N.sync.pendiente() || Store.guardadoProgramado(); };
+    if (N.fase !== 'listo' || ocupado() || document.hidden) return;
+    const a = document.activeElement;
+    if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return;
+    if (document.querySelector('.overlay')) return;
+    const v = Store.version();
+    try {
+      const p = await leerPerfil();
+      if (!p || p.rol !== N.perfil.rol) { await cargarTodo(); return; }
+      const r = await N.sync.traer(App.esStaff());
+      if (!r.cambio || Store.version() !== v || ocupado()) return;
+      r.state.escenarioActivo = Store.get().escenarioActivo;
+      N.sync.aceptar(r.base);
+      Store.establecer(r.state);
+      App.toast('Se cargaron cambios hechos por otro usuario');
+    } catch (e) { /* sin conexión: se reintenta en el próximo ciclo */ }
+  }
+
+  App.iniciarNube = async function () {
+    if (!window.supabase || !window.supabase.createClient) {
+      N.fase = 'error'; N.error = 'No se pudo cargar el servicio de datos. Revisa tu conexión a internet y recarga la página.'; App.render(); return;
+    }
+    N.sb = window.supabase.createClient(window.CLOUD.url, window.CLOUD.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+    N.sync = window.Nube.crearSync(N.sb, onEstado);
+    Store.establecer(vacio());
+    Store.usarBackend(guardar);
+    Store.subscribe(function (ev) {
+      if (ev === 'change' && N.fase === 'listo') { try { localStorage.setItem(claveEsc(), Store.get().escenarioActivo || ''); } catch (e) { /* sin almacenamiento */ } }
+    });
+    // no llamar a Supabase dentro del callback (puede bloquear): diferir
+    N.sb.auth.onAuthStateChange(function (ev, session) { setTimeout(function () { manejarSesion(ev, session); }, 0); });
+    setInterval(refrescar, 45000);
+    window.addEventListener('focus', refrescar);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) refrescar(); });
+    window.addEventListener('beforeunload', function (ev) { if (N.sync && (N.sync.pendiente() || Store.guardadoProgramado())) { ev.preventDefault(); ev.returnValue = ''; } });
+  };
+
+  App.salir = async function () {
+    if (N.sync.pendiente() || Store.guardadoProgramado()) { App.toast('Espera a que termine de guardar…'); return; }
+    await N.sb.auth.signOut();
+  };
+
+  /* ---------- pantallas de acceso ---------- */
+  function caja(titulo, cuerpo) {
+    return h('div', { class: 'acceso' }, h('div', { class: 'acceso-box' },
+      h('div', { class: 'brand' }, h('span', { class: 'logo' }, '🍲'), h('div', null, h('b', null, 'Colaciones Cerro Jiménez'), h('small', null, 'Costeo, recetas y compras'))),
+      h('h2', null, titulo), cuerpo));
+  }
+  function campo(label, tipo, id, auto) {
+    return h('label', null, label, h('input', { type: tipo, id: id, autocomplete: auto || 'off', class: 'wide', required: true }));
+  }
+  function mensaje(txt, kind) { const m = document.getElementById('acc-msg'); if (m) { m.textContent = txt; m.className = 'acc-msg ' + (kind || ''); } }
+  const val = function (id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const errTxt = function (e) {
+    const m = (e && e.message) || String(e);
+    if (/Invalid login/i.test(m)) return 'Correo o contraseña incorrectos.';
+    if (/Email not confirmed/i.test(m)) return 'Falta confirmar el correo: revisa tu bandeja (y spam).';
+    if (/already registered/i.test(m)) return 'Ese correo ya tiene cuenta: inicia sesión.';
+    if (/Password should be/i.test(m)) return 'La contraseña debe tener al menos 6 caracteres.';
+    if (/rate limit/i.test(m)) return 'Demasiados intentos seguidos. Espera unos minutos.';
+    return m;
+  };
+
+  function login() {
+    const modo = App.ui.accesoModo || 'entrar';
+    const cambiar = function (m) { return function (ev) { ev.preventDefault(); App.ui.accesoModo = m; App.render(); }; };
+    const redir = location.origin + location.pathname;
+    if (modo === 'crear') {
+      return caja('Crear cuenta', h('form', { class: 'stack', onsubmit: async function (ev) {
+        ev.preventDefault(); mensaje('Creando…');
+        const r = await N.sb.auth.signUp({ email: val('acc-email'), password: document.getElementById('acc-pass').value,
+          options: { data: { nombre: val('acc-nombre') }, emailRedirectTo: redir } });
+        if (r.error) mensaje(errTxt(r.error), 'bad');
+        else if (!r.data.session) mensaje('Cuenta creada. Revisa tu correo para confirmarla y luego inicia sesión.', 'good');
+      } },
+        campo('Tu nombre', 'text', 'acc-nombre', 'name'), campo('Correo', 'email', 'acc-email', 'email'), campo('Contraseña (mínimo 6 caracteres)', 'password', 'acc-pass', 'new-password'),
+        h('button', { class: 'btn primary', type: 'submit' }, 'Crear cuenta'),
+        h('div', { id: 'acc-msg', class: 'acc-msg' }),
+        h('p', { class: 'help' }, 'Después de crearla, el administrador debe asignarte un rol para que veas los datos.'),
+        h('a', { href: '#', onclick: cambiar('entrar') }, '← Ya tengo cuenta')));
+    }
+    if (modo === 'olvide') {
+      return caja('Recuperar contraseña', h('form', { class: 'stack', onsubmit: async function (ev) {
+        ev.preventDefault(); mensaje('Enviando…');
+        const r = await N.sb.auth.resetPasswordForEmail(val('acc-email'), { redirectTo: redir });
+        mensaje(r.error ? errTxt(r.error) : 'Si el correo existe, te llegará un enlace para crear una nueva contraseña.', r.error ? 'bad' : 'good');
+      } },
+        campo('Correo', 'email', 'acc-email', 'email'), h('button', { class: 'btn primary', type: 'submit' }, 'Enviar enlace'),
+        h('div', { id: 'acc-msg', class: 'acc-msg' }), h('a', { href: '#', onclick: cambiar('entrar') }, '← Volver')));
+    }
+    return caja('Iniciar sesión', h('form', { class: 'stack', onsubmit: async function (ev) {
+      ev.preventDefault(); mensaje('Entrando…');
+      const r = await N.sb.auth.signInWithPassword({ email: val('acc-email'), password: document.getElementById('acc-pass').value });
+      if (r.error) mensaje(errTxt(r.error), 'bad');
+    } },
+      campo('Correo', 'email', 'acc-email', 'email'), campo('Contraseña', 'password', 'acc-pass', 'current-password'),
+      h('button', { class: 'btn primary', type: 'submit' }, 'Entrar'),
+      h('div', { id: 'acc-msg', class: 'acc-msg' }),
+      h('div', { class: 'row gap wrap' }, h('a', { href: '#', onclick: cambiar('crear') }, 'Crear cuenta'), h('span', { class: 'spacer' }), h('a', { href: '#', onclick: cambiar('olvide') }, '¿Olvidaste tu contraseña?'))));
+  }
+
+  App.pantallaAcceso = function () {
+    if (N.fase === 'login') return login();
+    if (N.fase === 'iniciando' || N.fase === 'cargando') return caja('Cargando…', h('p', { class: 'mut' }, N.fase === 'cargando' ? 'Trayendo los datos del negocio.' : 'Conectando.'));
+    if (N.fase === 'sinrol') {
+      return caja('Cuenta pendiente', h('div', { class: 'stack' },
+        h('p', null, 'Tu cuenta (' + (N.user ? N.user.email : '') + ') está creada, pero todavía no tiene un rol asignado.'),
+        h('p', { class: 'help' }, 'Pídele al administrador que te asigne un rol en la sección Usuarios. Luego toca “Revisar de nuevo”.'),
+        h('div', { class: 'row gap' }, App.btn('Revisar de nuevo', cargarTodo, 'primary'), App.btn('Cerrar sesión', App.salir))));
+    }
+    if (N.fase === 'recuperar') {
+      return caja('Nueva contraseña', h('form', { class: 'stack', onsubmit: async function (ev) {
+        ev.preventDefault();
+        const r = await N.sb.auth.updateUser({ password: document.getElementById('acc-pass').value });
+        if (r.error) mensaje(errTxt(r.error), 'bad'); else { mensaje('Contraseña actualizada.', 'good'); setTimeout(cargarTodo, 600); }
+      } }, campo('Nueva contraseña (mínimo 6 caracteres)', 'password', 'acc-pass', 'new-password'),
+        h('button', { class: 'btn primary', type: 'submit' }, 'Guardar contraseña'), h('div', { id: 'acc-msg', class: 'acc-msg' })));
+    }
+    return caja('No se pudo cargar', h('div', { class: 'stack' }, h('p', null, N.error || 'Error desconocido.'),
+      h('div', { class: 'row gap' }, App.btn('Reintentar', function () { if (N.user) cargarTodo(); else location.reload(); }, 'primary'), N.user ? App.btn('Cerrar sesión', App.salir) : null)));
+  };
+
+  App.usuarioHeader = function () {
+    if (!N.activo || !N.perfil) return null;
+    return h('div', { class: 'user' }, h('span', null, N.perfil.nombre || N.perfil.email), App.badge(ROL_TXT[N.perfil.rol] || '—', 'info'),
+      App.btn('Salir', App.salir, 'small ghost'));
+  };
+
+  /* ---------- vista Usuarios (solo admin) ---------- */
+  App.views.usuarios = function () {
+    const U = App.ui.usuarios = App.ui.usuarios || { lista: null, cargando: false, error: null };
+    const cargar = function () {
+      U.cargando = true;
+      N.sb.from('perfiles').select('id,email,nombre,rol,creado').order('creado').then(function (r) {
+        U.cargando = false; if (r.error) U.error = r.error.message; else { U.lista = r.data; U.error = null; }
+        App.render();
+      });
+    };
+    if (!U.lista && !U.cargando && !U.error) cargar();
+    const cambiarRol = function (p, rol) {
+      N.sb.from('perfiles').update({ rol: rol || null }).eq('id', p.id).select().then(function (r) {
+        if (r.error) App.toast(r.error.message);
+        else if (!r.data || !r.data.length) App.toast('No se pudo cambiar el rol (sin permiso)');
+        else { App.toast('Rol actualizado: ' + (p.nombre || p.email)); if (p.id === N.user.id) cargarTodo(); }
+        U.lista = null; cargar();
+      });
+    };
+    const tabla = U.error ? h('div', { class: 'chk-error' }, U.error) : !U.lista ? App.empty('Cargando usuarios…') :
+      h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Nombre'), h('th', null, 'Correo'), h('th', null, 'Rol'), h('th', null, 'Creado'))),
+        h('tbody', null, U.lista.map(function (p) {
+          return h('tr', { class: p.rol ? '' : 'warnrow' }, h('td', null, p.nombre || '—', p.id === N.user.id ? h('small', null, ' (tú)') : null), h('td', null, p.email),
+            h('td', null, App.select({ fk: 'rol-' + p.id, value: p.rol || '', options: ROLES, onChange: function (v) {
+              if (p.id === N.user.id && v !== 'admin') App.confirm('Vas a quitarte el rol de administrador. ¿Seguro?', function () { cambiarRol(p, v); }, 'Cambiar', true);
+              else cambiarRol(p, v);
+            } })),
+            h('td', null, p.creado ? new Date(p.creado).toLocaleDateString('es-CL') : ''));
+        })));
+    return h('div', { class: 'stack' },
+      App.card('Usuarios y roles', h('div', { class: 'stack' }, tabla, h('div', { class: 'row gap' }, App.btn('Actualizar lista', function () { U.lista = null; U.error = null; cargar(); }, 'small')))),
+      App.card('Cómo agregar a alguien', h('ol', { class: 'help' },
+        h('li', null, 'Envíale el enlace de la app.'),
+        h('li', null, 'Que toque “Crear cuenta” con su correo.'),
+        h('li', null, 'Aparecerá aquí como “Sin acceso”: elige su rol. Al recargar, ya verá los datos.'))),
+      App.card('Qué ve cada rol', h('table', { class: 'tbl compact' }, h('tbody', null,
+        h('tr', null, h('td', null, h('b', null, 'Admin')), h('td', null, 'Todo, más esta sección de usuarios.')),
+        h('tr', null, h('td', null, h('b', null, 'Gerente')), h('td', null, 'Todo: precios, PVP, recetas, compras, ajustes y escenarios.')),
+        h('tr', null, h('td', null, h('b', null, 'Cocina')), h('td', null, 'Solo recetas, pasos y producción del día. No ve costos ni precios (lo bloquea la base de datos).')),
+        h('tr', null, h('td', null, h('b', null, 'Sin acceso')), h('td', null, 'Cuenta creada sin datos visibles.'))))));
+  };
+})();
+
+/* src/ui/insumos.js */
+/* Insumos y compras: precios, lugares, formatos, ofertas alternativas e impacto en los platos. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const CATS = ['Carnes de Vacuno', 'Aves y Cerdo', 'Pescados y Mariscos', 'Legumbres y Granos', 'Abarrotes y Condimentos', 'Verduras y Frutas (Cardonal)', 'Lácteos y Huevos', 'Envases'];
+  const UNIDADES = [['g', 'gramos (g)'], ['ml', 'mililitros (ml)'], ['un', 'unidades (un)']];
+  const DIETAS = [['vegano', 'Vegano'], ['vegetariano', 'Vegetariano'], ['omni', 'Con carne/pescado']];
+  const FUENTES = [['estimado', 'Estimado'], ['comprado', 'Comprado'], ['cotizacion', 'Cotización'], ['ODEPA', 'ODEPA']];
+
+  // mapa insumo → platos que lo usan (por 1 porción)
+  App.usoMap = function () {
+    if (App.cache.usoV !== App.version) {
+      const ctx = App.ctx(), m = new Map();
+      Store.get().recetas.forEach(function (r) {
+        if (!E.esVendible(r)) return;
+        E.explotarPlato(ctx, r.id, 1).forEach(function (q, id) {
+          if (!m.has(id)) m.set(id, []);
+          m.get(id).push({ id: r.id, nombre: r.nombre, q: q });
+        });
+      });
+      App.cache.uso = m; App.cache.usoV = App.version;
+    }
+    return App.cache.uso;
+  };
+
+  App.costoVisible = function (unit, unidad) {
+    if (unidad === 'g') return App.clp(unit * 1000) + '/kg';
+    if (unidad === 'ml') return App.clp(unit * 1000) + '/L';
+    return App.clpU(unit) + '/un';
+  };
+
+  function precioViejo(o, p) {
+    return o.fecha && E.diasEntre(o.fecha, App.hoy()) > p.precioViejoDias;
+  }
+
+  function listado(sel, F, ctx) {
+    const s = Store.get(), p = ctx.p, uso = App.usoMap();
+    const q = (F.q || '').toLowerCase();
+    const filas = s.insumos.filter(function (i) {
+      if (q && (i.nombre + ' ' + i.categoria).toLowerCase().indexOf(q) < 0) return false;
+      if (F.cat && i.categoria !== F.cat) return false;
+      const ofs = App.ofertasDe(i.id), c = E.costoInsumo(ctx, i.id);
+      if (F.mode === 'sinprecio') return c.missing;
+      if (F.mode === 'viejo') return ofs.some(function (o) { return precioViejo(o, p); });
+      if (F.mode === 'alt') return ofs.length >= 2;
+      if (F.mode === 'sinuso') return !uso.has(i.id);
+      return true;
+    }).sort(function (a, b) { return a.categoria === b.categoria ? a.nombre.localeCompare(b.nombre) : a.categoria.localeCompare(b.categoria); });
+
+    const cats = Array.from(new Set(s.insumos.map(function (i) { return i.categoria; }))).sort();
+    const tabla = h('table', { class: 'tbl sel' },
+      h('thead', null, h('tr', null, h('th', null, 'Insumo'), h('th', { class: 'r' }, 'Costo neto'), h('th', null, 'Comprado en'), h('th', { class: 'c' }, 'Usado en'))),
+      h('tbody', null, filas.length ? filas.map(function (i) {
+        const c = E.costoInsumo(ctx, i.id), ofs = App.ofertasDe(i.id), u = uso.get(i.id) || [];
+        const viejo = ofs.some(function (o) { return precioViejo(o, p); });
+        return h('tr', { class: i.id === sel ? 'on' : '', onclick: function () { App.go('insumos', i.id); } },
+          h('td', null, h('div', { class: 'nm' }, i.nombre), h('small', null, i.categoria, c.missing ? ' ' : null, c.missing ? App.badge('sin precio', 'bad') : null,
+            viejo ? App.badge('precio viejo', 'warn') : null, ofs.length > 1 ? App.badge(ofs.length + ' ofertas', 'info') : null)),
+          h('td', { class: 'r' }, c.missing ? '—' : App.costoVisible(c.unit, i.unidad)),
+          h('td', null, c.oferta ? c.oferta.lugar : (c.modo === 'promedio' ? 'promedio' : '—')),
+          h('td', { class: 'c' }, u.length ? u.length + ' plato' + (u.length > 1 ? 's' : '') : h('span', { class: 'mut' }, '—')));
+      }) : h('tr', null, h('td', { colspan: 4 }, App.empty('Sin resultados')))));
+
+    return h('div', { class: 'pane-list' },
+      h('div', { class: 'filters' },
+        App.textInput({ fk: 'ins-q', value: F.q, ph: 'Buscar insumo…', cls: 'search', onChange: function (v) { F.q = v; App.render(); } }),
+        App.select({ fk: 'ins-cat', value: F.cat, options: [['', 'Todas las categorías']].concat(cats.map(function (c) { return [c, c]; })), onChange: function (v) { F.cat = v; App.render(); } })),
+      h('div', { class: 'chips' }, [['', 'Todos'], ['sinprecio', 'Sin precio'], ['viejo', 'Precio viejo'], ['alt', 'Con alternativas'], ['sinuso', 'Sin uso']].map(function (m) {
+        return App.chip(m[1], (F.mode || '') === m[0], function () { F.mode = m[0]; App.render(); });
+      }), App.btn('+ Nuevo insumo', nuevoInsumo, 'small primary')),
+      h('div', { class: 'scroll', 'data-sk': 'ins-list' }, tabla));
+  }
+
+  function nuevoInsumo() {
+    App.prompt('Nuevo insumo', '', function (nombre) {
+      const id = Store.uid('INS-');
+      Store.mutate(function (s) {
+        s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: 'vegano' });
+        s.ofertas.push({ id: Store.uid('OF-'), insumoId: id, lugar: '', marca: '', formatoLabel: 'kg', formatoQty: 1000, precio: 0, rendimiento: null,
+          fecha: App.hoy(), fuente: 'estimado', disponible: true, preferida: true, nota: '' });
+      });
+      App.go('insumos', id);
+    }, 'Ej.: Pimentón amarillo');
+  }
+
+  function detalle(ins, ctx) {
+    const s = Store.get(), esc = App.escenario(), p = ctx.p;
+    const ofs = App.ofertasDe(ins.id);
+    const activo = E.costoInsumo(ctx, ins.id);
+    const mejor = ofs.filter(function (o) { return o.disponible !== false; }).reduce(function (a, o) {
+      const c = E.costoNetoOferta(ctx, o); return !a || (c > 0 && c < a.c) ? { o: o, c: c } : a; }, null);
+
+    const upd = function (fn, key) { Store.mutate(function (st) { fn(st.insumos.find(function (x) { return x.id === ins.id; })); }, key); };
+    const cabecera = h('div', { class: 'card' },
+      h('div', { class: 'card-h' }, h('h3', null, ins.nombre),
+        h('div', null, App.btn('Eliminar insumo', function () { eliminar(ins); }, 'small danger'))),
+      h('div', { class: 'form-grid' },
+        h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); } })),
+        h('label', null, 'Categoría', App.textInput({ fk: 'ins-categoria', value: ins.categoria, list: 'dl-cats', onChange: function (v) { upd(function (x) { x.categoria = v; }, 'ct' + ins.id); } })),
+        h('label', null, 'Unidad de receta', App.select({ fk: 'ins-unidad', value: ins.unidad, options: UNIDADES, onChange: function (v) { upd(function (x) { x.unidad = v; }); } })),
+        h('label', null, 'Rendimiento (merma de limpieza) %', App.numInput({ fk: 'ins-rend', value: Math.round(ins.rendimiento * 1000) / 10, title: 'Parte utilizable tras pelar/limpiar. 100% = sin merma. No incluir merma de cocción.',
+          onChange: function (n) { if (n > 0 && n <= 100) upd(function (x) { x.rendimiento = n / 100; }, 'rd' + ins.id); } })),
+        h('label', null, 'Familia (para sustitutos)', App.textInput({ fk: 'ins-fam', value: ins.familia || '', list: 'dl-fams', ph: 'ej. ave, pescado-blanco', onChange: function (v) { upd(function (x) { x.familia = v || null; }, 'fm' + ins.id); } })),
+        h('label', null, 'Dieta', App.select({ fk: 'ins-dieta', value: ins.dieta || 'vegano', options: DIETAS, onChange: function (v) { upd(function (x) { x.dieta = v; }); } }))),
+      h('div', { class: 'help' }, 'Cantidades en recetas = peso utilizable crudo/seco tal como se compra. El rendimiento solo descuenta limpieza o pelado, no la cocción.'));
+
+    // ofertas
+    const upO = function (o, fn, key) { Store.mutate(function (st) { fn(st.ofertas.find(function (x) { return x.id === o.id; })); }, key); };
+    const filaOferta = function (o) {
+      const precioSim = esc && esc.precios && esc.precios[o.id] != null ? esc.precios[o.id] : null;
+      const precioMostrado = precioSim != null ? precioSim : o.precio;
+      const cn = E.costoNetoOferta(ctx, o);
+      const esMejor = mejor && mejor.o.id === o.id && ofs.length > 1;
+      const esUsada = activo.oferta && activo.oferta.id === o.id;
+      return h('tr', { class: (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada' : '') },
+        h('td', null, App.textInput({ fk: 'o-lugar-' + o.id, value: o.lugar, ph: 'Lugar / proveedor', list: 'dl-lugares', onChange: function (v) { upO(o, function (x) { x.lugar = v; }, 'lg' + o.id); } })),
+        h('td', null, App.textInput({ fk: 'o-marca-' + o.id, value: o.marca, ph: 'Marca / detalle', onChange: function (v) { upO(o, function (x) { x.marca = v; }, 'mc' + o.id); } })),
+        h('td', null, App.textInput({ fk: 'o-fl-' + o.id, cls: 'w90', value: o.formatoLabel, ph: 'ej. saco 25 kg', onChange: function (v) { upO(o, function (x) { x.formatoLabel = v; }, 'fl' + o.id); } })),
+        h('td', null, App.numInput({ fk: 'o-fq-' + o.id, cls: 'w70', value: o.formatoQty, title: 'Cantidad por formato en ' + ins.unidad + ' (ej. 1 kg = 1000 g)',
+          onChange: function (n) { if (n > 0) upO(o, function (x) { x.formatoQty = n; }, 'fq' + o.id); } }), h('small', null, ' ' + ins.unidad)),
+        h('td', null, App.numInput({ fk: 'o-pr-' + o.id, cls: 'w80' + (precioSim != null ? ' sim' : ''), value: precioMostrado, title: esc ? 'Con un escenario activo, esto edita el escenario, no tus datos reales' : 'Precio del formato completo (CLP)',
+          onChange: function (n) {
+            if (esc) { Store.mutate(function (st) { const e = st.escenarios.find(function (x) { return x.id === esc.id; }); e.precios = e.precios || {}; e.precios[o.id] = n; }, 'sp' + o.id); }
+            else {
+              upO(o, function (x) {
+                if (!App.cache.editando || App.cache.editando !== o.id) { App.registrarPrecio(x, n); App.cache.editando = o.id; }
+                x.precio = n; x.fecha = App.hoy(); if (x.fuente === 'estimado') x.fuente = 'comprado';
+              }, 'pr' + o.id);
+            }
+          }, onBlur: function () { App.cache.editando = null; } })),
+        h('td', null, App.numInput({ fk: 'o-rd-' + o.id, cls: 'w60', value: o.rendimiento != null ? Math.round(o.rendimiento * 1000) / 10 : '', ph: Math.round(ins.rendimiento * 100) + '', title: 'Opcional: rendimiento propio de este producto (%). Vacío = usa el del insumo',
+          onChange: function (n) { if (n > 0 && n <= 100) upO(o, function (x) { x.rendimiento = n / 100; }, 'ro' + o.id); },
+          onEmpty: function () { upO(o, function (x) { x.rendimiento = null; }); } })),
+        h('td', { class: 'r strong' }, App.costoVisible(cn, ins.unidad), esMejor ? h('div', null, App.badge('más barata', 'good')) : null),
+        h('td', null, App.select({ fk: 'o-fu-' + o.id, cls: 'w90', value: o.fuente || 'estimado', options: FUENTES, onChange: function (v) { upO(o, function (x) { x.fuente = v; }); } }),
+          h('small', { class: precioViejo(o, p) ? 'warn-t' : '' }, o.fecha || '')),
+        h('td', { class: 'c' }, h('input', { type: 'radio', name: 'pref-' + ins.id, checked: !!o.preferida, title: 'Oferta preferida (la que usan los costos)',
+          onchange: function () { Store.mutate(function (st) { st.ofertas.forEach(function (x) { if (x.insumoId === ins.id) x.preferida = (x.id === o.id); }); }); } })),
+        h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: o.disponible !== false, title: 'Disponible', onchange: function (ev) { upO(o, function (x) { x.disponible = ev.target.checked; }); } })),
+        h('td', null, App.btn('✕', function () {
+          if (ofs.length <= 1) { App.toast('Cada insumo necesita al menos una oferta'); return; }
+          App.confirm('¿Eliminar la oferta de ' + (o.lugar || 'este lugar') + '?', function () { Store.mutate(function (st) { st.ofertas = st.ofertas.filter(function (x) { return x.id !== o.id; }); }); }, 'Eliminar', true);
+        }, 'small ghost', 'Eliminar oferta')));
+    };
+
+    const nuevaOferta = function () {
+      Store.mutate(function (st) {
+        const base = st.ofertas.find(function (x) { return x.insumoId === ins.id; });
+        st.ofertas.push({ id: Store.uid('OF-'), insumoId: ins.id, lugar: '', marca: '', formatoLabel: base ? base.formatoLabel : 'kg', formatoQty: base ? base.formatoQty : 1000,
+          precio: 0, rendimiento: null, fecha: App.hoy(), fuente: 'cotizacion', disponible: true, preferida: false, nota: '' });
+      });
+    };
+
+    const tablaOfertas = App.card('Dónde y a qué precio lo compras',
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, ['Lugar', 'Marca / detalle', 'Formato', 'Cant. formato', 'Precio formato', 'Rend. %', 'Costo neto', 'Fuente / fecha', 'Usar', 'Disp.', ''].map(function (t, i) { return h('th', { class: i === 6 ? 'r' : (i === 8 || i === 9 ? 'c' : '') }, t); }))),
+        h('tbody', null, ofs.map(filaOferta)))),
+      '', App.btn('+ Agregar cotización', nuevaOferta, 'small primary'));
+
+    // impacto
+    const pctVar = App.ui.impPct != null ? App.ui.impPct : 10;
+    let impacto = null;
+    const oAct = activo.oferta || ofs[0];
+    if (oAct) {
+      const precioBase = E.costoNetoOferta(ctx, oAct) > 0 ? (esc && esc.precios && esc.precios[oAct.id] != null ? esc.precios[oAct.id] : oAct.precio) : oAct.precio;
+      const nuevoPrecio = precioBase * (1 + pctVar / 100);
+      const imp = E.impacto(s, { precios: (function () { const o = {}; o[oAct.id] = nuevoPrecio; return o; })() }, App.opts());
+      impacto = App.card('Impacto en los platos',
+        h('div', null,
+          h('div', { class: 'row gap' }, 'Si el precio de ', h('b', null, (oAct.lugar || 'la oferta activa')), ' cambia',
+            App.numInput({ fk: 'imp-pct', cls: 'w60', value: pctVar, onChange: function (n) { App.ui.impPct = n; App.render(); } }), '%  →  ',
+            h('b', null, App.clp(precioBase) + ' → ' + App.clp(nuevoPrecio)),
+            App.btn('Simular este precio', function () { const c = { precios: {} }; c.precios[oAct.id] = nuevoPrecio; App.simular(c); }, 'small')),
+          imp.filas.length ? h('div', null,
+            h('p', { class: 'help' }, imp.afectados + ' platos afectados · variación media del costo ' + App.sg(imp.deltaMedio)),
+            h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+              h('thead', null, h('tr', null, h('th', null, 'Plato'), h('th', { class: 'r' }, 'Costo'), h('th', { class: 'r' }, 'Δ costo'), h('th', { class: 'r' }, 'Margen'))),
+              h('tbody', null, imp.filas.slice(0, 12).map(function (f) {
+                return h('tr', { class: 'link', onclick: function () { App.go('platos', f.id); } }, h('td', null, f.nombre),
+                  h('td', { class: 'r' }, App.clp(f.costoAntes) + ' → ' + App.clp(f.costoDespues)),
+                  h('td', { class: 'r ' + (f.delta > 0 ? 'bad-t' : 'good-t') }, App.sg(f.delta)),
+                  h('td', { class: 'r' }, App.pct(f.margenPctAntes) + ' → ' + App.pct(f.margenPctDespues)));
+              }))))) : App.empty('Este insumo no se usa en ningún plato activo.')));
+    }
+
+    // usos
+    const usos = (App.usoMap().get(ins.id) || []).slice().sort(function (a, b) { return b.q - a.q; });
+    const tUsos = App.card('Dónde se usa (' + usos.length + ')', usos.length ? h('div', { class: 'tags' }, usos.map(function (u) {
+      return h('a', { class: 'tag', href: '#/recetas/' + encodeURIComponent(u.id), title: 'Abrir receta' }, u.nombre + ' · ' + App.cantidad(u.q, ins.unidad));
+    })) : App.empty('No se usa en recetas.'));
+
+    // historial
+    const hist = [];
+    ofs.forEach(function (o) { (o.historial || []).forEach(function (x) { hist.push({ lugar: o.lugar, fecha: x.fecha, precio: x.precio }); }); });
+    hist.sort(function (a, b) { return a.fecha < b.fecha ? 1 : -1; });
+    const tHist = hist.length ? App.card('Historial de precios', h('table', { class: 'tbl compact' },
+      h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Lugar'), h('th', { class: 'r' }, 'Precio anterior'))),
+      h('tbody', null, hist.slice(0, 12).map(function (x) { return h('tr', null, h('td', null, x.fecha), h('td', null, x.lugar), h('td', { class: 'r' }, App.clp(x.precio))); })))) : null;
+
+    return h('div', { class: 'stack' }, cabecera, tablaOfertas, impacto, tUsos, tHist);
+  }
+
+  function eliminar(ins) {
+    const usos = App.usoMap().get(ins.id) || [];
+    const directo = Store.get().recetas.filter(function (r) { return r.lineas.some(function (l) { return l.tipo === 'insumo' && l.ref === ins.id; }) || r.envaseId === ins.id; });
+    if (directo.length) {
+      App.modal('No se puede eliminar', h('div', null, h('p', null, 'Este insumo está en ' + directo.length + ' receta(s). Quítalo de ellas o reemplázalo primero:'),
+        h('ul', null, directo.slice(0, 15).map(function (r) { return h('li', null, h('a', { href: '#/recetas/' + encodeURIComponent(r.id) }, r.nombre)); }))),
+        function (close) { return [App.btn('Cerrar', close, 'primary')]; });
+      return;
+    }
+    App.confirm('¿Eliminar "' + ins.nombre + '" y todas sus ofertas?', function () {
+      Store.mutate(function (s) { s.insumos = s.insumos.filter(function (i) { return i.id !== ins.id; }); s.ofertas = s.ofertas.filter(function (o) { return o.insumoId !== ins.id; }); });
+      App.go('insumos');
+    }, 'Eliminar', true);
+  }
+
+  App.views.insumos = function (arg) {
+    const s = Store.get(), ctx = App.ctx();
+    const F = App.ui.filtros.ins = App.ui.filtros.ins || { q: '', cat: '', mode: '' };
+    const sel = arg && s.insumos.find(function (i) { return i.id === arg; }) ? arg : null;
+    const lugares = Array.from(new Set(s.ofertas.map(function (o) { return o.lugar; }).filter(Boolean)));
+    const fams = Array.from(new Set(s.insumos.map(function (i) { return i.familia; }).filter(Boolean)));
+    const cats = Array.from(new Set(CATS.concat(s.insumos.map(function (i) { return i.categoria; }))));
+    return h('div', { class: 'split' },
+      listado(sel, F, ctx),
+      h('div', { class: 'pane-detail' },
+        sel ? detalle(s.insumos.find(function (i) { return i.id === sel; }), ctx)
+          : App.card('Insumos y compras', h('div', null,
+            h('p', null, 'Elige un insumo de la lista para ver y editar dónde lo compras, a qué precio, en qué formato, y cómo impacta en tus platos.'),
+            h('ul', { class: 'help' }, h('li', null, 'Cada insumo puede tener varias ',  h('b', null, 'ofertas'), ' (lugar + marca + formato). Los costos usan la oferta marcada como "Usar".'),
+              h('li', null, 'Al cambiar un precio, todos los platos, márgenes y la lista de compras se recalculan al instante.'),
+              h('li', null, 'Con un escenario activo (selector arriba), los cambios de precio son simulaciones y no tocan tus datos reales.')))),
+        h('datalist', { id: 'dl-lugares' }, lugares.map(function (l) { return h('option', { value: l }); })),
+        h('datalist', { id: 'dl-fams' }, fams.map(function (l) { return h('option', { value: l }); })),
+        h('datalist', { id: 'dl-cats' }, cats.map(function (l) { return h('option', { value: l }); }))));
+  };
+})();
+
+/* src/ui/recetas.js */
+/* Recetas: crear, editar, duplicar. Área separada de insumos y precios de venta. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const TIPOS = [['plato', 'Plato'], ['base', 'Base / sub-receta'], ['acompanamiento', 'Acompañamiento'], ['entrada', 'Entrada'], ['ensalada', 'Ensalada'], ['postre', 'Postre']];
+  const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
+  const FILTROS = [['plato', 'Platos'], ['base', 'Bases'], ['acompanamiento', 'Guarniciones'], ['opc', 'Opcionales'], ['', 'Todas']];
+
+  App.nuevaReceta = function (nombre, tipo) {
+    const id = Store.uid('R');
+    const s = Store.get();
+    const r = { id: id, tipo: tipo, linea: tipo === 'plato' ? 'Tradicional' : (TIPOS.find(function (t) { return t[0] === tipo; }) || ['', ''])[1], nombre: nombre, descripcion: '', porciones: tipo === 'base' ? 10 : 1,
+      lineas: [], pvp: 0, activo: true, pasos: '', montaje: '' };
+    if (tipo === 'plato') {
+      r.envaseId = s.insumos.some(function (i) { return i.id === 'INS-50'; }) ? 'INS-50' : null;
+      if (s.recetas.some(function (x) { return x.id === 'B-aliño'; })) r.lineas.push({ tipo: 'receta', ref: 'B-aliño', cantidad: 1, nota: 'ajo y condimentos' });
+      r.guarnicionesPermitidas = [];
+    }
+    if (tipo === 'acompanamiento') r.envaseManual = 80;
+    if (tipo === 'entrada' || tipo === 'ensalada' || tipo === 'postre') r.envaseManual = 90;
+    Store.mutate(function (st) { st.recetas.push(r); });
+    return id;
+  };
+
+  // ¿la receta `desde` usa (directa o indirectamente) a `objetivo` como sub-receta?
+  function usaReceta(s, desde, objetivo, vistos) {
+    vistos = vistos || {};
+    if (desde === objetivo) return true;
+    if (vistos[desde]) return false; vistos[desde] = true;
+    const r = s.recetas.find(function (x) { return x.id === desde; });
+    return !!r && r.lineas.some(function (l) { return l.tipo === 'receta' && l.ref && usaReceta(s, l.ref, objetivo, vistos); });
+  }
+
+  function costoFila(r, calc, ctx) {
+    if (E.esVendible(r) && calc.get(r.id)) return calc.get(r.id).costoTotal;
+    return E.costoReceta(ctx, r.id).porPorcion;
+  }
+
+  function listado(sel) {
+    const s = Store.get(), calc = App.calc(), ctx = App.ctx();
+    const F = App.ui.filtros.rec = App.ui.filtros.rec || { q: '', tipo: 'plato' };
+    const q = (F.q || '').toLowerCase();
+    const filas = s.recetas.filter(function (r) {
+      if (F.tipo === 'opc' ? !/entrada|ensalada|postre/.test(r.tipo) : (F.tipo && r.tipo !== F.tipo)) return false;
+      return !q || (r.nombre + ' ' + (r.linea || '')).toLowerCase().indexOf(q) >= 0;
+    });
+    return h('div', { class: 'pane-list' },
+      h('div', { class: 'filters' }, App.textInput({ fk: 'rec-q', value: F.q, ph: 'Buscar receta…', cls: 'search', onChange: function (v) { F.q = v; App.render(); } })),
+      h('div', { class: 'chips' }, FILTROS.map(function (f) { return App.chip(f[1], F.tipo === f[0], function () { F.tipo = f[0]; App.render(); }); }),
+        App.btn('+ Nueva', nueva, 'small primary')),
+      h('div', { class: 'scroll', 'data-sk': 'rec-list' }, h('table', { class: 'tbl sel' },
+        h('tbody', null, filas.map(function (r) {
+          const ch = E.chequeos(ctx, r.id).filter(function (c) { return c.nivel !== 'info'; });
+          return h('tr', { class: r.id === sel ? 'on' : '', onclick: function () { App.go('recetas', r.id); } },
+            h('td', null, h('div', { class: 'nm' }, r.nombre, r.activo === false ? h('small', null, ' (inactiva)') : null), h('small', null, r.linea || r.tipo, ch.length ? ' ' : null, ch.length ? App.badge('⚠ ' + ch.length, ch.some(function (c) { return c.nivel === 'error'; }) ? 'bad' : 'warn') : null)),
+            h('td', { class: 'r' }, App.clp(costoFila(r, calc, ctx))));
+        })))));
+  }
+
+  function nueva() {
+    const sel = App.select({ fk: 'nr-tipo', value: 'plato', options: TIPOS, onChange: function (v) { sel.dataset.v = v; } });
+    sel.dataset.v = 'plato';
+    const inp = h('input', { type: 'text', class: 'wide', placeholder: 'Nombre de la receta' });
+    App.modal('Nueva receta', h('div', { class: 'stack' }, h('label', null, 'Nombre', inp), h('label', null, 'Tipo', sel)), function (close) {
+      return [App.btn('Cancelar', close), App.btn('Crear', function () {
+        const n = inp.value.trim(); if (!n) return; close();
+        App.go('recetas', App.nuevaReceta(n, sel.dataset.v || sel.value));
+      }, 'primary')];
+    });
+    setTimeout(function () { inp.focus(); }, 30);
+  }
+
+  function duplicar(r) {
+    const id = Store.uid('R');
+    Store.mutate(function (s) {
+      const c = JSON.parse(JSON.stringify(r)); c.id = id; c.nombre = r.nombre + ' (copia)'; c.sheetId = undefined;
+      s.recetas.push(c);
+    });
+    App.go('recetas', id); App.toast('Receta duplicada');
+  }
+
+  function usosComoSub(r) {
+    return Store.get().recetas.filter(function (x) {
+      return x.id !== r.id && (x.lineas.some(function (l) { return l.tipo === 'receta' && l.ref === r.id; }) || x.guarnicionDefault === r.id || (x.guarnicionesPermitidas || []).indexOf(r.id) >= 0);
+    });
+  }
+
+  function eliminar(r) {
+    const usos = usosComoSub(r);
+    if (usos.length) {
+      App.modal('No se puede eliminar', h('div', null, h('p', null, 'Esta receta se usa en:'), h('ul', null, usos.slice(0, 15).map(function (x) { return h('li', null, h('a', { href: '#/recetas/' + encodeURIComponent(x.id) }, x.nombre)); }))),
+        function (close) { return [App.btn('Cerrar', close, 'primary')]; });
+      return;
+    }
+    App.confirm('¿Eliminar la receta "' + r.nombre + '"?', function () {
+      Store.mutate(function (s) { s.recetas = s.recetas.filter(function (x) { return x.id !== r.id; }); s.plan && Object.keys(s.plan).forEach(function (d) { s.plan[d] = s.plan[d].filter(function (i) { return i.recetaId !== r.id; }); }); });
+      App.go('recetas');
+    }, 'Eliminar', true);
+  }
+
+  function crearInsumoRapido(nombre, onCreated) {
+    App.confirm('"' + nombre + '" no existe en Insumos. ¿Crearlo ahora (podrás ponerle precio en Insumos y compras)?', function () {
+      const id = Store.uid('INS-');
+      Store.mutate(function (s) {
+        s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: 'vegano' });
+        s.ofertas.push({ id: Store.uid('OF-'), insumoId: id, lugar: '', marca: '', formatoLabel: 'kg', formatoQty: 1000, precio: 0, rendimiento: null, fecha: App.hoy(), fuente: 'estimado', disponible: true, preferida: true, nota: '' });
+      });
+      onCreated(id);
+    }, 'Crear insumo');
+  }
+
+  const SEGS = 8;
+  function composicion(rc) {
+    const filas = rc.lineas.filter(function (l) { return l.subtotal > 0; }).slice().sort(function (a, b) { return b.subtotal - a.subtotal; });
+    if (!filas.length || rc.lote <= 0) return null;
+    const top = filas.slice(0, SEGS - 1), resto = filas.slice(SEGS - 1);
+    const segs = top.map(function (l) { return { n: l.nombre, v: l.subtotal }; });
+    if (resto.length) segs.push({ n: 'Otros (' + resto.length + ')', v: resto.reduce(function (s, l) { return s + l.subtotal; }, 0) });
+    return h('div', { class: 'comp' },
+      h('div', { class: 'stackbar' }, segs.map(function (g, i) { return h('span', { class: 'seg seg' + i, style: { width: (g.v / rc.lote * 100) + '%' }, title: g.n + ' ' + App.clp(g.v) }); })),
+      h('div', { class: 'legend' }, segs.map(function (g, i) { return h('span', null, h('i', { class: 'dot seg' + i }), g.n + ' ' + Math.round(g.v / rc.lote * 100) + '%'); })));
+  }
+
+  function editor(r) {
+    const s = Store.get(), ctx = App.ctx(), calc = App.calc();
+    const rc = E.costoReceta(ctx, r.id);
+    const vendible = E.esVendible(r);
+    const pc = vendible ? calc.get(r.id) : null;
+    const upd = function (fn, key) { Store.mutate(function (st) { fn(st.recetas.find(function (x) { return x.id === r.id; })); }, key); };
+    const insNames = s.insumos.map(function (i) { return i.nombre; });
+    const subs = s.recetas.filter(function (x) { return x.id !== r.id && x.tipo !== 'plato'; });
+
+    const cab = h('div', { class: 'card' },
+      h('div', { class: 'card-h' }, h('h3', null, r.nombre),
+        h('div', { class: 'row gap' }, vendible ? App.btn('Ver en Platos y PVP', function () { App.go('platos', r.id); }, 'small') : null,
+          App.btn('Duplicar', function () { duplicar(r); }, 'small'), App.btn('Eliminar', function () { eliminar(r); }, 'small danger'))),
+      h('div', { class: 'form-grid' },
+        h('label', null, 'Nombre', App.textInput({ fk: 'r-nombre', value: r.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'rn'); } })),
+        h('label', null, 'Tipo', App.select({ fk: 'r-tipo', value: r.tipo, options: TIPOS, onChange: function (v) { upd(function (x) { x.tipo = v; }); } })),
+        h('label', null, 'Línea de menú', r.tipo === 'plato' ? App.select({ fk: 'r-linea', value: r.linea, options: LINEAS.map(function (l) { return [l, l]; }), onChange: function (v) { upd(function (x) { x.linea = v; }); } })
+          : App.textInput({ fk: 'r-linea2', value: r.linea || '', onChange: function (v) { upd(function (x) { x.linea = v; }, 'rl'); } })),
+        h('label', null, r.tipo === 'base' ? 'Porciones del lote' : 'Porciones que rinde', App.numInput({ fk: 'r-porc', value: r.porciones, onChange: function (n) { if (n > 0) upd(function (x) { x.porciones = n; }, 'rp'); } })),
+        h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: r.activo !== false, onchange: function (ev) { upd(function (x) { x.activo = ev.target.checked; }); } }), ' Activa en la carta')),
+      h('label', { class: 'block' }, 'Descripción', h('textarea', { rows: 2, 'data-fk': 'r-desc', oninput: function (ev) { upd(function (x) { x.descripcion = ev.target.value; }, 'rd'); } }, r.descripcion || '')));
+
+    const checks = E.chequeos(ctx, r.id);
+    const alerta = checks.length ? h('div', { class: 'checks' }, checks.map(function (c) { return h('div', { class: 'chk-' + c.nivel }, (c.nivel === 'error' ? '⛔ ' : c.nivel === 'warn' ? '⚠️ ' : 'ℹ️ ') + c.msg); })) : null;
+
+    // ---- líneas ----
+    const moverLinea = function (i, d) { upd(function (x) { const j = i + d; if (j < 0 || j >= x.lineas.length) return; const t = x.lineas[i]; x.lineas[i] = x.lineas[j]; x.lineas[j] = t; }); };
+    const filaLinea = function (l, i) {
+      const fila = rc.lineas[i] || {};
+      const esIns = l.tipo === 'insumo';
+      const ent = esIns ? s.insumos.find(function (x) { return x.id === l.ref; }) : s.recetas.find(function (x) { return x.id === l.ref; });
+      const nombreActual = ent ? ent.nombre : '';
+      const unidad = esIns ? (ent ? ent.unidad : '') : 'porc';
+      const cantInput = App.numInput({ fk: 'l-q-' + r.id + '-' + i, cls: 'w70', value: l.cantidad, onChange: function (n) { upd(function (x) { x.lineas[i].cantidad = n; x.lineas[i].borrador = false; }, 'lq' + i); } });
+      return h('tr', { class: fila.missing ? 'warnrow' : '' },
+        h('td', { class: 'mut' }, i + 1),
+        h('td', null, App.select({ fk: 'l-t-' + r.id + '-' + i, cls: 'w90', value: l.tipo, options: [['insumo', 'Insumo'], ['receta', 'Sub-receta']], onChange: function (v) { upd(function (x) { x.lineas[i].tipo = v; x.lineas[i].ref = null; x.lineas[i].alternativas = []; }); } })),
+        h('td', null, App.textInput({ fk: 'l-n-' + r.id + '-' + i, cls: 'ing', value: nombreActual, list: esIns ? 'dl-ins' : 'dl-subs', ph: esIns ? 'Escribe para buscar un insumo…' : 'Elige una receta base…',
+          onCommit: function (v) {
+            v = v.trim(); if (!v) return;
+            const lista = esIns ? s.insumos : subs;
+            const hit = lista.find(function (x) { return x.nombre.toLowerCase() === v.toLowerCase(); }) || lista.find(function (x) { return x.nombre.toLowerCase().indexOf(v.toLowerCase()) >= 0; });
+            if (hit && !esIns && usaReceta(s, hit.id, r.id)) { App.toast('No se puede: crearía una referencia circular'); App.render(); }
+            else if (hit) upd(function (x) { x.lineas[i].ref = hit.id; x.lineas[i].borrador = false; });
+            else if (esIns) crearInsumoRapido(v, function (id) { upd(function (x) { x.lineas[i].ref = id; }); });
+            else { App.toast('No hay una receta base con ese nombre'); App.render(); }
+          } }),
+          l.borrador ? h('small', { class: 'warn-t' }, ' borrador') : null, fila.sustituido ? h('small', { class: 'sim-t' }, ' 🧪 sustituido en escenario') : null),
+        h('td', { class: 'r' }, cantInput, h('small', null, ' ' + unidad)),
+        h('td', null, App.textInput({ fk: 'l-nt-' + r.id + '-' + i, value: l.nota || '', ph: 'corte / uso', onChange: function (v) { upd(function (x) { x.lineas[i].nota = v; }, 'ln' + i); } })),
+        h('td', { class: 'r' }, fila.missing ? App.badge('sin precio', 'bad') : App.clp(fila.porPorcion != null ? fila.porPorcion : fila.subtotal)),
+        h('td', { class: 'r' }, rc.lote > 0 ? Math.round((fila.subtotal || 0) / rc.lote * 100) + '%' : '—'),
+        h('td', null, h('div', { class: 'chips' }, (l.alternativas || []).map(function (a) {
+          const ai = s.insumos.find(function (x) { return x.id === a; });
+          return h('button', { class: 'chip on small', title: 'Quitar alternativa', onclick: function () { upd(function (x) { x.lineas[i].alternativas = x.lineas[i].alternativas.filter(function (y) { return y !== a; }); }); } }, (ai ? ai.nombre : a) + ' ✕');
+        }), esIns ? App.textInput({ fk: 'l-alt-' + r.id + '-' + i, cls: 'alt', value: '', ph: '+ alternativa', list: 'dl-ins',
+          onCommit: function (v) { const hit = s.insumos.find(function (x) { return x.nombre.toLowerCase() === v.trim().toLowerCase(); }); if (hit && hit.id !== l.ref) upd(function (x) { x.lineas[i].alternativas = (x.lineas[i].alternativas || []).concat(hit.id); }); else if (v.trim()) App.toast('No existe ese insumo'); } }) : null)),
+        h('td', { class: 'nowrap' }, App.btn('↑', function () { moverLinea(i, -1); }, 'small ghost'), App.btn('↓', function () { moverLinea(i, 1); }, 'small ghost'),
+          App.btn('✕', function () { upd(function (x) { x.lineas.splice(i, 1); }); }, 'small ghost')));
+    };
+
+    const tablaLineas = App.card('Ingredientes ' + (r.porciones > 1 ? '(lote de ' + r.porciones + ' porciones)' : '(por porción)'),
+      h('div', null,
+        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact lineas' },
+          h('thead', null, h('tr', null, ['#', 'Tipo', 'Ingrediente', 'Cantidad', 'Nota de corte / uso', 'Costo/porc.', '%', 'Alternativas (pollo ↔ carne…)', ''].map(function (t, i) { return h('th', { class: i === 3 || i === 5 || i === 6 ? 'r' : '' }, t); }))),
+          h('tbody', null, r.lineas.length ? r.lineas.map(filaLinea) : h('tr', null, h('td', { colspan: 9 }, App.empty('Sin ingredientes. Agrega el primero.')))))),
+        h('div', { class: 'row gap mt' },
+          App.btn('+ Insumo', function () { upd(function (x) { x.lineas.push({ tipo: 'insumo', ref: null, cantidad: 0, nota: '' }); }); }, 'small primary'),
+          App.btn('+ Sub-receta', function () { upd(function (x) { x.lineas.push({ tipo: 'receta', ref: null, cantidad: 1, nota: '' }); }); }, 'small'),
+          h('span', { class: 'spacer' }),
+          h('span', { class: 'mut' }, 'Escalar cantidades ×'), App.numInput({ fk: 'r-esc', cls: 'w60', value: App.ui.escalar || 1, onChange: function (n) { App.ui.escalar = n; } }),
+          App.btn('Aplicar', function () {
+            const f = App.ui.escalar || 1; if (f <= 0 || f === 1) return;
+            upd(function (x) { x.lineas.forEach(function (l) { l.cantidad = Math.round(l.cantidad * f * 100) / 100; }); });
+            App.ui.escalar = 1;
+          }, 'small')),
+        h('datalist', { id: 'dl-ins' }, insNames.map(function (n) { return h('option', { value: n }); })),
+        h('datalist', { id: 'dl-subs' }, subs.map(function (x) { return h('option', { value: x.nombre }); }))));
+
+    // ---- costos ----
+    const guarns = s.recetas.filter(function (x) { return x.tipo === 'acompanamiento' && x.id !== r.id; });
+    const envases = s.insumos.filter(function (i) { return i.categoria === 'Envases'; });
+    let costos;
+    if (vendible && pc) {
+      const opciones = E.opcionesGuarnicion(ctx, r.id);
+      costos = App.card('Costo y precio',
+        h('div', { class: 'stack' },
+          h('div', { class: 'cost-grid' },
+            h('div', null, h('small', null, 'Ingredientes'), h('b', null, App.clp(pc.insumos))),
+            pc.guarnicionId ? h('div', null, h('small', null, 'Guarnición'), h('b', null, App.clp(pc.guarnicion))) : null,
+            h('div', null, h('small', null, 'Imprevistos'), h('b', null, App.clp(pc.imprevistos))),
+            h('div', null, h('small', null, 'Envase'), h('b', null, App.clp(pc.envase))),
+            h('div', null, h('small', null, 'Gas / mano de obra'), h('b', null, App.clp(pc.overhead))),
+            h('div', { class: 'tot' }, h('small', null, 'Costo total'), h('b', null, App.clp(pc.costoTotal))),
+            h('div', null, h('small', null, 'Margen'), h('b', { class: pc.margen < 0 ? 'bad-t' : 'good-t' }, App.clp(pc.margen) + ' (' + App.pct(pc.margenPct) + ')')),
+            h('div', null, h('small', null, 'Food cost'), h('b', { class: pc.foodCostPct > ctx.p.foodCostAlerta ? 'bad-t' : '' }, App.pct(pc.foodCostPct)))),
+          composicion(rc),
+          h('div', { class: 'form-grid' },
+            h('label', null, 'PVP (CLP)', App.numInput({ fk: 'r-pvp', value: r.pvp, onChange: function (n) { upd(function (x) { x.pvp = n; }, 'pvp'); } }),
+              h('small', null, 'Sugerido: ', h('a', { href: '#', onclick: function (ev) { ev.preventDefault(); upd(function (x) { x.pvp = pc.pvpSugerido; }); } }, App.clp(pc.pvpSugerido)), ' · mínimo ', App.clp(pc.pvpMinimo))),
+            h('label', null, 'Envase', App.select({ fk: 'r-env', value: r.envaseId || '', options: [['', '(sin envase)']].concat(envases.map(function (i) { return [i.id, i.nombre]; })),
+              onChange: function (v) { upd(function (x) { x.envaseId = v || null; }); } })),
+            h('label', null, 'Envases por porción', App.numInput({ fk: 'r-envq', value: r.envaseCant || 1, onChange: function (n) { upd(function (x) { x.envaseCant = n; }, 'eq'); } })),
+            r.tipo === 'plato' ? h('label', null, 'Guarnición por defecto', App.select({ fk: 'r-gdef', value: r.guarnicionDefault || '', options: [['', '(ninguna / incluida en la receta)']].concat(guarns.map(function (g) { return [g.id, g.nombre]; })),
+              onChange: function (v) { upd(function (x) { x.guarnicionDefault = v || null; if (v) { x.guarnicionesPermitidas = Array.from(new Set((x.guarnicionesPermitidas || []).concat(v))); } }); } })) : null,
+            (!r.lineas.length || r.costoManual != null) ? h('label', null, 'Costo manual de ingredientes (si no hay receta)', App.numInput({ fk: 'r-cm', value: r.costoManual, onChange: function (n) { upd(function (x) { x.costoManual = n; }, 'cm'); } })) : null,
+            (r.envaseManual != null && !r.envaseId) ? h('label', null, 'Costo de envase manual', App.numInput({ fk: 'r-em', value: r.envaseManual, onChange: function (n) { upd(function (x) { x.envaseManual = n; }, 'em'); } })) : null),
+          r.tipo === 'plato' ? h('div', null, h('small', { class: 'mut' }, 'Guarniciones que el cliente puede elegir: '),
+            h('div', { class: 'chips' }, guarns.map(function (g) {
+              const on = (r.guarnicionesPermitidas || []).indexOf(g.id) >= 0;
+              return App.chip(g.nombre, on, function () { upd(function (x) { const a = x.guarnicionesPermitidas || []; x.guarnicionesPermitidas = on ? a.filter(function (y) { return y !== g.id; }) : a.concat(g.id); }); });
+            }))) : null,
+          opciones.length ? h('table', { class: 'tbl compact' },
+            h('thead', null, h('tr', null, h('th', null, 'Con guarnición'), h('th', { class: 'r' }, 'Costo guarn.'), h('th', { class: 'r' }, 'Costo total'), h('th', { class: 'r' }, 'Margen'))),
+            h('tbody', null, opciones.map(function (o) { return h('tr', null, h('td', null, o.nombre, o.esDefecto ? ' ' : null, o.esDefecto ? App.badge('por defecto', 'info') : null), h('td', { class: 'r' }, App.clp(o.costoGuarnicion)), h('td', { class: 'r' }, App.clp(o.costoTotal)), h('td', { class: 'r' }, App.clp(o.margen) + ' · ' + App.pct(o.margenPct))); }))) : null,
+          pc.rango && Math.abs(pc.rango.max - pc.rango.min) > 1 ? h('div', { class: 'help' }, 'Con las alternativas de ingredientes declaradas, el costo total varía entre ' + App.clp(pc.rango.min) + ' y ' + App.clp(pc.rango.max) + ' por porción.') : null));
+    } else {
+      costos = App.card('Costo', h('div', { class: 'cost-grid' },
+        h('div', null, h('small', null, 'Costo del lote'), h('b', null, App.clp(rc.lote))),
+        h('div', { class: 'tot' }, h('small', null, 'Costo por porción'), h('b', null, App.clp(rc.porPorcion)))), '', null);
+      if (rc.lineas.length) costos.appendChild(composicion(rc) || h('span'));
+    }
+
+    const cocina = App.card('Para la cocina (sin costos)', h('div', { class: 'stack' },
+      h('label', { class: 'block' }, 'Pasos de preparación', h('textarea', { rows: 5, 'data-fk': 'r-pasos', placeholder: 'Describe el procedimiento…', oninput: function (ev) { upd(function (x) { x.pasos = ev.target.value; x.pasosBorrador = false; }, 'rps'); } }, r.pasos || '')),
+      h('label', { class: 'block' }, 'Sugerencia de montaje / empaque', h('textarea', { rows: 2, 'data-fk': 'r-mont', oninput: function (ev) { upd(function (x) { x.montaje = ev.target.value; }, 'rmo'); } }, r.montaje || '')),
+      r.pasosBorrador ? h('small', { class: 'warn-t' }, 'Los pasos son un borrador generado: revísalos antes de entregarlos al personal.') : null));
+
+    return h('div', { class: 'stack' }, cab, alerta, r.revisar ? h('div', { class: 'checks' }, h('div', { class: 'chk-warn' }, '📝 Revisión de migración: ' + r.revisar)) : null, tablaLineas, costos, cocina);
+  }
+
+  App.views.recetas = function (arg) {
+    const s = Store.get();
+    const sel = arg && s.recetas.find(function (r) { return r.id === arg; }) ? arg : null;
+    // si abrimos una receta que el filtro oculta, ajustar el filtro
+    const F = App.ui.filtros.rec = App.ui.filtros.rec || { q: '', tipo: 'plato' };
+    if (sel) { const r = s.recetas.find(function (x) { return x.id === sel; }); const okF = F.tipo === '' || (F.tipo === 'opc' ? /entrada|ensalada|postre/.test(r.tipo) : F.tipo === r.tipo); if (!okF) F.tipo = ''; }
+    return h('div', { class: 'split' }, listado(sel),
+      h('div', { class: 'pane-detail' }, sel ? editor(s.recetas.find(function (r) { return r.id === sel; }))
+        : App.card('Recetas', h('div', null, h('p', null, 'Elige una receta para editar sus ingredientes, o crea una nueva con “+ Nueva”.'),
+          h('ul', { class: 'help' }, h('li', null, 'Las cantidades son peso utilizable crudo/seco por porción (lentejas secas, arroz crudo…).'),
+            h('li', null, 'Una ', h('b', null, 'sub-receta'), ' (sofrito, bechamel, pesto…) se costea una vez y se reutiliza en varios platos.'),
+            h('li', null, 'En cada ingrediente puedes declarar ', h('b', null, 'alternativas'), ' (ej. pollo ↔ carne) y ver el rango de costo.'))))));
+  };
+})();
+
+/* src/ui/platos.js */
+/* Platos y PVP: costo real desglosado, precio editable con margen en vivo, sugerido y simulador. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
+  const TIPOS = [['plato', 'Platos'], ['opc', 'Opcionales'], ['acompanamiento', 'Guarniciones'], ['todo', 'Todo']];
+
+  function filtrar(F) {
+    const s = Store.get(), calc = App.calc(), q = (F.q || '').toLowerCase();
+    let filas = s.recetas.filter(function (r) {
+      if (!E.esVendible(r) || !calc.get(r.id)) return false;
+      if (F.tipo === 'plato' && r.tipo !== 'plato') return false;
+      if (F.tipo === 'opc' && !/entrada|ensalada|postre/.test(r.tipo)) return false;
+      if (F.tipo === 'acompanamiento' && r.tipo !== 'acompanamiento') return false;
+      if (F.tipo === 'plato' && F.linea && r.linea !== F.linea) return false;
+      if (F.soloActivos && r.activo === false) return false;
+      return !q || r.nombre.toLowerCase().indexOf(q) >= 0;
+    });
+    const key = { nombre: function (r) { return r.nombre; }, costo: function (r) { return calc.get(r.id).costoTotal; }, pvp: function (r) { return calc.get(r.id).pvp; },
+      margen: function (r) { return calc.get(r.id).margen; }, margenPct: function (r) { return calc.get(r.id).margenPct == null ? -1e9 : calc.get(r.id).margenPct; },
+      fc: function (r) { return calc.get(r.id).foodCostPct == null ? -1 : calc.get(r.id).foodCostPct; } }[F.orden || 'nombre'];
+    const dir = F.dir === 'desc' ? -1 : 1;
+    filas = filas.slice().sort(function (a, b) { const x = key(a), y = key(b); return (typeof x === 'string' ? x.localeCompare(y) : x - y) * dir; });
+    return filas;
+  }
+
+  function th(F, label, k, cls) {
+    return h('th', { class: (cls || '') + ' sortable' + (F.orden === k ? ' on' : ''), onclick: function () {
+      if (F.orden === k) F.dir = F.dir === 'desc' ? 'asc' : 'desc'; else { F.orden = k; F.dir = (k === 'nombre') ? 'asc' : 'desc'; }
+      App.render();
+    } }, label + (F.orden === k ? (F.dir === 'desc' ? ' ▼' : ' ▲') : ''));
+  }
+
+  function resumen(filas, calc, p) {
+    const pl = filas.filter(function (r) { return r.activo !== false && calc.get(r.id).pvp > 0; });
+    const n = pl.length || 1;
+    const mp = pl.reduce(function (s, r) { return s + (calc.get(r.id).margenPct || 0); }, 0) / n;
+    const fc = pl.reduce(function (s, r) { return s + (calc.get(r.id).foodCostPct || 0); }, 0) / n;
+    const alerta = pl.filter(function (r) { return calc.get(r.id).foodCostPct > p.foodCostAlerta; }).length;
+    const perd = pl.filter(function (r) { return calc.get(r.id).margen < 0; }).length;
+    return h('div', { class: 'kpis' },
+      App.kpi('Margen promedio', App.pct(mp), pl.length + ' en la vista', mp < 40 ? 'warn' : ''),
+      App.kpi('Food cost promedio', App.pct(fc), 'objetivo ' + p.foodCostObjetivo + '%', fc > p.foodCostAlerta ? 'bad' : ''),
+      App.kpi('Sobre alerta de food cost', alerta, '> ' + p.foodCostAlerta + '%', alerta ? 'warn' : 'good'),
+      App.kpi('Con pérdida', perd, 'margen < $0', perd ? 'bad' : 'good'));
+  }
+
+  function tabla(filas, F, ctx) {
+    const calc = App.calc(), base = App.calcBase(), p = ctx.p, esc = App.escenario(), s = Store.get();
+    return h('div', { class: 'scroll-x', 'data-sk': 'platos-tbl' }, h('table', { class: 'tbl sel platos' },
+      h('thead', null, h('tr', null, th(F, 'Plato', 'nombre'), h('th', { class: 'r', title: 'Ingredientes + guarnición + imprevistos' }, 'Ingred.'), h('th', { class: 'r' }, 'Envase'),
+        h('th', { class: 'r', title: 'Gas, mano de obra y comisión' }, 'Gas/MO'), th(F, 'Costo total', 'costo', 'r'), th(F, 'PVP', 'pvp', 'r'), th(F, 'Margen $', 'margen', 'r'),
+        th(F, 'Margen %', 'margenPct', 'r'), th(F, 'Food cost', 'fc', 'r'), h('th', { class: 'r', title: 'PVP que cumple el food cost objetivo' }, 'Sugerido'))),
+      h('tbody', null, filas.length ? filas.map(function (r) {
+        const c = calc.get(r.id), b = base.get(r.id);
+        const kind = c.margen < 0 ? 'bad' : (c.foodCostPct > p.foodCostAlerta ? 'warn' : 'good');
+        const alerta = c.foodCostPct > p.foodCostAlerta;
+        const manual = (!r.lineas.length && r.costoManual != null);
+        return h('tr', { class: (F.sel === r.id ? 'on ' : '') + (r.activo === false ? 'off' : '') },
+          h('td', { onclick: function () { F.sel = F.sel === r.id ? null : r.id; App.render(); }, class: 'link' },
+            h('div', { class: 'nm' }, r.nombre), h('small', null, r.linea, manual ? ' ' : null, manual ? App.badge('costo manual', 'info') : null,
+              c.faltantes.length ? ' ' : null, c.faltantes.length ? App.badge('sin precio', 'bad') : null)),
+          h('td', { class: 'r' }, App.clp(c.insumos + c.guarnicion + c.imprevistos)),
+          h('td', { class: 'r' }, App.clp(c.envase)),
+          h('td', { class: 'r' }, App.clp(c.overhead + c.comision)),
+          h('td', { class: 'r strong' }, App.clp(c.costoTotal), esc && b && Math.abs(c.costoTotal - b.costoTotal) > 0.5 ? h('div', { class: 'sim-t small' }, App.sg(c.costoTotal - b.costoTotal)) : null),
+          h('td', { class: 'r' }, App.numInput({ fk: 'pvp-' + r.id, cls: 'w80', value: r.pvp, onChange: function (n) {
+            Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = n; }, 'pvp' + r.id); } })),
+          h('td', { class: 'r ' + (c.margen < 0 ? 'bad-t' : '') }, App.clp(c.margen)),
+          h('td', { class: 'r' }, h('div', { class: 'cellbar' }, App.pct(c.margenPct), App.bar(c.margenPct, kind, 80))),
+          h('td', { class: 'r ' + (alerta ? 'bad-t' : '') }, App.pct(c.foodCostPct)),
+          h('td', { class: 'r' }, c.pvpSugerido ? h('a', { href: '#', title: 'Aplicar PVP sugerido', onclick: function (ev) { ev.preventDefault(); Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = c.pvpSugerido; }); } },
+            App.clp(c.pvpSugerido)) : '—'));
+      }) : h('tr', null, h('td', { colspan: 10 }, App.empty('Sin resultados'))))));
+  }
+
+  function waterfall(c) {
+    const pvp = c.pvp || 1;
+    const partes = [['ing', 'Ingredientes', c.insumos + c.guarnicion + c.imprevistos], ['env', 'Envase', c.envase], ['oh', 'Gas / MO', c.overhead], ['com', 'Comisión', c.comision]];
+    const ivaMonto = c.pvp - c.pvpNeto;
+    if (ivaMonto > 0.5) partes.push(['iva', 'IVA', ivaMonto]);
+    const margen = Math.max(0, c.margen);
+    partes.push(['mg', 'Margen', margen]);
+    const total = partes.reduce(function (s, x) { return s + x[2]; }, 0) || 1;
+    return h('div', { class: 'comp' },
+      h('div', { class: 'stackbar' }, partes.filter(function (x) { return x[2] > 0.5; }).map(function (x) { return h('span', { class: 'seg wf-' + x[0], style: { width: (x[2] / total * 100) + '%' }, title: x[1] + ' ' + App.clp(x[2]) }); })),
+      h('div', { class: 'legend' }, partes.filter(function (x) { return x[2] > 0.5; }).map(function (x) { return h('span', null, h('i', { class: 'dot wf-' + x[0] }), x[1] + ' ' + App.clp(x[2]) + ' (' + Math.round(x[2] / pvp * 100) + '%)'); })));
+  }
+
+  function drawer(r, F, ctx) {
+    const c = App.calc().get(r.id), rc = E.costoReceta(ctx, r.id), p = ctx.p;
+    const opcs = E.opcionesGuarnicion(ctx, r.id);
+    const alts = E.alternativasReceta(ctx, r.id);
+    const mejores = [];
+    alts.forEach(function (a) { a.opciones.forEach(function (o) { if (o.deltaPorPorcion < -0.5) mejores.push({ linea: a, op: o }); }); });
+    mejores.sort(function (x, y) { return x.op.deltaPorPorcion - y.op.deltaPorPorcion; });
+    const simPvp = F.simPvp != null ? F.simPvp : c.pvp;
+    const simNeto = p.ivaOn ? simPvp / (1 + p.ivaPct / 100) : simPvp;
+    const simMargen = simNeto - (c.costoDirecto + c.overhead + simPvp * p.comisionPct / 100);
+    const lineas = rc.lineas.slice().sort(function (a, b) { return b.subtotal - a.subtotal; });
+    return h('aside', { class: 'drawer' },
+      h('div', { class: 'card-h' }, h('h3', null, r.nombre), h('button', { class: 'x', onclick: function () { F.sel = null; F.simPvp = null; App.render(); }, 'aria-label': 'Cerrar' }, '×')),
+      h('div', { class: 'row gap' }, App.btn('Editar receta', function () { App.go('recetas', r.id); }, 'small primary'), App.btn('Ver alternativas', function () { App.ui.altPlato = r.id; App.go('alternativas', 'plato'); }, 'small')),
+      h('div', { class: 'cost-grid' },
+        h('div', { class: 'tot' }, h('small', null, 'Costo total'), h('b', null, App.clp(c.costoTotal))),
+        h('div', null, h('small', null, 'PVP'), h('b', null, App.clp(c.pvp))),
+        h('div', null, h('small', null, 'Margen'), h('b', { class: c.margen < 0 ? 'bad-t' : 'good-t' }, App.clp(c.margen) + ' · ' + App.pct(c.margenPct)))),
+      waterfall(c),
+      h('h4', null, 'Simulador de precio'),
+      h('div', { class: 'row gap' }, h('input', { type: 'range', min: Math.round(c.costoTotal * 0.8 / 100) * 100, max: Math.round(Math.max(c.pvp, c.pvpSugerido) * 1.6 / 100) * 100, step: 100, value: simPvp, 'data-fk': 'sim-pvp-' + r.id,
+        oninput: function (ev) { F.simPvp = parseFloat(ev.target.value); App.render(); } }),
+        h('b', null, App.clp(simPvp))),
+      h('div', { class: 'help' }, 'Con ese precio: margen ' + App.clp(simMargen) + ' (' + App.pct(simNeto > 0 ? simMargen / simNeto * 100 : null) + ')  ',
+        simPvp !== c.pvp ? App.btn('Usar este PVP', function () { Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = simPvp; }); F.simPvp = null; }, 'small') : null),
+      h('h4', null, 'Dónde se va el costo'),
+      h('table', { class: 'tbl compact' }, h('tbody', null, lineas.slice(0, 8).map(function (l) {
+        return h('tr', null, h('td', null, l.nombre, l.tipo === 'receta' ? h('small', null, ' (sub-receta)') : null), h('td', { class: 'r' }, App.cantidad(l.cantidad, l.unidad)),
+          h('td', { class: 'r' }, l.missing ? App.badge('sin precio', 'bad') : App.clp(l.subtotal / (rc.lote > 0 && r.porciones > 0 ? r.porciones : 1))),
+          h('td', { class: 'r mut' }, rc.lote > 0 ? Math.round(l.subtotal / rc.lote * 100) + '%' : ''));
+      }))),
+      opcs.length ? h('div', null, h('h4', null, 'Guarnición a elegir'), h('table', { class: 'tbl compact' }, h('tbody', null, opcs.map(function (o) {
+        return h('tr', null, h('td', null, o.nombre, o.esDefecto ? ' ✓' : ''), h('td', { class: 'r' }, App.clp(o.costoGuarnicion)), h('td', { class: 'r' }, App.pct(o.margenPct)));
+      })))) : null,
+      mejores.length ? h('div', null, h('h4', null, 'Ahorros posibles'), mejores.slice(0, 4).map(function (m) {
+        return h('div', { class: 'alt-row' }, h('div', null, h('b', null, m.linea.nombre), ' → ', m.op.tipo === 'oferta' ? ('comprar en ' + m.op.lugar + (m.op.marca ? ' (' + m.op.marca + ')' : '')) : ('usar ' + m.op.nombre)),
+          h('div', { class: 'good-t' }, App.sg(m.op.deltaPorPorcion) + ' /porc.'),
+          App.btn('Simular', function () {
+            if (m.op.tipo === 'oferta') App.simular({ ofertaElegida: (function () { const o = {}; o[m.op.insumoId] = m.op.ofertaId; return o; })() });
+            else { const sc = {}; sc[r.id] = {}; sc[r.id][m.linea.idx] = m.op.insumoId; App.simular({ sust: sc }); }
+          }, 'small'));
+      })) : null);
+  }
+
+  function trilogia(ctx) {
+    const s = Store.get(), calc = App.calc(), p = ctx.p;
+    const prom = function (t) {
+      const l = s.recetas.filter(function (r) { return r.tipo === t && r.activo !== false && calc.get(r.id); });
+      return { n: l.length, costo: l.length ? l.reduce(function (a, r) { return a + calc.get(r.id).costoTotal; }, 0) / l.length : 0, pvp: l.length ? l.reduce(function (a, r) { return a + calc.get(r.id).pvp; }, 0) / l.length : 0 };
+    };
+    const e = prom('entrada'), en = prom('ensalada'), po = prom('postre');
+    const costo = e.costo + en.costo + po.costo, suelto = e.pvp + en.pvp + po.pvp;
+    const neto = p.ivaOn ? p.trilogiaPrecio / (1 + p.ivaPct / 100) : p.trilogiaPrecio;
+    return App.card('Combo Trilogía (Entrada + Ensalada + Postre)', h('div', { class: 'kpis' },
+      App.kpi('Costo promedio del trío', App.clp(costo), e.n + ' entradas · ' + en.n + ' ensaladas · ' + po.n + ' postres'),
+      App.kpi('Suelto promedio', App.clp(suelto), 'si se vendieran por separado'),
+      h('div', { class: 'kpi' }, h('div', { class: 'kpi-l' }, 'Precio del combo'), h('div', { class: 'kpi-v' },
+        App.numInput({ fk: 'tri-p', cls: 'w80', value: p.trilogiaPrecio, onChange: function (n) { Store.mutate(function (st) { st.params.trilogiaPrecio = n; }, 'tri'); } })),
+        h('div', { class: 'kpi-s' }, 'adicional sobre la colación')),
+      App.kpi('Margen del combo', App.clp(neto - costo) + ' · ' + App.pct(neto > 0 ? (neto - costo) / neto * 100 : null), 'sin gas/MO por ítem', neto - costo < 0 ? 'bad' : 'good')));
+  }
+
+  App.views.platos = function (arg) {
+    const s = Store.get(), ctx = App.ctx(), calc = App.calc(), p = ctx.p;
+    const F = App.ui.filtros.platos = App.ui.filtros.platos || { q: '', tipo: 'plato', linea: '', orden: 'nombre', dir: 'asc', soloActivos: false, sel: null };
+    if (arg && s.recetas.some(function (r) { return r.id === arg; })) {
+      const r = s.recetas.find(function (x) { return x.id === arg; });
+      F.sel = arg; F.tipo = r.tipo === 'plato' ? 'plato' : (r.tipo === 'acompanamiento' ? 'acompanamiento' : 'opc'); F.linea = '';
+      history.replaceState(null, '', '#/platos');
+    }
+    const filas = filtrar(F);
+    const sel = F.sel && s.recetas.find(function (r) { return r.id === F.sel; });
+
+    const bajoAlerta = filas.filter(function (r) { const c = calc.get(r.id); return r.activo !== false && c.foodCostPct > p.foodCostAlerta && c.pvpSugerido > c.pvp; });
+    const barra = h('div', { class: 'filters row gap wrap' },
+      App.textInput({ fk: 'pl-q', value: F.q, ph: 'Buscar plato…', cls: 'search', onChange: function (v) { F.q = v; App.render(); } }),
+      h('div', { class: 'chips' }, TIPOS.map(function (t) { return App.chip(t[1], F.tipo === t[0], function () { F.tipo = t[0]; F.sel = null; App.render(); }); })),
+      F.tipo === 'plato' ? App.select({ fk: 'pl-linea', value: F.linea, options: [['', 'Todas las líneas']].concat(LINEAS.map(function (l) { return [l, l]; })), onChange: function (v) { F.linea = v; App.render(); } }) : null,
+      h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: F.soloActivos, onchange: function (ev) { F.soloActivos = ev.target.checked; App.render(); } }), ' Solo activos'),
+      h('span', { class: 'spacer' }),
+      bajoAlerta.length ? App.btn('Subir al sugerido los ' + bajoAlerta.length + ' sobre la alerta', function () {
+        App.confirm('Se subirá el PVP de ' + bajoAlerta.length + ' plato(s) con food cost sobre ' + p.foodCostAlerta + '% al precio sugerido (food cost objetivo ' + p.foodCostObjetivo + '%). Podrás deshacer.', function () {
+          Store.mutate(function (st) { bajoAlerta.forEach(function (r) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = calc.get(r.id).pvpSugerido; }); });
+        }, 'Aplicar');
+      }, 'small') : null,
+      App.btn('Exportar CSV', function () { exportarCSV(filas, calc); }, 'small'));
+
+    return h('div', { class: 'stack' }, resumen(filas, calc, p), F.tipo === 'opc' ? trilogia(ctx) : null, barra,
+      h('div', { class: 'split wide' }, h('div', { class: 'pane-wide' }, tabla(filas, F, ctx), h('p', { class: 'help' },
+        'Costo total = ingredientes (con ' + p.imprevistosPct + '% de imprevistos) + guarnición + envase + gas/MO ' + App.clp(p.gasPorPorcion + p.manoObraPorPorcion) + (p.ivaOn ? ' · margen sobre precio neto de IVA' : '') + '. Cambia estos parámetros en Ajustes. Haz clic en el nombre de un plato para ver el detalle.')),
+        sel ? drawer(sel, F, ctx) : null));
+  };
+
+  function exportarCSV(filas, calc) {
+    const q = function (v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; };
+    const rows = [['Plato', 'Línea', 'Costo ingredientes', 'Guarnición', 'Envase', 'Imprevistos', 'Gas/MO', 'Costo total', 'PVP', 'Margen $', 'Margen %', 'Food cost %', 'PVP sugerido'].map(q).join(',')];
+    filas.forEach(function (r) { const c = calc.get(r.id); rows.push([r.nombre, r.linea, Math.round(c.insumos), Math.round(c.guarnicion), Math.round(c.envase), Math.round(c.imprevistos), Math.round(c.overhead), Math.round(c.costoTotal), c.pvp, Math.round(c.margen), c.margenPct == null ? '' : c.margenPct.toFixed(1), c.foodCostPct == null ? '' : c.foodCostPct.toFixed(1), c.pvpSugerido].map(q).join(',')); });
+    App.descargar('costeo-platos.csv', '﻿' + rows.join('\n'), 'text/csv');
+  }
+})();
+
+/* src/ui/alternativas.js */
+/* Alternativas de producto: mejores ofertas, sustitutos por plato, escenarios y peso de cada insumo en el costo. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const TABS = [['proveedores', 'Mejores ofertas'], ['plato', 'Por plato'], ['escenarios', 'Escenarios'], ['peso', 'Qué pesa más en el costo']];
+
+  function nombreOferta(o) { return o ? (o.lugar || 'sin lugar') + (o.marca ? ' · ' + o.marca : '') : '—'; }
+
+  function usarOferta(insumoId, ofertaId) {
+    Store.mutate(function (s) { s.ofertas.forEach(function (o) { if (o.insumoId === insumoId) o.preferida = (o.id === ofertaId); }); });
+    App.toast('Oferta preferida actualizada');
+  }
+
+  /* ---- Mejores ofertas ---- */
+  function proveedores(ctx) {
+    const a = E.ahorrosPosibles(ctx), s = Store.get();
+    const unaOferta = s.insumos.filter(function (i) { return App.ofertasDe(i.id).length < 2; }).length;
+    const total = a.filas.reduce(function (t, f) { return t + f.ahorroMes; }, 0);
+    return h('div', { class: 'stack' },
+      h('div', { class: 'kpis' }, App.kpi('Ahorro posible por mes', App.clp(total), a.filas.length + ' insumos con una oferta más barata', total > 0 ? 'good' : ''),
+        App.kpi('Insumos con una sola cotización', unaOferta + ' de ' + s.insumos.length, 'agrega más lugares para comparar', unaOferta > s.insumos.length / 2 ? 'warn' : ''),
+        App.kpi('Volumen supuesto', a.usoPlan ? 'Plan semanal' : ctx.p.porcionesSemana + ' porc./sem.', a.usoPlan ? 'de la pestaña Lista de compras' : 'repartidas parejo entre platos activos (Ajustes)')),
+      App.card('Dónde comprar más barato', a.filas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' },
+        h('thead', null, h('tr', null, ['Insumo', 'Hoy compras en', 'Más barata', 'Ahorro', 'Uso semanal', 'Ahorro / mes', ''].map(function (t, i) { return h('th', { class: i >= 3 && i < 6 ? 'r' : '' }, t); }))),
+        h('tbody', null, a.filas.map(function (f) {
+          const ins = App.insumo(f.insumoId);
+          return h('tr', null, h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(f.insumoId) }, f.nombre)),
+            h('td', null, nombreOferta(f.actual.oferta), h('div', { class: 'mut' }, App.costoVisible(f.actual.unit, ins.unidad))),
+            h('td', null, h('b', null, nombreOferta(f.mejor)), h('div', { class: 'good-t' }, App.costoVisible(f.mejorUnit, ins.unidad))),
+            h('td', { class: 'r good-t' }, '−' + App.num(f.ahorroPct, 0) + '%'),
+            h('td', { class: 'r' }, App.cantidad(f.usoSemanal, ins.unidad)),
+            h('td', { class: 'r strong' }, App.clp(f.ahorroMes)),
+            h('td', { class: 'nowrap' }, App.btn('Simular', function () { const c = { ofertaElegida: {} }; c.ofertaElegida[f.insumoId] = f.mejor.id; App.simular(c); }, 'small'),
+              App.btn('Usar', function () { usarOferta(f.insumoId, f.mejor.id); }, 'small primary')));
+        })))) : App.empty('Aún no hay una oferta más barata que la que usas. Agrega cotizaciones de otros lugares/marcas en “Insumos y compras” y aparecerán aquí con el ahorro estimado.')));
+  }
+
+  /* ---- Por plato ---- */
+  function porPlato(ctx) {
+    const s = Store.get(), calc = App.calc();
+    const platos = s.recetas.filter(function (r) { return r.tipo === 'plato' && r.activo !== false; });
+    let id = App.ui.altPlato && platos.some(function (r) { return r.id === App.ui.altPlato; }) ? App.ui.altPlato : (platos[0] && platos[0].id);
+    const r = s.recetas.find(function (x) { return x.id === id; });
+    if (!r) return App.empty('No hay platos.');
+    const c = calc.get(id), alts = E.alternativasReceta(ctx, id), p = ctx.p;
+    const sel = App.select({ fk: 'alt-plato', value: id, options: platos.map(function (x) { return [x.id, x.nombre]; }), onChange: function (v) { App.ui.altPlato = v; App.render(); } });
+    const factor = 1 + p.imprevistosPct / 100;
+    const totalSav = alts.reduce(function (t, a) { const m = a.opciones.filter(function (o) { return o.deltaPorPorcion < 0; })[0]; return t + (m ? m.deltaPorPorcion : 0); }, 0);
+
+    return h('div', { class: 'stack' },
+      h('div', { class: 'row gap wrap' }, h('label', null, 'Plato ', sel), h('span', { class: 'spacer' }),
+        h('span', null, 'Costo total ', h('b', null, App.clp(c.costoTotal)), ' · PVP ', h('b', null, App.clp(c.pvp)), ' · margen ', h('b', null, App.pct(c.margenPct))),
+        App.btn('Editar receta', function () { App.go('recetas', id); }, 'small')),
+      totalSav < -0.5 ? h('div', { class: 'checks' }, h('div', { class: 'chk-info' }, '💡 Aplicando la mejor opción en cada ingrediente podrías ahorrar hasta ' + App.clp(-totalSav * factor) + ' por porción.')) : null,
+      alts.map(function (a) {
+        const opciones = a.opciones.slice(0, 8);
+        return App.card(a.nombre + ' · ' + App.cantidad(a.cantidad, a.unidad), h('div', null,
+          h('div', { class: 'help' }, 'Hoy: ', h('b', null, nombreOferta(a.actual.oferta)), ' a ', App.costoVisible(a.actual.unit, a.unidad), ' → ', App.clp(a.costoLinea), ' por porción'),
+          opciones.length ? h('table', { class: 'tbl compact' },
+            h('thead', null, h('tr', null, ['Opción', 'Costo neto', 'Δ por porción', 'Margen resultante', ''].map(function (t, i) { return h('th', { class: i === 1 || i === 2 || i === 3 ? 'r' : '' }, t); }))),
+            h('tbody', null, opciones.map(function (o) {
+              const nuevoCosto = c.costoTotal + o.deltaPorPorcion * factor;
+              const nuevoMargen = c.pvpNeto > 0 ? (c.pvpNeto - nuevoCosto) / c.pvpNeto * 100 : null;
+              return h('tr', null, h('td', null, o.tipo === 'oferta' ? h('span', null, App.badge('misma materia prima', 'info'), ' ', nombreOferta({ lugar: o.lugar, marca: o.marca })) : h('span', null, App.badge('sustituto', 'warn'), ' ', o.nombre, o.lugar ? h('small', null, ' (' + o.lugar + ')') : null)),
+                h('td', { class: 'r' }, App.costoVisible(o.unit, a.unidad)),
+                h('td', { class: 'r ' + (o.deltaPorPorcion < 0 ? 'good-t' : 'bad-t') }, App.sg(o.deltaPorPorcion * factor)),
+                h('td', { class: 'r' }, App.pct(nuevoMargen)),
+                h('td', { class: 'nowrap' }, App.btn('Simular', function () {
+                  if (o.tipo === 'oferta') { const x = { ofertaElegida: {} }; x.ofertaElegida[o.insumoId] = o.ofertaId; App.simular(x); }
+                  else { const x = { sust: {} }; x.sust[id] = {}; x.sust[id][a.idx] = o.insumoId; App.simular(x); }
+                }, 'small'), App.btn('Aplicar', function () {
+                  if (o.tipo === 'oferta') { App.confirm('¿Usar la oferta de ' + nombreOferta({ lugar: o.lugar, marca: o.marca }) + ' como preferida para ' + a.nombre + ' en todos los platos?', function () { usarOferta(o.insumoId, o.ofertaId); }, 'Usar'); }
+                  else { App.confirm('¿Cambiar ' + a.nombre + ' por ' + o.nombre + ' en la receta de ' + r.nombre + '? (misma cantidad)', function () {
+                    Store.mutate(function (st) { const rr = st.recetas.find(function (x) { return x.id === id; }); rr.lineas[a.idx].ref = o.insumoId; rr.lineas[a.idx].nota = 'sustituye a ' + a.nombre; }); App.toast('Receta actualizada'); }, 'Cambiar'); }
+                }, 'small primary')));
+            }))) : h('div', { class: 'mut' }, 'Sin alternativas registradas. Agrega otra oferta del mismo insumo o asigna una familia a insumos equivalentes (en Insumos y compras).')));
+      }),
+      h('p', { class: 'help' }, 'Los sustitutos son insumos de la misma familia y compatibles con la línea del plato (un plato vegano no ofrece carnes). Se asume la misma cantidad; revisa el sabor y el rendimiento antes de aplicar.'));
+  }
+
+  /* ---- Escenarios ---- */
+  function describir(s, e) {
+    const out = [];
+    Object.keys(e.precios || {}).forEach(function (oid) {
+      const o = s.ofertas.find(function (x) { return x.id === oid; }); if (!o) return;
+      const ins = s.insumos.find(function (i) { return i.id === o.insumoId; });
+      out.push((ins ? ins.nombre : '?') + ' (' + (o.lugar || 'oferta') + '): ' + App.clp(o.precio) + ' → ' + App.clp(e.precios[oid]));
+    });
+    Object.keys(e.ofertaElegida || {}).forEach(function (iid) {
+      const ins = s.insumos.find(function (i) { return i.id === iid; }), o = s.ofertas.find(function (x) { return x.id === e.ofertaElegida[iid]; });
+      out.push((ins ? ins.nombre : '?') + ': comprar en ' + nombreOferta(o));
+    });
+    Object.keys(e.sust || {}).forEach(function (rid) {
+      const r = s.recetas.find(function (x) { return x.id === rid; }); if (!r) return;
+      Object.keys(e.sust[rid]).forEach(function (idx) {
+        const l = r.lineas[idx]; const a = l && s.insumos.find(function (i) { return i.id === l.ref; }), b = s.insumos.find(function (i) { return i.id === e.sust[rid][idx]; });
+        out.push(r.nombre + ': ' + (a ? a.nombre : '?') + ' → ' + (b ? b.nombre : '?'));
+      });
+    });
+    return out;
+  }
+
+  function escenarios() {
+    const s = Store.get();
+    const nuevo = function () {
+      App.prompt('Nuevo escenario', 'Escenario ' + (s.escenarios.length + 1), function (n) {
+        Store.mutate(function (st) { const id = Store.uid('E'); st.escenarios.push({ id: id, nombre: n, precios: {}, ofertaElegida: {}, sust: {}, creado: App.hoy() }); st.escenarioActivo = id; });
+      });
+    };
+    return h('div', { class: 'stack' },
+      h('div', { class: 'row gap' }, App.btn('+ Nuevo escenario', nuevo, 'primary'),
+        h('span', { class: 'help' }, 'Un escenario agrupa cambios hipotéticos (precios, proveedor, sustitutos). Con uno activo, toda la app muestra esos números sin tocar tus datos reales.')),
+      s.escenarios.length ? s.escenarios.map(function (e) {
+        const cambio = { precios: e.precios, ofertaElegida: e.ofertaElegida, sust: e.sust };
+        const imp = E.impacto(s, cambio, {});
+        const desc = describir(s, e);
+        const mAntes = imp.filas.length ? imp.filas.reduce(function (t, f) { return t + (f.margenPctAntes || 0); }, 0) / imp.filas.length : 0;
+        const mDesp = imp.filas.length ? imp.filas.reduce(function (t, f) { return t + (f.margenPctDespues || 0); }, 0) / imp.filas.length : 0;
+        return App.card(e.nombre, h('div', { class: 'stack' },
+          h('div', { class: 'kpis' }, App.kpi('Platos afectados', imp.afectados), App.kpi('Costo medio por plato', App.sg(imp.deltaMedio), 'por porción', imp.deltaMedio < 0 ? 'good' : (imp.deltaMedio > 0 ? 'bad' : '')),
+            App.kpi('Margen medio (afectados)', App.pct(mAntes) + ' → ' + App.pct(mDesp))),
+          desc.length ? h('ul', { class: 'help' }, desc.map(function (d) { return h('li', null, d); })) : h('div', { class: 'mut' }, 'Sin cambios todavía: usa “Simular” en Insumos, Mejores ofertas o Por plato.'),
+          imp.filas.length ? h('details', null, h('summary', null, 'Ver platos afectados'), h('table', { class: 'tbl compact' }, h('tbody', null, imp.filas.slice(0, 15).map(function (f) {
+            return h('tr', null, h('td', null, f.nombre), h('td', { class: 'r ' + (f.delta > 0 ? 'bad-t' : 'good-t') }, App.sg(f.delta)), h('td', { class: 'r' }, App.pct(f.margenPctAntes) + ' → ' + App.pct(f.margenPctDespues))); })))) : null),
+          h('div', { class: 'row gap' },
+            App.btn(s.escenarioActivo === e.id ? 'Activo ✓' : 'Activar', function () { Store.mutate(function (st) { st.escenarioActivo = st.escenarioActivo === e.id ? null : e.id; }); }, 'small'),
+            App.btn('Renombrar', function () { App.prompt('Renombrar escenario', e.nombre, function (n) { Store.mutate(function (st) { st.escenarios.find(function (x) { return x.id === e.id; }).nombre = n; }); }); }, 'small'),
+            App.btn('Aplicar a datos reales', function () { App.confirm('¿Aplicar "' + e.nombre + '" a tus datos reales?', function () { App.aplicarEscenario(e.id); }, 'Aplicar'); }, 'small primary'),
+            App.btn('Eliminar', function () { Store.mutate(function (st) { st.escenarios = st.escenarios.filter(function (x) { return x.id !== e.id; }); if (st.escenarioActivo === e.id) st.escenarioActivo = null; }); }, 'small danger')));
+      }) : App.empty('No hay escenarios. Crea uno para comparar “¿y si compro en otro lugar / cambio de pollo a pavo / suben las carnes?”'));
+  }
+
+  /* ---- Peso en el costo ---- */
+  function peso(ctx) {
+    const pe = E.pesoEnCosto(ctx);
+    const porCat = {};
+    pe.filas.forEach(function (f) { porCat[f.categoria] = (porCat[f.categoria] || 0) + f.costoSemana; });
+    const cats = Object.keys(porCat).map(function (k) { return [k, porCat[k]]; }).sort(function (a, b) { return b[1] - a[1]; });
+    const max = pe.filas.length ? pe.filas[0].pct : 1;
+    return h('div', { class: 'split' },
+      App.card('Ingredientes que más pesan (top 25)', h('table', { class: 'tbl compact' }, h('tbody', null, pe.filas.slice(0, 25).map(function (f) {
+        return h('tr', { class: 'link', onclick: function () { App.go('insumos', f.insumoId); } }, h('td', null, f.nombre), h('td', { class: 'w200' }, App.bar(f.pct, '', max)),
+          h('td', { class: 'r' }, App.pct(f.pct)), h('td', { class: 'r mut' }, App.clp(f.costoSemana) + '/sem'));
+      })))),
+      App.card('Por categoría', h('table', { class: 'tbl compact' }, h('tbody', null, cats.map(function (c) {
+        return h('tr', null, h('td', null, c[0]), h('td', { class: 'w200' }, App.bar(pe.total ? c[1] / pe.total * 100 : 0, '', 60)), h('td', { class: 'r' }, App.pct(pe.total ? c[1] / pe.total * 100 : 0)));
+      })), h('tfoot', null, h('tr', null, h('td', null, 'Costo semanal estimado de ingredientes'), h('td'), h('td', { class: 'r strong' }, App.clp(pe.total)))))),
+      h('p', { class: 'help full' }, 'Estimación con el volumen semanal supuesto (plan semanal o ' + ctx.p.porcionesSemana + ' porciones repartidas parejo). Sirve para priorizar dónde negociar o buscar alternativas.'));
+  }
+
+  App.views.alternativas = function (arg) {
+    const ctx = App.ctx();
+    const tab = TABS.some(function (t) { return t[0] === arg; }) ? arg : 'proveedores';
+    const cuerpo = tab === 'proveedores' ? proveedores(ctx) : tab === 'plato' ? porPlato(ctx) : tab === 'escenarios' ? escenarios() : peso(ctx);
+    return h('div', { class: 'stack' }, h('div', { class: 'chips big' }, TABS.map(function (t) { return App.chip(t[1], tab === t[0], function () { App.go('alternativas', t[0]); }); })), cuerpo);
+  };
+})();
+
+/* src/ui/panel.js */
+/* Panel: resumen de rentabilidad, alertas y dónde actuar. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
+
+  App.views.panel = function () {
+    const s = Store.get(), ctx = App.ctx(), calc = App.calc(), p = ctx.p;
+    if (!s.recetas.length && !s.insumos.length) {
+      return App.card('La base de datos está vacía', h('div', { class: 'stack' },
+        h('p', null, 'Carga los datos para empezar: importa un respaldo (.json). Para los datos migrados del Sheet usa el archivo ', h('code', null, 'data/seed.json'), ' de la carpeta del proyecto.'),
+        h('div', null, App.btn('⬆ Importar respaldo…', App.importarRespaldo, 'primary'))));
+    }
+    const platos = s.recetas.filter(function (r) { return r.tipo === 'plato' && r.activo !== false && calc.get(r.id); });
+    const cs = platos.map(function (r) { return { r: r, c: calc.get(r.id) }; });
+    const n = cs.length || 1;
+    const margenProm = cs.reduce(function (t, x) { return t + (x.c.margenPct || 0); }, 0) / n;
+    const margenMonto = cs.reduce(function (t, x) { return t + x.c.margen; }, 0) / n;
+    const fcProm = cs.reduce(function (t, x) { return t + (x.c.foodCostPct || 0); }, 0) / n;
+    const sobre = cs.filter(function (x) { return x.c.foodCostPct > p.foodCostAlerta; }).sort(function (a, b) { return b.c.foodCostPct - a.c.foodCostPct; });
+    const perdida = cs.filter(function (x) { return x.c.margen < 0; });
+    const ah = E.ahorrosPosibles(ctx);
+    const ahTotal = ah.filas.reduce(function (t, f) { return t + f.ahorroMes; }, 0);
+    const pe = E.puntoEquilibrio(ctx, calc);
+
+    const sinPrecio = s.insumos.filter(function (i) { return E.costoInsumo(ctx, i.id).missing; });
+    const viejos = s.ofertas.filter(function (o) { return o.fecha && E.diasEntre(o.fecha, App.hoy()) > p.precioViejoDias && o.preferida; });
+    const pocos = platos.filter(function (r) { return r.lineas.length < 5 && !(r.costoManual != null && !r.lineas.length); });
+    const borradores = platos.filter(function (r) { return r.lineas.some(function (l) { return l.borrador; }); });
+    const sinEnvase = platos.filter(function (r) { return !r.envaseId && r.envaseManual == null; });
+    const dietaMal = platos.filter(function (r) { return E.violacionesDieta(ctx, r.id).length; });
+
+    // margen por línea
+    const porLinea = LINEAS.map(function (l) {
+      const g = cs.filter(function (x) { return x.r.linea === l; });
+      return { l: l, n: g.length, m: g.length ? g.reduce(function (t, x) { return t + (x.c.margenPct || 0); }, 0) / g.length : null,
+        costo: g.length ? g.reduce(function (t, x) { return t + x.c.costoTotal; }, 0) / g.length : 0, pvp: g.length ? g.reduce(function (t, x) { return t + x.c.pvp; }, 0) / g.length : 0 };
+    }).filter(function (x) { return x.n; });
+
+    const peso = E.pesoEnCosto(ctx);
+    const maxPeso = peso.filas.length ? peso.filas[0].pct : 1;
+
+    const alerta = function (icon, txt, kind, go) { return h('div', { class: 'alert ' + kind + (go ? ' link' : ''), onclick: go || null }, h('span', null, icon), h('span', null, txt)); };
+    const alertas = [];
+    if (perdida.length) alertas.push(alerta('⛔', perdida.length + ' plato(s) con margen negativo: ' + perdida.slice(0, 3).map(function (x) { return x.r.nombre; }).join(', '), 'bad', function () { App.go('platos'); }));
+    if (sinPrecio.length) alertas.push(alerta('⛔', sinPrecio.length + ' insumo(s) sin precio: ' + sinPrecio.slice(0, 4).map(function (i) { return i.nombre; }).join(', ') + (sinPrecio.length > 4 ? '…' : ''), 'bad', function () { App.ui.filtros.ins = { q: '', cat: '', mode: 'sinprecio' }; App.go('insumos'); }));
+    if (dietaMal.length) alertas.push(alerta('⛔', dietaMal.length + ' plato(s) con ingredientes incompatibles con su línea (vegano/vegetariano)', 'bad', function () { App.go('recetas', dietaMal[0].id); }));
+    if (sobre.length) alertas.push(alerta('⚠️', sobre.length + ' plato(s) con food cost sobre ' + p.foodCostAlerta + '% (peor: ' + sobre[0].r.nombre + ' ' + App.pct(sobre[0].c.foodCostPct) + ')', 'warn', function () { const F = App.ui.filtros.platos = App.ui.filtros.platos || {}; F.orden = 'fc'; F.dir = 'desc'; F.tipo = 'plato'; App.go('platos'); }));
+    if (viejos.length) alertas.push(alerta('⚠️', viejos.length + ' precio(s) con más de ' + p.precioViejoDias + ' días sin actualizar', 'warn', function () { App.ui.filtros.ins = { q: '', cat: '', mode: 'viejo' }; App.go('insumos'); }));
+    if (borradores.length) alertas.push(alerta('📝', borradores.length + ' plato(s) con ingredientes en borrador (agregados en la migración) por validar', 'info', function () { App.go('recetas', borradores[0].id); }));
+    if (pocos.length) alertas.push(alerta('📝', pocos.length + ' plato(s) con menos de 5 ingredientes: probablemente incompletos', 'info', function () { App.go('recetas', pocos[0].id); }));
+    if (sinEnvase.length) alertas.push(alerta('📝', sinEnvase.length + ' plato(s) sin envase asignado', 'info', function () { App.go('recetas', sinEnvase[0].id); }));
+    if (ah.filas.length) alertas.push(alerta('💡', 'Podrías ahorrar ~' + App.clp(ahTotal) + '/mes cambiando de proveedor en ' + ah.filas.length + ' insumo(s)', 'good', function () { App.go('alternativas', 'proveedores'); }));
+    if (!alertas.length) alertas.push(alerta('✅', 'Todo en orden.', 'good'));
+
+    return h('div', { class: 'stack' },
+      h('div', { class: 'kpis' },
+        App.kpi('Platos activos', platos.length, s.recetas.filter(function (r) { return r.tipo === 'plato'; }).length + ' en el catálogo'),
+        App.kpi('Margen real promedio', App.pct(margenProm), App.clp(margenMonto) + ' por plato · incluye imprevistos, gas y envase', margenProm < 40 ? 'warn' : 'good'),
+        App.kpi('Food cost promedio', App.pct(fcProm), 'objetivo ' + p.foodCostObjetivo + '% · alerta ' + p.foodCostAlerta + '%', fcProm > p.foodCostAlerta ? 'bad' : (fcProm > p.foodCostObjetivo ? 'warn' : 'good')),
+        pe && pe.porcionesDia ? App.kpi('Punto de equilibrio', App.num(pe.porcionesDia, 1) + ' porc./día', 'para cubrir ' + App.clp(pe.fijos) + ' de costos fijos al mes') :
+          h('div', { class: 'kpi' }, h('div', { class: 'kpi-l' }, 'Punto de equilibrio'), h('div', { class: 'kpi-s' }, 'Ingresa tus costos fijos mensuales en Ajustes para calcular cuántas colaciones al día necesitas.'),
+            App.btn('Ir a Ajustes', function () { App.go('ajustes'); }, 'small'))),
+      h('div', { class: 'grid2' },
+        App.card('Qué mirar ahora', h('div', { class: 'alerts' }, alertas)),
+        App.card('Margen por línea de menú', h('table', { class: 'tbl compact' },
+          h('thead', null, h('tr', null, h('th', null, 'Línea'), h('th', { class: 'r' }, 'Costo prom.'), h('th', { class: 'r' }, 'PVP prom.'), h('th', null, 'Margen'))),
+          h('tbody', null, porLinea.map(function (x) {
+            return h('tr', null, h('td', null, x.l, h('small', null, ' · ' + x.n)), h('td', { class: 'r' }, App.clp(x.costo)), h('td', { class: 'r' }, App.clp(x.pvp)),
+              h('td', null, h('div', { class: 'cellbar' }, App.pct(x.m), App.bar(x.m, x.m < 35 ? 'bad' : (x.m < 45 ? 'warn' : 'good'), 80))));
+          })))),
+        App.card('Platos con peor food cost', cs.length ? h('table', { class: 'tbl compact' }, h('tbody', null, cs.slice().sort(function (a, b) { return b.c.foodCostPct - a.c.foodCostPct; }).slice(0, 8).map(function (x) {
+          return h('tr', { class: 'link', onclick: function () { App.go('platos', x.r.id); } }, h('td', null, x.r.nombre), h('td', { class: 'r' }, App.clp(x.c.costoTotal) + ' / ' + App.clp(x.c.pvp)),
+            h('td', { class: 'r ' + (x.c.foodCostPct > p.foodCostAlerta ? 'bad-t' : '') }, App.pct(x.c.foodCostPct)));
+        }))) : App.empty('Sin platos')),
+        App.card('Ingredientes que más pesan en el costo', peso.filas.length ? h('table', { class: 'tbl compact' }, h('tbody', null, peso.filas.slice(0, 8).map(function (f) {
+          return h('tr', { class: 'link', onclick: function () { App.go('insumos', f.insumoId); } }, h('td', null, f.nombre), h('td', { class: 'w200' }, App.bar(f.pct, '', maxPeso)), h('td', { class: 'r' }, App.pct(f.pct)));
+        }))) : App.empty('Sin datos'), '', App.btn('Ver más', function () { App.go('alternativas', 'peso'); }, 'small ghost'))),
+      window.INFORME ? App.card('Informe de migración desde Google Sheets', h('div', null,
+        h('p', null, 'Se detectaron ' + window.INFORME.resumen.platosConCostoDesactualizado + ' platos con costo total desactualizado en el Sheet, legumbres/arroz/fideos subcosteados ~2,4× y recetas con pocos ingredientes. Los números de esta app ya están corregidos.'),
+        App.btn('Ver informe antes / después', function () { App.go('ajustes', 'informe'); }, 'small'))) : null);
+  };
+})();
+
+/* src/ui/cocina.js */
+/* Cocina: recetas para el personal. No muestra costos ni precios. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const DIAS = [['lun', 'Lunes'], ['mar', 'Martes'], ['mie', 'Miércoles'], ['jue', 'Jueves'], ['vie', 'Viernes']];
+
+  // líneas de ingredientes escaladas a N porciones, con sub-recetas expandidas (sin costos)
+  function lineasEscaladas(s, r, porciones) {
+    const f = porciones / (r.porciones > 0 ? r.porciones : 1);
+    const out = [];
+    r.lineas.forEach(function (l) {
+      if (l.tipo === 'insumo') {
+        const ins = s.insumos.find(function (i) { return i.id === l.ref; });
+        if (ins) out.push({ nombre: ins.nombre, q: l.cantidad * f, unidad: ins.unidad, nota: l.nota || '' });
+      } else {
+        const sub = s.recetas.find(function (x) { return x.id === l.ref; });
+        if (!sub) return;
+        const fs = (l.cantidad * f) / (sub.porciones > 0 ? sub.porciones : 1);
+        out.push({ nombre: sub.nombre, q: l.cantidad * f, unidad: 'porc', nota: l.nota || '', sub: true });
+        sub.lineas.forEach(function (sl) {
+          const ins = s.insumos.find(function (i) { return i.id === sl.ref; });
+          if (ins) out.push({ nombre: ins.nombre, q: sl.cantidad * fs, unidad: ins.unidad, nota: sl.nota || '', hijo: true });
+        });
+      }
+    });
+    return out;
+  }
+
+  function ficha(s, r, porciones) {
+    const lineas = lineasEscaladas(s, r, porciones);
+    const guar = r.guarnicionDefault && s.recetas.find(function (x) { return x.id === r.guarnicionDefault; });
+    const permitidas = (r.guarnicionesPermitidas || []).map(function (g) { const x = s.recetas.find(function (y) { return y.id === g; }); return x ? x.nombre : null; }).filter(Boolean);
+    const env = r.envaseId && s.insumos.find(function (i) { return i.id === r.envaseId; });
+    return h('article', { class: 'ficha' },
+      h('div', { class: 'ficha-h' }, h('h2', null, r.nombre), h('div', { class: 'mut' }, r.linea, ' · ', porciones + (porciones === 1 ? ' porción' : ' porciones'))),
+      r.descripcion ? h('p', { class: 'desc' }, r.descripcion) : null,
+      h('table', { class: 'tbl ficha-t' }, h('thead', null, h('tr', null, h('th', null, 'Ingrediente'), h('th', { class: 'r' }, 'Cantidad'), h('th', null, 'Corte / uso'))),
+        h('tbody', null, lineas.length ? lineas.map(function (l) {
+          return h('tr', { class: (l.sub ? 'subhead' : '') + (l.hijo ? ' hijo' : '') }, h('td', null, (l.hijo ? '↳ ' : '') + l.nombre), h('td', { class: 'r strong' }, App.cantidad(l.q, l.unidad)), h('td', null, l.nota));
+        }) : h('tr', null, h('td', { colspan: 3 }, App.empty('Receta sin ingredientes'))))),
+      guar ? h('p', null, h('b', null, 'Guarnición: '), guar.nombre, permitidas.length > 1 ? h('span', { class: 'mut' }, '  (el cliente puede elegir: ' + permitidas.join(', ') + ')') : null) : null,
+      r.pasos ? h('div', null, h('h4', null, 'Preparación'), h('p', { class: 'pasos' }, r.pasos)) : h('p', { class: 'mut' }, 'Sin pasos de preparación escritos (agrégalos en Recetas).'),
+      r.montaje ? h('div', null, h('h4', null, 'Montaje y empaque'), h('p', { class: 'pasos' }, r.montaje, env ? ' Envase: ' + env.nombre + '.' : '')) : null);
+  }
+
+  function modoReceta(s) {
+    const F = App.ui.filtros.cocina = App.ui.filtros.cocina || { q: '', id: null, porc: 1 };
+    const platos = s.recetas.filter(function (r) { return (r.tipo === 'plato' || r.tipo === 'base' || r.tipo === 'acompanamiento' || /entrada|ensalada|postre/.test(r.tipo)) && r.activo !== false; });
+    const q = (F.q || '').toLowerCase();
+    const filtrados = platos.filter(function (r) { return !q || r.nombre.toLowerCase().indexOf(q) >= 0; });
+    const grupos = {};
+    filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? 'Bases y sub-recetas' : r.tipo === 'acompanamiento' ? 'Guarniciones' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
+    const sel = platos.find(function (r) { return r.id === F.id; }) || filtrados.find(function (r) { return r.tipo === 'plato'; }) || filtrados[0];
+    const ORDEN = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína', 'Guarniciones', 'Opcionales', 'Bases y sub-recetas'];
+    return h('div', { class: 'split cocina' },
+      h('div', { class: 'pane-list noprint' },
+        h('div', { class: 'filters' }, App.textInput({ fk: 'co-q', value: F.q, ph: 'Buscar receta…', cls: 'search', onChange: function (v) { F.q = v; App.render(); } })),
+        h('div', { class: 'scroll', 'data-sk': 'co-list' }, Object.keys(grupos).sort(function (a, b) { return ORDEN.indexOf(a) - ORDEN.indexOf(b); }).map(function (g) {
+          return h('div', null, h('div', { class: 'grp' }, g), h('ul', { class: 'lista' }, grupos[g].map(function (r) {
+            return h('li', { class: sel && sel.id === r.id ? 'on' : '', onclick: function () { F.id = r.id; F.porc = r.tipo === 'base' ? r.porciones : 1; App.render(); } }, r.nombre);
+          })));
+        }))),
+      h('div', { class: 'pane-detail' }, sel ? h('div', { class: 'stack' },
+        h('div', { class: 'row gap noprint' }, h('label', null, 'Porciones a preparar ', App.numInput({ fk: 'co-porc', cls: 'w70', value: F.porc, onChange: function (n) { if (n > 0) { F.porc = n; App.render(); } } })),
+          App.btn('1', function () { F.porc = 1; App.render(); }, 'small'), App.btn('10', function () { F.porc = 10; App.render(); }, 'small'), App.btn('20', function () { F.porc = 20; App.render(); }, 'small'),
+          h('span', { class: 'spacer' }), App.btn('🖨 Imprimir', function () { window.print(); }, 'primary')),
+        ficha(s, sel, F.porc || 1)) : App.empty('Sin recetas')));
+  }
+
+  function modoDia(s) {
+    const F = App.ui.filtros.cocina = App.ui.filtros.cocina || {};
+    F.dia = F.dia || 'lun';
+    const items = (s.plan[F.dia] || []).filter(function (it) { return s.recetas.some(function (r) { return r.id === it.recetaId; }); });
+    const ctx = E.makeCtx(s, {});
+    const total = new Map();
+    items.forEach(function (it) { E.explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0).forEach(function (q, id) { total.set(id, (total.get(id) || 0) + q); }); });
+    const filasTotal = Array.from(total.entries()).map(function (e) { return { ins: s.insumos.find(function (i) { return i.id === e[0]; }), q: e[1] }; }).filter(function (x) { return x.ins; })
+      .sort(function (a, b) { return a.ins.categoria.localeCompare(b.ins.categoria) || a.ins.nombre.localeCompare(b.ins.nombre); });
+    return h('div', { class: 'stack' },
+      h('div', { class: 'row gap noprint' }, h('div', { class: 'chips' }, DIAS.map(function (d) { return App.chip(d[1] + ' (' + (s.plan[d[0]] || []).length + ')', F.dia === d[0], function () { F.dia = d[0]; App.render(); }); })),
+        h('span', { class: 'spacer' }), App.btn('🖨 Imprimir producción del día', function () { window.print(); }, 'primary')),
+      items.length ? h('div', { class: 'stack' },
+        App.card('Producción del ' + DIAS.find(function (d) { return d[0] === F.dia; })[1], h('div', null,
+          h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Plato'), h('th', { class: 'r' }, 'Porciones'))),
+            h('tbody', null, items.map(function (it) { const r = s.recetas.find(function (x) { return x.id === it.recetaId; }); return h('tr', null, h('td', null, r.nombre), h('td', { class: 'r strong' }, it.porciones)); }))),
+          h('h4', null, 'Insumos totales a preparar (peso utilizable)'),
+          h('table', { class: 'tbl compact' }, h('tbody', null, filasTotal.map(function (x) { return h('tr', null, h('td', null, x.ins.nombre), h('td', { class: 'r' }, App.cantidad(x.q, x.ins.unidad))); }))))),
+        items.map(function (it) { const r = s.recetas.find(function (x) { return x.id === it.recetaId; }); return ficha(s, r, Number(it.porciones) || 1); }))
+        : App.empty('No hay platos planificados para este día. Arma el plan en “Lista de compras”.'));
+  }
+
+  App.views.cocina = function (arg) {
+    const s = Store.get();
+    const modo = arg === 'dia' ? 'dia' : 'receta';
+    return h('div', { class: 'stack' },
+      h('div', { class: 'chips big noprint' }, App.chip('Recetas', modo === 'receta', function () { App.go('cocina'); }), App.chip('Producción del día', modo === 'dia', function () { App.go('cocina', 'dia'); }),
+        h('span', { class: 'mut' }, 'Vista para el personal: sin costos ni precios.')),
+      modo === 'dia' ? modoDia(s) : modoReceta(s));
+  };
+})();
+
+/* src/ui/compras.js */
+/* Plan semanal y lista de compras agrupada por lugar. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const DIAS = [['lun', 'Lunes'], ['mar', 'Martes'], ['mie', 'Miércoles'], ['jue', 'Jueves'], ['vie', 'Viernes']];
+
+  function textoLista(grupos, total) {
+    const out = [];
+    Object.keys(grupos).forEach(function (lugar) {
+      out.push('== ' + lugar + ' ==');
+      grupos[lugar].filas.forEach(function (f) {
+        out.push('- ' + f.nombre + ': ' + (f.packs ? f.packs + ' × ' + f.formatoLabel : App.cantidad(f.comprarBase, f.unidad)) + '  (' + App.clp(f.costo) + ')');
+      });
+      out.push('   Subtotal ' + lugar + ': ' + App.clp(grupos[lugar].total), '');
+    });
+    out.push('TOTAL: ' + App.clp(total));
+    return out.join('\n');
+  }
+
+  App.views.compras = function () {
+    const s = Store.get(), ctx = App.ctx(), calc = App.calc();
+    const F = App.ui.filtros.compras = App.ui.filtros.compras || { dia: 'todos', envases: true };
+    const vendibles = s.recetas.filter(function (r) { return E.esVendible(r) && r.activo !== false; });
+    const dias = F.dia === 'todos' ? DIAS.map(function (d) { return d[0]; }) : [F.dia];
+    const items = [];
+    dias.forEach(function (d) { (s.plan[d] || []).forEach(function (it) { items.push(it); }); });
+
+    const addInputs = {};
+    const colDia = function (d) {
+      const lista = s.plan[d[0]] || [];
+      const sel = App.select({ fk: 'plan-add-' + d[0], value: '', options: [['', '+ Agregar plato…']].concat(vendibles.map(function (r) { return [r.id, r.nombre]; })),
+        onChange: function (v) { if (!v) return; Store.mutate(function (st) { st.plan[d[0]].push({ recetaId: v, porciones: 10 }); }); } });
+      let totalPorc = 0;
+      lista.forEach(function (it) { totalPorc += Number(it.porciones) || 0; });
+      return h('div', { class: 'dia' }, h('div', { class: 'dia-h' }, h('b', null, d[1]), h('small', null, totalPorc + ' porc.')),
+        lista.map(function (it, i) {
+          const r = s.recetas.find(function (x) { return x.id === it.recetaId; });
+          if (!r) return null;
+          return h('div', { class: 'plan-it' }, h('span', { class: 'nm' }, r.nombre),
+            App.numInput({ fk: 'plan-' + d[0] + '-' + i, cls: 'w60', value: it.porciones, onChange: function (n) { Store.mutate(function (st) { st.plan[d[0]][i].porciones = n; }, 'pl' + d[0] + i); } }),
+            App.btn('✕', function () { Store.mutate(function (st) { st.plan[d[0]].splice(i, 1); }); }, 'small ghost'));
+        }), sel);
+    };
+
+    // lista de compras
+    let filas = E.listaCompras(ctx, items);
+    if (!F.envases) filas = filas.filter(function (f) { return f.categoria !== 'Envases'; });
+    const grupos = {};
+    filas.forEach(function (f) { const g = grupos[f.lugar] = grupos[f.lugar] || { filas: [], total: 0 }; g.filas.push(f); g.total += f.costo; });
+    const total = filas.reduce(function (t, f) { return t + f.costo; }, 0);
+    const teorico = filas.reduce(function (t, f) { return t + f.costoTeorico; }, 0);
+    // ingresos y margen esperados del plan
+    let ingreso = 0, costoPlan = 0, porcTot = 0;
+    items.forEach(function (it) { const c = calc.get(it.recetaId); const n = Number(it.porciones) || 0; if (c) { ingreso += c.pvp * n; costoPlan += c.costoTotal * n; porcTot += n; } });
+
+    return h('div', { class: 'stack' },
+      App.card('Plan semanal', h('div', null, h('div', { class: 'plan-grid' }, DIAS.map(colDia)),
+        h('p', { class: 'help' }, 'Indica cuántas porciones de cada plato esperas vender. La lista de compras y los ahorros estimados usan este plan; si está vacío, se reparte el volumen supuesto en Ajustes.'))),
+      h('div', { class: 'kpis' },
+        App.kpi('Porciones planificadas', porcTot, F.dia === 'todos' ? 'semana completa' : DIAS.find(function (d) { return d[0] === F.dia; })[1]),
+        App.kpi('Ventas esperadas', App.clp(ingreso), 'a los PVP actuales'),
+        App.kpi('Costo de compra', App.clp(total), 'en formatos de compra · uso teórico ' + App.clp(teorico)),
+        App.kpi('Margen esperado', App.clp(ingreso - costoPlan), ingreso ? App.pct((ingreso - costoPlan) / ingreso * 100) + ' del bruto' : '', ingreso - costoPlan < 0 ? 'bad' : 'good')),
+      h('div', { class: 'row gap wrap' },
+        h('div', { class: 'chips' }, [['todos', 'Semana'] ].concat(DIAS).map(function (d) { return App.chip(d[1], F.dia === d[0], function () { F.dia = d[0]; App.render(); }); })),
+        h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: F.envases, onchange: function (ev) { F.envases = ev.target.checked; App.render(); } }), ' Incluir envases'),
+        h('span', { class: 'spacer' }),
+        App.btn('Copiar lista', function () { const t = textoLista(grupos, total); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { App.toast('Lista copiada'); }, function () { App.descargar('lista-compras.txt', t, 'text/plain'); }); }, 'small'),
+        App.btn('🖨 Imprimir', function () { window.print(); }, 'small')),
+      filas.length ? Object.keys(grupos).map(function (lugar) {
+        const g = grupos[lugar];
+        return App.card(lugar, h('table', { class: 'tbl compact' },
+          h('thead', null, h('tr', null, h('th', null, 'Insumo'), h('th', { class: 'r' }, 'Necesito'), h('th', { class: 'r' }, 'Comprar'), h('th', { class: 'r' }, 'Precio formato'), h('th', { class: 'r' }, 'Subtotal'))),
+          h('tbody', null, g.filas.map(function (f) {
+            return h('tr', { class: f.missing ? 'warnrow' : '' }, h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(f.insumoId) }, f.nombre)),
+              h('td', { class: 'r' }, App.cantidad(f.comprarBase, f.unidad)),
+              h('td', { class: 'r strong' }, f.packs ? f.packs + ' × ' + f.formatoLabel : '—'),
+              h('td', { class: 'r' }, f.missing ? App.badge('sin precio', 'bad') : App.clp(f.precioPack)), h('td', { class: 'r' }, App.clp(f.costo)));
+          })),
+          h('tfoot', null, h('tr', null, h('td', { colspan: 4 }, 'Subtotal ' + lugar), h('td', { class: 'r strong' }, App.clp(g.total))))), 'compra');
+      }) : App.empty('Agrega platos al plan semanal para generar la lista de compras.'),
+      filas.length ? h('div', { class: 'total-bar' }, 'Total de la compra: ', h('b', null, App.clp(total))) : null);
+  };
+})();
+
+/* src/ui/ajustes.js */
+/* Ajustes: parámetros de costeo, respaldo y informe de migración. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+
+  const GRUPOS = [
+    ['Costos adicionales al ingrediente', [
+      ['imprevistosPct', 'Imprevistos y mermas operativas', '%', 'Se suma sobre el costo de ingredientes (condimentos menores, derrames, pruebas).'],
+      ['gasPorPorcion', 'Gas / energía por porción', 'CLP', 'Divide lo que gastas en gas y electricidad al mes entre las porciones que vendes.'],
+      ['manoObraPorPorcion', 'Mano de obra por porción', 'CLP', 'Déjalo en 0 si cocinas tú; ponle valor si quieres ver el margen real con tu tiempo incluido.'],
+      ['repartoPorPedido', 'Costo de reparto por pedido', 'CLP', 'Bencina/moto. Se usa en el análisis de ticket, no en el costo del plato.'],
+      ['comisionPct', 'Comisión de pago', '%', 'Transferencia/tarjeta, si aplica. Se descuenta del PVP.']]],
+    ['Precio e impuestos', [
+      ['ivaOn', 'El PVP incluye IVA', 'bool', 'Actívalo si emites boleta: el margen se calcula sobre el precio neto (PVP ÷ 1,19).'],
+      ['ivaPct', 'IVA', '%', ''],
+      ['foodCostObjetivo', 'Food cost objetivo', '%', 'Parte del precio neto que quieres gastar en ingredientes. Define el PVP sugerido.'],
+      ['foodCostAlerta', 'Alerta de food cost sobre', '%', 'Los platos sobre este valor aparecen como alerta.'],
+      ['redondeo', 'Redondeo del PVP sugerido', 'CLP', 'Se redondea hacia arriba (ej. 100 → $4.900).'],
+      ['trilogiaPrecio', 'Precio del combo Entrada + Ensalada + Postre', 'CLP', 'Adicional sobre la colación.']]],
+    ['Compras y volumen', [
+      ['modoOferta', 'Qué oferta usan los costos', 'modo', 'Preferida (la que marcas), la más barata de cada insumo, o el promedio.'],
+      ['precioViejoDias', 'Precio desactualizado después de', 'días', ''],
+      ['porcionesSemana', 'Porciones vendidas por semana (supuesto)', 'porc.', 'Se usa para estimar ahorros y pesos cuando no hay plan semanal.'],
+      ['costosFijosMes', 'Costos fijos mensuales', 'CLP', 'Para calcular el punto de equilibrio (internet, permisos, depreciación…).'],
+      ['diasOperacionMes', 'Días de operación al mes', 'días', '']]]
+  ];
+
+  function paramControl(def, p) {
+    const key = def[0];
+    const set = function (v) { Store.mutate(function (st) { st.params[key] = v; }, 'par' + key); };
+    if (def[2] === 'bool') return h('input', { type: 'checkbox', checked: !!p[key], onchange: function (ev) { set(ev.target.checked); } });
+    if (def[2] === 'modo') return App.select({ fk: 'par-' + key, value: p[key], options: [['preferida', 'Preferida'], ['barata', 'La más barata'], ['promedio', 'Promedio']], onChange: set });
+    return h('span', null, App.numInput({ fk: 'par-' + key, cls: 'w80', value: p[key], onChange: set }), ' ', h('small', null, def[2]));
+  }
+
+  function informe() {
+    const I = window.INFORME;
+    if (!I) return App.empty('No hay informe de migración.');
+    const F = App.ui.filtros.inf = App.ui.filtros.inf || { solo: 'cambios' };
+    const filas = I.filas.filter(function (f) { return F.solo === 'todos' || f.stale || f.nota || Math.abs(f.costoNuevo - f.sheetCostoTotal) > 300; })
+      .sort(function (a, b) { return (b.costoNuevo - b.sheetCostoTotal) - (a.costoNuevo - a.sheetCostoTotal); });
+    return h('div', { class: 'stack' },
+      App.card('Qué se corrigió al migrar el Sheet', h('div', null, h('ul', null, I.hallazgos.map(function (x) { return h('li', null, x); })),
+        h('p', { class: 'help' }, 'Líneas de receta de platos: ' + I.resumen.lineasSheetOriginal + ' → ' + I.resumen.lineasSheetNuevas + ' (lo agregado queda marcado “borrador” hasta que lo valides). Platos con costo total desactualizado en el Sheet: ' + I.resumen.platosConCostoDesactualizado + '.'))),
+      App.card('Margen promedio por línea: Sheet → corregido', h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, h('th', null, 'Línea'), h('th', { class: 'r' }, 'Costo Sheet'), h('th', { class: 'r' }, 'Costo corregido'), h('th', { class: 'r' }, 'Margen Sheet'), h('th', { class: 'r' }, 'Margen corregido'))),
+        h('tbody', null, Object.keys(I.porLinea).map(function (k) { const l = I.porLinea[k]; return h('tr', null, h('td', null, k), h('td', { class: 'r' }, App.clp(l.costoSheet)), h('td', { class: 'r' }, App.clp(l.costoNuevo)), h('td', { class: 'r' }, App.pct(l.sheet)), h('td', { class: 'r strong' }, App.pct(l.nuevo))); })))),
+      App.card('Detalle por plato', h('div', null,
+        h('div', { class: 'chips' }, App.chip('Solo con cambios relevantes', F.solo === 'cambios', function () { F.solo = 'cambios'; App.render(); }), App.chip('Los 62 platos', F.solo === 'todos', function () { F.solo = 'todos'; App.render(); })),
+        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+          h('thead', null, h('tr', null, ['Plato', 'PVP', 'Costo Sheet', 'Debía ser*', 'Costo corregido', 'Margen Sheet', 'Margen corregido', 'Observación'].map(function (t, i) { return h('th', { class: i >= 1 && i <= 6 ? 'r' : '' }, t); }))),
+          h('tbody', null, filas.map(function (f) {
+            return h('tr', { class: 'link', onclick: function () { App.go('platos', f.id); } }, h('td', null, f.nombre), h('td', { class: 'r' }, App.clp(f.pvp)), h('td', { class: 'r' }, App.clp(f.sheetCostoTotal), f.stale ? h('span', { class: 'warn-t', title: 'El costo total del Sheet no coincidía con insumos + empaque' }, ' ⚠') : null),
+              h('td', { class: 'r mut' }, App.clp(f.sheetCostoRecalculado)), h('td', { class: 'r strong' }, App.clp(f.costoNuevo)), h('td', { class: 'r' }, App.pct(f.sheetMargenPct)), h('td', { class: 'r strong' }, App.pct(f.margenNuevoPct)), h('td', null, f.nota));
+          })))),
+        h('p', { class: 'help' }, '* “Debía ser” = insumos + empaque calculados con los propios datos del Sheet (sin las correcciones). ⚠ = el costo total del Sheet estaba mal. Los valores corregidos incluyen imprevistos, gas, base seca y recetas completadas; cambian al editar Ajustes o precios.'))));
+  }
+
+  App.views.ajustes = function (arg) {
+    const s = Store.get(), p = E.params(s);
+    if (arg === 'informe') return h('div', { class: 'stack' }, h('div', { class: 'row' }, App.btn('← Volver a Ajustes', function () { App.go('ajustes'); }, 'small')), informe());
+    const nube = App.nube.activo;
+    return h('div', { class: 'stack' },
+      GRUPOS.map(function (g) {
+        return App.card(g[0], h('div', { class: 'params' }, g[1].map(function (d) {
+          return h('div', { class: 'param' }, h('div', null, h('b', null, d[1]), d[3] ? h('div', { class: 'help' }, d[3]) : null), paramControl(d, p));
+        })));
+      }),
+      App.card('Respaldo y datos', h('div', { class: 'stack' },
+        h('p', null, nube ? 'Los datos se guardan en la nube y los comparten todos los usuarios. Igual conviene descargar un respaldo de vez en cuando.'
+          : 'Tus datos se guardan automáticamente en este navegador. Descarga un respaldo cada cierto tiempo, o para pasarlos a otro computador.'),
+        h('div', { class: 'row gap wrap' },
+          App.btn('⬇ Descargar respaldo (.json)', function () { App.descargar('colaciones-respaldo-' + App.hoy() + '.json', Store.exportJSON()); }, 'primary'),
+          App.btn(nube ? '⬆ Importar respaldo (reemplaza la nube)…' : '⬆ Importar respaldo…', App.importarRespaldo),
+          window.INFORME ? App.btn('Informe de migración desde Sheets', function () { App.go('ajustes', 'informe'); }) : null,
+          nube ? null : App.btn('Restablecer a los datos migrados', function () { App.confirm('Se reemplazarán todos tus datos por los datos iniciales migrados desde el Sheet. Puedes deshacerlo con “Deshacer” mientras no cierres la página.', function () { Store.reset(); App.toast('Datos restablecidos'); }, 'Restablecer', true); }, 'danger')),
+        h('small', { class: 'mut' }, nube ? App.textoGuardado() : (Store.storageOk() ? 'Autoguardado funcionando.' : '⚠ El navegador no permite guardar automáticamente; descarga respaldos manualmente.')))),
+      App.card('Cómo se calcula el costo', h('ol', { class: 'help' },
+        h('li', null, 'Cantidad de receta = peso utilizable crudo/seco tal como se compra (lentejas secas, arroz crudo, carne cruda).'),
+        h('li', null, 'Costo neto por unidad = precio del formato ÷ (cantidad del formato × rendimiento). El rendimiento solo descuenta limpieza/pelado.'),
+        h('li', null, 'Costo del plato = ingredientes + guarnición + imprevistos + envase + gas/MO (+ comisión). Todo derivado: no hay celdas que puedas romper.'),
+        h('li', null, 'Margen = PVP neto − costo total. Food cost = ingredientes ÷ PVP neto.'))));
+  };
+})();
+
+/* src/app.js */
+/* Arranque de la app */
+(function () {
+  'use strict';
+  function iniciar() { window.App.start(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar); else iniciar();
+})();
+
+</script>
+</body>
+</html>
