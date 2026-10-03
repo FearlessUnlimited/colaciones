@@ -212,9 +212,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T03:30:22Z">
+<meta name="build" content="2026-10-03T08:15:18Z">
 <script>
-window.BUILD = "2026-10-03T03:30:22Z";
+window.BUILD = "2026-10-03T08:15:18Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -1869,10 +1869,10 @@ window.CLOUD = {
   const CAMPOS = [
     // insumos y ofertas
     ['ins-nombre', 'Nombre del insumo tal como lo buscarás en las recetas. Ej.: Pechuga de pollo deshuesada.'],
-    ['ins-categoria', 'Agrupa los insumos en listas y reportes. Elige una existente o escribe una nueva.'],
+    ['ins-categoria', 'Agrupa los insumos en listas y reportes. Elige una de la lista o crea una con "+ Nueva categoría…".'],
     ['ins-unidad', 'Unidad en que se usa en las recetas: g (gramos), ml (mililitros) o un (unidades). Todas las cantidades de receta van en esta unidad.'],
     ['ins-rend', 'Parte utilizable tras pelar o limpiar, en %. 100 = sin merma; 90 = pierdes un 10%. No incluyas la merma de cocción.'],
-    ['ins-fam', 'Agrupa insumos equivalentes (ej. ave, pescado-blanco) para sugerir sustitutos. Vacío = sin sustitutos.'],
+    ['ins-fam', 'Agrupa insumos equivalentes (ej. ave, pescado-blanco) para sugerir sustitutos. Elige una de la lista o crea una con "+ Nueva familia…". Sin familia = sin sustitutos.'],
     ['ins-dieta', 'Tipo de dieta del insumo. Evita que un plato vegano o vegetariano sugiera carnes.'],
     ['ins-q', 'Busca por parte del nombre o de la categoría.'],
     ['ins-cat', 'Muestra solo los insumos de una categoría.'],
@@ -2629,6 +2629,22 @@ window.CLOUD = {
       h('div', { class: 'scroll', 'data-sk': 'ins-list' }, tabla));
   }
 
+  // lista desplegable con todas las opciones siempre visibles (el autocompletado de texto solo mostraba las que coinciden con lo escrito)
+  function selConNuevo(o) {
+    const opciones = (o.vacio != null ? [['', o.vacio]] : []).concat(o.valores.map(function (v) { return [v, v]; }), [['__nuevo', o.nuevo]]);
+    return App.select({ fk: o.fk, value: o.value, options: opciones, onChange: function (v) {
+      if (v !== '__nuevo') { o.onSet(v); return; }
+      App.render();   // deja el selector en su valor mientras se pide el nombre
+      App.prompt(o.titulo, '', function (n) { o.onSet(n); }, o.ph);
+    } });
+  }
+  function listaCats(s, actual) {
+    return Array.from(new Set(CATS.concat(s.insumos.map(function (i) { return i.categoria; }), actual ? [actual] : []).filter(Boolean))).sort(function (a, b) { return a.localeCompare(b, 'es'); });
+  }
+  function listaFams(s, actual) {
+    return Array.from(new Set(s.insumos.map(function (i) { return i.familia; }).concat(actual ? [actual] : []).filter(Boolean))).sort(function (a, b) { return a.localeCompare(b, 'es'); });
+  }
+
   function nuevoInsumo() {
     App.prompt('Nuevo insumo', '', function (nombre) {
       const id = Store.uid('INS-');
@@ -2654,11 +2670,13 @@ window.CLOUD = {
         h('div', null, App.btn('Eliminar insumo', function () { eliminar(ins); }, 'small danger'))),
       h('div', { class: 'form-grid' },
         h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); } })),
-        h('label', null, 'Categoría', App.textInput({ fk: 'ins-categoria', value: ins.categoria, list: 'dl-cats', onChange: function (v) { upd(function (x) { x.categoria = v; }, 'ct' + ins.id); } })),
+        h('label', null, 'Categoría', selConNuevo({ fk: 'ins-categoria', value: ins.categoria, valores: listaCats(s, ins.categoria), nuevo: '+ Nueva categoría…', titulo: 'Nueva categoría',
+          ph: 'Ej.: Congelados', onSet: function (v) { upd(function (x) { x.categoria = v; }); } })),
         h('label', null, 'Unidad de receta', App.select({ fk: 'ins-unidad', value: ins.unidad, options: UNIDADES, onChange: function (v) { upd(function (x) { x.unidad = v; }); } })),
         h('label', null, 'Rendimiento (merma de limpieza) %', App.numInput({ fk: 'ins-rend', value: Math.round(ins.rendimiento * 1000) / 10, title: 'Parte utilizable tras pelar/limpiar. 100% = sin merma. No incluir merma de cocción.',
           onChange: function (n) { if (n > 0 && n <= 100) upd(function (x) { x.rendimiento = n / 100; }, 'rd' + ins.id); } })),
-        h('label', null, 'Familia (para sustitutos)', App.textInput({ fk: 'ins-fam', value: ins.familia || '', list: 'dl-fams', ph: 'ej. ave, pescado-blanco', onChange: function (v) { upd(function (x) { x.familia = v || null; }, 'fm' + ins.id); } })),
+        h('label', null, 'Familia (para sustitutos)', selConNuevo({ fk: 'ins-fam', value: ins.familia || '', vacio: '(sin familia)', valores: listaFams(s, ins.familia), nuevo: '+ Nueva familia…', titulo: 'Nueva familia',
+          ph: 'Ej.: ave, pescado-blanco', onSet: function (v) { upd(function (x) { x.familia = v || null; }); } })),
         h('label', null, 'Dieta', App.select({ fk: 'ins-dieta', value: ins.dieta || 'vegano', options: DIETAS, onChange: function (v) { upd(function (x) { x.dieta = v; }); } }))),
       h('div', { class: 'help' }, 'Cantidades en recetas = peso utilizable crudo/seco tal como se compra. El rendimiento solo descuenta limpieza o pelado, no la cocción.'));
 
@@ -2781,8 +2799,6 @@ window.CLOUD = {
     const s = Store.get(), ctx = App.ctx();
     const F = App.ui.filtros.ins = App.ui.filtros.ins || { q: '', cat: '', mode: '' };
     const sel = arg && s.insumos.find(function (i) { return i.id === arg; }) ? arg : null;
-    const fams = Array.from(new Set(s.insumos.map(function (i) { return i.familia; }).filter(Boolean)));
-    const cats = Array.from(new Set(CATS.concat(s.insumos.map(function (i) { return i.categoria; }))));
     return h('div', { class: 'split' },
       listado(sel, F, ctx),
       h('div', { class: 'pane-detail' },
@@ -2791,9 +2807,7 @@ window.CLOUD = {
             h('p', null, 'Elige un insumo de la lista para ver y editar dónde lo compras, a qué precio, en qué formato, y cómo impacta en tus platos.'),
             h('ul', { class: 'help' }, h('li', null, 'Cada insumo puede tener varias ',  h('b', null, 'ofertas'), ' (proveedor + marca + formato). Los costos usan la oferta marcada como "Usar". Los proveedores (factura, despacho) se editan en la pestaña Proveedores.'),
               h('li', null, 'Al cambiar un precio, todos los platos, márgenes y la lista de compras se recalculan al instante.'),
-              h('li', null, 'Con un escenario activo (selector arriba), los cambios de precio son simulaciones y no tocan tus datos reales.')))),
-        h('datalist', { id: 'dl-fams' }, fams.map(function (l) { return h('option', { value: l }); })),
-        h('datalist', { id: 'dl-cats' }, cats.map(function (l) { return h('option', { value: l }); }))));
+              h('li', null, 'Con un escenario activo (selector arriba), los cambios de precio son simulaciones y no tocan tus datos reales.')))),));
   };
 })();
 
