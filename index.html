@@ -212,9 +212,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T02:25:37Z">
+<meta name="build" content="2026-10-03T03:30:22Z">
 <script>
-window.BUILD = "2026-10-03T02:25:37Z";
+window.BUILD = "2026-10-03T03:30:22Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -1931,7 +1931,7 @@ window.CLOUD = {
     ['pv-f-', '¿Entrega factura? "A pedido" = no siempre, pero se puede pedir. Con factura, el IVA se puede recuperar como crédito fiscal.'],
     ['pv-dc-', 'Lo que te cobra por despachar una compra, en pesos. 0 si el despacho siempre es gratis.'],
     ['pv-dg-', 'Monto de compra (con IVA, tal como lo pagas) desde el cual el despacho es gratis. Vacío = nunca es gratis.'],
-    ['pv-dm-', 'Monto mínimo de compra (con IVA) para que acepten despachar. Vacío = no exigen mínimo.'],
+    ['pv-dm-', 'Compra mínima (con IVA, tal como la pagas) para que acepten despachar. Vacío = no exigen mínimo.'],
     ['pv-cv-', 'Lo que te cuesta ir a buscar la compra: bencina, estacionamiento, tu tiempo. Con 0, la app siempre preferirá ir a buscar.'],
     ['pv-rut-', 'RUT con dígito verificador. Ej.: 76.123.456-7. Se valida y se formatea solo.'],
     ['pv-razonSocial-', 'Nombre legal de la empresa, tal como sale en sus facturas.'],
@@ -3892,7 +3892,7 @@ window.CLOUD = {
     if (d.ofrece) {
       out.push('despacho ' + (Number(d.costo) > 0 ? App.clp(d.costo) : 'sin costo'));
       if (d.gratisDesde > 0) out.push('gratis desde ' + App.clp(d.gratisDesde));
-      if (d.minimoPedido > 0) out.push('mínimo ' + App.clp(d.minimoPedido));
+      if (d.minimoPedido > 0) out.push('compra mínima ' + App.clp(d.minimoPedido));
     }
     if (p.retiro !== false) out.push('ir a buscar' + (Number(p.costoVisita) > 0 ? ' (' + App.clp(p.costoVisita) + ')' : ''));
     return out.join(' · ') || '—';
@@ -3986,9 +3986,9 @@ window.CLOUD = {
         h('td', null, App.select({ fk: 'pv-f-' + p.id, value: p.factura || 'no', options: FACTURA, onChange: function (v) { upd(p, function (x) { x.factura = v; }); } })),
         h('td', null, h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!d.ofrece, onchange: function (ev) { setD('ofrece', ev.target.checked); } }), ' despacha'),
           d.ofrece ? h('div', { class: 'desp' },
+            h('span', null, 'compra mínima ', App.numInput({ fk: 'pv-dm-' + p.id, cls: 'w80', value: d.minimoPedido, ph: '—', onChange: function (n) { setD('minimoPedido', n); }, onEmpty: function () { setD('minimoPedido', null); } })),
             h('span', null, 'costo ', App.numInput({ fk: 'pv-dc-' + p.id, cls: 'w70', value: d.costo || 0, onChange: function (n) { setD('costo', n); } })),
-            h('span', null, 'gratis desde ', App.numInput({ fk: 'pv-dg-' + p.id, cls: 'w80', value: d.gratisDesde, ph: '—', onChange: function (n) { setD('gratisDesde', n); }, onEmpty: function () { setD('gratisDesde', null); } })),
-            h('span', null, 'mínimo ', App.numInput({ fk: 'pv-dm-' + p.id, cls: 'w80', value: d.minimoPedido, ph: '—', onChange: function (n) { setD('minimoPedido', n); }, onEmpty: function () { setD('minimoPedido', null); } }))) : null),
+            h('span', null, 'gratis desde ', App.numInput({ fk: 'pv-dg-' + p.id, cls: 'w80', value: d.gratisDesde, ph: '—', onChange: function (n) { setD('gratisDesde', n); }, onEmpty: function () { setD('gratisDesde', null); } }))) : null),
         h('td', null, h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: p.retiro !== false, onchange: function (ev) { upd(p, function (x) { x.retiro = ev.target.checked; }); } }), ' se puede ir'),
           p.retiro !== false ? h('div', { class: 'desp' }, h('span', { title: 'Lo que te cuesta ir: bencina, estacionamiento, tiempo' }, 'costo visita ',
             App.numInput({ fk: 'pv-cv-' + p.id, cls: 'w70', value: p.costoVisita || 0, onChange: function (n) { upd(p, function (x) { x.costoVisita = n; }, 'pcv' + p.id); } }))) : null),
