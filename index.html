@@ -217,9 +217,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T09:10:06Z">
+<meta name="build" content="2026-10-03T09:30:05Z">
 <script>
-window.BUILD = "2026-10-03T09:10:06Z";
+window.BUILD = "2026-10-03T09:30:05Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -3364,7 +3364,8 @@ window.CLOUD = {
             else if (esIns) crearInsumoRapido(v, function (id) { upd(function (x) { x.lineas[i].ref = id; }); });
             else { App.toast('No hay una receta base con ese nombre'); App.render(); }
           } }),
-          l.borrador ? h('small', { class: 'warn-t' }, ' borrador') : null, fila.sustituido ? h('small', { class: 'sim-t' }, ' 🧪 sustituido en escenario') : null),
+          l.borrador ? h('span', null, ' ', h('small', { class: 'warn-t' }, 'borrador'), ' ',
+            App.btn('✓ Validar', function () { upd(function (x) { x.lineas[i].borrador = false; }); }, 'small', 'La cantidad estimada está bien: dar esta línea por revisada')) : null, fila.sustituido ? h('small', { class: 'sim-t' }, ' 🧪 sustituido en escenario') : null),
         h('td', { class: 'r' }, cantInput, h('small', null, ' ' + unidad)),
         h('td', null, App.textInput({ fk: 'l-nt-' + r.id + '-' + i, value: l.nota || '', ph: 'corte / uso', onChange: function (v) { upd(function (x) { x.lineas[i].nota = v; }, 'ln' + i); } })),
         h('td', { class: 'r' }, fila.missing ? App.badge('sin precio', 'bad') : App.clp(fila.porPorcion != null ? fila.porPorcion : fila.subtotal)),
@@ -3386,6 +3387,12 @@ window.CLOUD = {
         h('div', { class: 'row gap mt' },
           App.btn('+ Insumo', function () { upd(function (x) { x.lineas.push({ tipo: 'insumo', ref: null, cantidad: 0, nota: '' }); }); }, 'small primary'),
           App.btn('+ Sub-receta', function () { upd(function (x) { x.lineas.push({ tipo: 'receta', ref: null, cantidad: 1, nota: '' }); }); }, 'small'),
+          r.lineas.some(function (l) { return l.borrador; }) ? App.btn('✓ Validar todas (' + r.lineas.filter(function (l) { return l.borrador; }).length + ')', function () {
+            App.confirm('¿Dar por buenas las cantidades de las ' + r.lineas.filter(function (l) { return l.borrador; }).length + ' líneas en borrador de "' + r.nombre + '"?', function () {
+              upd(function (x) { x.lineas.forEach(function (l) { l.borrador = false; }); });
+              App.toast('Líneas validadas');
+            }, 'Validar todas');
+          }, 'small', 'Úsalo cuando ya revisaste toda la receta') : null,
           h('span', { class: 'spacer' }),
           h('span', { class: 'mut' }, 'Escalar cantidades ×'), App.numInput({ fk: 'r-esc', cls: 'w60', value: App.ui.escalar || 1, onChange: function (n) { App.ui.escalar = n; } }),
           App.btn('Aplicar', function () {
@@ -3443,7 +3450,8 @@ window.CLOUD = {
     const cocina = App.card('Para la cocina (sin costos)', h('div', { class: 'stack' },
       h('label', { class: 'block' }, 'Pasos de preparación', h('textarea', { rows: 5, 'data-fk': 'r-pasos', placeholder: 'Describe el procedimiento…', oninput: function (ev) { upd(function (x) { x.pasos = ev.target.value; x.pasosBorrador = false; }, 'rps'); } }, r.pasos || '')),
       h('label', { class: 'block' }, 'Sugerencia de montaje / empaque', h('textarea', { rows: 2, 'data-fk': 'r-mont', oninput: function (ev) { upd(function (x) { x.montaje = ev.target.value; }, 'rmo'); } }, r.montaje || '')),
-      r.pasosBorrador ? h('small', { class: 'warn-t' }, 'Los pasos son un borrador generado: revísalos antes de entregarlos al personal.') : null));
+      r.pasosBorrador ? h('div', { class: 'row gap wrap' }, h('small', { class: 'warn-t' }, 'Los pasos son un borrador generado: revísalos antes de entregarlos al personal.'),
+        App.btn('✓ Pasos revisados', function () { upd(function (x) { x.pasosBorrador = false; }); }, 'small', 'Quita la marca de borrador sin cambiar el texto')) : null));
 
     return h('div', { class: 'stack' }, cab, alerta, r.revisar ? h('div', { class: 'checks' }, h('div', { class: 'chk-warn' }, '📝 Revisión de migración: ' + r.revisar)) : null, tablaLineas, costos, cocina);
   }
