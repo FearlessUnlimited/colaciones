@@ -212,9 +212,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T08:15:18Z">
+<meta name="build" content="2026-10-03T08:20:19Z">
 <script>
-window.BUILD = "2026-10-03T08:15:18Z";
+window.BUILD = "2026-10-03T08:20:19Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -302,6 +302,46 @@ window.CLOUD = {
   function normNombre(s) {
     return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
   }
+  // Texto equivalente al ya existente (sin importar mayúsculas, tildes, guiones ni espacios dobles): devuelve el existente.
+  // Así "lentejas", "Lentejas" y " lentejas " son una sola familia, categoría o línea.
+  function canonico(existentes, texto) {
+    const t = String(texto == null ? '' : texto).replace(/\s+/g, ' ').trim();
+    const k = normNombre(t);
+    if (!k) return t;
+    const hit = (existentes || []).find(function (e) { return e && normNombre(e) === k; });
+    return hit || t;
+  }
+  // Une las variantes ya guardadas de familia, categoría y línea de menú: gana la más usada (a igualdad, la primera).
+  function unificarTextos(state) {
+    let cambios = 0;
+    const unir = function (lista, campo) {
+      const grupos = new Map();
+      lista.forEach(function (x) {
+        const v = x[campo];
+        if (typeof v !== 'string' || !normNombre(v)) return;
+        const k = normNombre(v);
+        if (!grupos.has(k)) grupos.set(k, new Map());
+        const g = grupos.get(k); g.set(v, (g.get(v) || 0) + 1);
+      });
+      const ganador = new Map();
+      grupos.forEach(function (g, k) {
+        let mejor = null, n = -1;
+        g.forEach(function (c, v) { if (c > n) { mejor = v; n = c; } });
+        ganador.set(k, mejor);
+      });
+      lista.forEach(function (x) {
+        const v = x[campo];
+        if (typeof v !== 'string' || !normNombre(v)) return;
+        const w = ganador.get(normNombre(v));
+        if (w !== v) { x[campo] = w; cambios++; }
+      });
+    };
+    unir(state.insumos || [], 'familia');
+    unir(state.insumos || [], 'categoria');
+    unir(state.recetas || [], 'linea');
+    return cambios;
+  }
+
   // id determinista: dos usuarios que migran los mismos datos generan el mismo proveedor
   function idProveedor(nombre) { return 'PRV-' + normNombre(nombre).replace(/ /g, '-'); }
 
@@ -662,7 +702,7 @@ window.CLOUD = {
       });
       if (ins.familia) {
         ctx.state.insumos.forEach(function (s) {
-          if (s.id === ins.id || s.familia !== ins.familia || s.unidad !== ins.unidad) return;
+          if (s.id === ins.id || normNombre(s.familia) !== normNombre(ins.familia) || s.unidad !== ins.unidad) return;
           if (!dietaCompatible(ctx, r, s)) return;
           const c = costoInsumo(ctx, s.id);
           if (c.missing) return;
@@ -1228,7 +1268,7 @@ window.CLOUD = {
     alternativasReceta: alternativasReceta, volumenSemanal: volumenSemanal, usoSemanalInsumos: usoSemanalInsumos,
     ahorrosPosibles: ahorrosPosibles, pesoEnCosto: pesoEnCosto, listaCompras: listaCompras, chequeos: chequeos,
     puntoEquilibrio: puntoEquilibrio, SEMANAS_MES: SEMANAS_MES, fechaMenos: fechaMenos,
-    normNombre: normNombre, idProveedor: idProveedor, nuevoProveedor: nuevoProveedor, asegurarProveedores: asegurarProveedores,
+    normNombre: normNombre, canonico: canonico, unificarTextos: unificarTextos, idProveedor: idProveedor, nuevoProveedor: nuevoProveedor, asegurarProveedores: asegurarProveedores,
     proveedorDe: proveedorDe, daFactura: daFactura, costoBrutoOferta: costoBrutoOferta,
     historialPrecios: historialPrecios, variacionInsumo: variacionInsumo, inflacionCanasta: inflacionCanasta,
     TIPOS_DOC: TIPOS_DOC, validarRut: validarRut, formatearRut: formatearRut, tipoDocCompra: tipoDocCompra, esFactura: esFactura,
@@ -1455,7 +1495,7 @@ window.CLOUD = {
     if (s.escenarioActivo === undefined) s.escenarioActivo = null;
     s.meta = s.meta || { version: 1 };
     s.compras = s.compras || [];
-    if (window.Engine) window.Engine.asegurarProveedores(s);   // proveedores desde los "lugar" de las ofertas
+    if (window.Engine) { window.Engine.asegurarProveedores(s); window.Engine.unificarTextos(s); }   // proveedores desde los "lugar"; familias/categorías sin variantes de mayúsculas
     return s;
   }
 
@@ -2559,6 +2599,12 @@ window.CLOUD = {
     return App.cache.uso;
   };
 
+  // insumo por nombre, sin distinguir mayúsculas ni tildes
+  App.insumoPorNombre = function (nombre) {
+    const k = E.normNombre(nombre);
+    return k ? Store.get().insumos.find(function (i) { return E.normNombre(i.nombre) === k; }) || null : null;
+  };
+
   App.costoVisible = function (unit, unidad) {
     if (unidad === 'g') return App.clp(unit * 1000) + '/kg';
     if (unidad === 'ml') return App.clp(unit * 1000) + '/L';
@@ -2635,18 +2681,26 @@ window.CLOUD = {
     return App.select({ fk: o.fk, value: o.value, options: opciones, onChange: function (v) {
       if (v !== '__nuevo') { o.onSet(v); return; }
       App.render();   // deja el selector en su valor mientras se pide el nombre
-      App.prompt(o.titulo, '', function (n) { o.onSet(n); }, o.ph);
+      App.prompt(o.titulo, '', function (n) {
+        const c = E.canonico(o.valores, n);
+        if (c !== n.replace(/\s+/g, ' ').trim()) App.toast('Ya existía "' + c + '": se usó esa');
+        o.onSet(c);
+      }, o.ph);
     } });
   }
-  function listaCats(s, actual) {
-    return Array.from(new Set(CATS.concat(s.insumos.map(function (i) { return i.categoria; }), actual ? [actual] : []).filter(Boolean))).sort(function (a, b) { return a.localeCompare(b, 'es'); });
+  // valores distintos (sin variantes de mayúsculas/tildes), ordenados
+  function unicos(valores) {
+    const out = [];
+    valores.forEach(function (v) { if (v && !out.some(function (x) { return E.normNombre(x) === E.normNombre(v); })) out.push(v); });
+    return out.sort(function (a, b) { return a.localeCompare(b, 'es'); });
   }
-  function listaFams(s, actual) {
-    return Array.from(new Set(s.insumos.map(function (i) { return i.familia; }).concat(actual ? [actual] : []).filter(Boolean))).sort(function (a, b) { return a.localeCompare(b, 'es'); });
-  }
+  function listaCats(s, actual) { return unicos(s.insumos.map(function (i) { return i.categoria; }).concat(actual ? [actual] : [], CATS)); }
+  function listaFams(s, actual) { return unicos(s.insumos.map(function (i) { return i.familia; }).concat(actual ? [actual] : [])); }
 
   function nuevoInsumo() {
     App.prompt('Nuevo insumo', '', function (nombre) {
+      const ya = App.insumoPorNombre(nombre);
+      if (ya) { App.toast('Ya existe el insumo "' + ya.nombre + '": te llevé a él'); App.go('insumos', ya.id); return; }
       const id = Store.uid('INS-');
       Store.mutate(function (s) {
         s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: 'vegano' });
@@ -2669,7 +2723,11 @@ window.CLOUD = {
       h('div', { class: 'card-h' }, h('h3', null, ins.nombre),
         h('div', null, App.btn('Eliminar insumo', function () { eliminar(ins); }, 'small danger'))),
       h('div', { class: 'form-grid' },
-        h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); } })),
+        h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); } }),
+          (function () {
+            const otro = s.insumos.find(function (x) { return x.id !== ins.id && E.normNombre(x.nombre) === E.normNombre(ins.nombre); });
+            return otro ? h('small', { class: 'bad-t' }, 'Ya existe otro insumo con este nombre: las recetas no podrán distinguirlos.') : null;
+          })()),
         h('label', null, 'Categoría', selConNuevo({ fk: 'ins-categoria', value: ins.categoria, valores: listaCats(s, ins.categoria), nuevo: '+ Nueva categoría…', titulo: 'Nueva categoría',
           ph: 'Ej.: Congelados', onSet: function (v) { upd(function (x) { x.categoria = v; }); } })),
         h('label', null, 'Unidad de receta', App.select({ fk: 'ins-unidad', value: ins.unidad, options: UNIDADES, onChange: function (v) { upd(function (x) { x.unidad = v; }); } })),
@@ -2877,7 +2935,10 @@ window.CLOUD = {
     const inp = h('input', { type: 'text', class: 'wide', placeholder: 'Nombre de la receta' });
     App.modal('Nueva receta', h('div', { class: 'stack' }, h('label', null, 'Nombre', inp), h('label', null, 'Tipo', sel)), function (close) {
       return [App.btn('Cancelar', close), App.btn('Crear', function () {
-        const n = inp.value.trim(); if (!n) return; close();
+        const n = inp.value.trim(); if (!n) return;
+        const ya = Store.get().recetas.find(function (r) { return E.normNombre(r.nombre) === E.normNombre(n); });
+        if (ya) { close(); App.toast('Ya existe una receta llamada "' + ya.nombre + '": te llevé a ella'); App.go('recetas', ya.id); return; }
+        close();
         App.go('recetas', App.nuevaReceta(n, sel.dataset.v || sel.value));
       }, 'primary')];
     });
@@ -2913,6 +2974,8 @@ window.CLOUD = {
   }
 
   function crearInsumoRapido(nombre, onCreated) {
+    const ya = App.insumoPorNombre(nombre);
+    if (ya) { onCreated(ya.id); return; }
     App.confirm('"' + nombre + '" no existe en Insumos. ¿Crearlo ahora (podrás ponerle precio en Insumos y compras)?', function () {
       const id = Store.uid('INS-');
       Store.mutate(function (s) {
@@ -2952,7 +3015,8 @@ window.CLOUD = {
         h('label', null, 'Nombre', App.textInput({ fk: 'r-nombre', value: r.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'rn'); } })),
         h('label', null, 'Tipo', App.select({ fk: 'r-tipo', value: r.tipo, options: TIPOS, onChange: function (v) { upd(function (x) { x.tipo = v; }); } })),
         h('label', null, 'Línea de menú', r.tipo === 'plato' ? App.select({ fk: 'r-linea', value: r.linea, options: LINEAS.map(function (l) { return [l, l]; }), onChange: function (v) { upd(function (x) { x.linea = v; }); } })
-          : App.textInput({ fk: 'r-linea2', value: r.linea || '', onChange: function (v) { upd(function (x) { x.linea = v; }, 'rl'); } })),
+          : App.textInput({ fk: 'r-linea2', value: r.linea || '', onChange: function (v) { upd(function (x) { x.linea = v; }, 'rl'); },
+            onCommit: function (v) { const c = E.canonico(s.recetas.filter(function (x) { return x.id !== r.id; }).map(function (x) { return x.linea; }), v); if (c !== v) upd(function (x) { x.linea = c; }); } })),
         h('label', null, r.tipo === 'base' ? 'Porciones del lote' : 'Porciones que rinde', App.numInput({ fk: 'r-porc', value: r.porciones, onChange: function (n) { if (n > 0) upd(function (x) { x.porciones = n; }, 'rp'); } })),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: r.activo !== false, onchange: function (ev) { upd(function (x) { x.activo = ev.target.checked; }); } }), ' Activa en la carta')),
       h('label', { class: 'block' }, 'Descripción', h('textarea', { rows: 2, 'data-fk': 'r-desc', oninput: function (ev) { upd(function (x) { x.descripcion = ev.target.value; }, 'rd'); } }, r.descripcion || '')));
@@ -2976,7 +3040,8 @@ window.CLOUD = {
           onCommit: function (v) {
             v = v.trim(); if (!v) return;
             const lista = esIns ? s.insumos : subs;
-            const hit = lista.find(function (x) { return x.nombre.toLowerCase() === v.toLowerCase(); }) || lista.find(function (x) { return x.nombre.toLowerCase().indexOf(v.toLowerCase()) >= 0; });
+            const kv = E.normNombre(v);
+            const hit = lista.find(function (x) { return E.normNombre(x.nombre) === kv; }) || lista.find(function (x) { return E.normNombre(x.nombre).indexOf(kv) >= 0; });
             if (hit && !esIns && usaReceta(s, hit.id, r.id)) { App.toast('No se puede: crearía una referencia circular'); App.render(); }
             else if (hit) upd(function (x) { x.lineas[i].ref = hit.id; x.lineas[i].borrador = false; });
             else if (esIns) crearInsumoRapido(v, function (id) { upd(function (x) { x.lineas[i].ref = id; }); });
@@ -2991,7 +3056,7 @@ window.CLOUD = {
           const ai = s.insumos.find(function (x) { return x.id === a; });
           return h('button', { class: 'chip on small', title: 'Quitar alternativa', onclick: function () { upd(function (x) { x.lineas[i].alternativas = x.lineas[i].alternativas.filter(function (y) { return y !== a; }); }); } }, (ai ? ai.nombre : a) + ' ✕');
         }), esIns ? App.textInput({ fk: 'l-alt-' + r.id + '-' + i, cls: 'alt', value: '', ph: '+ alternativa', list: 'dl-ins',
-          onCommit: function (v) { const hit = s.insumos.find(function (x) { return x.nombre.toLowerCase() === v.trim().toLowerCase(); }); if (hit && hit.id !== l.ref) upd(function (x) { x.lineas[i].alternativas = (x.lineas[i].alternativas || []).concat(hit.id); }); else if (v.trim()) App.toast('No existe ese insumo'); } }) : null)),
+          onCommit: function (v) { const hit = App.insumoPorNombre(v); if (hit && hit.id !== l.ref) upd(function (x) { x.lineas[i].alternativas = (x.lineas[i].alternativas || []).concat(hit.id); }); else if (v.trim()) App.toast('No existe ese insumo'); } }) : null)),
         h('td', { class: 'nowrap' }, App.btn('↑', function () { moverLinea(i, -1); }, 'small ghost'), App.btn('↓', function () { moverLinea(i, 1); }, 'small ghost'),
           App.btn('✕', function () { upd(function (x) { x.lineas.splice(i, 1); }); }, 'small ghost')));
     };
@@ -3657,7 +3722,7 @@ window.CLOUD = {
   function formulario() {
     const s = Store.get(), staff = App.esStaff();
     const F = App.ui.cot = App.ui.cot || { insumo: '', lugar: '', marca: '', fl: '', fq: null, precio: null, nota: '' };
-    const ins = s.insumos.find(function (i) { return i.nombre.toLowerCase() === (F.insumo || '').trim().toLowerCase(); });
+    const ins = App.insumoPorNombre(F.insumo);
     const presets = ins ? PRESETS[ins.unidad] || [] : [];
     if (ins && !F.fl && presets.length) { F.fl = presets[0][0]; F.fq = presets[0][1]; }
     const lugares = Array.from(new Set((s.proveedores || []).filter(function (p) { return p.activo !== false; }).map(function (p) { return p.nombre; })
@@ -3988,12 +4053,15 @@ window.CLOUD = {
       }, 'Ej.: Mayorista 10 Viña');
     };
 
+    const nombres = new Map();
+    lista.forEach(function (p) { const k = E.normNombre(p.nombre); nombres.set(k, (nombres.get(k) || 0) + 1); });
     const fila = function (p) {
       const d = p.despacho || {};
       const setD = function (k, v) { upd(p, function (x) { x.despacho = Object.assign({ ofrece: false, costo: 0, gratisDesde: null, minimoPedido: null }, x.despacho || {}); x.despacho[k] = v; }, 'pd' + k + p.id); };
       return h('tr', { class: p.activo === false ? 'off' : '' },
         h('td', null, App.textInput({ fk: 'pv-n-' + p.id, value: p.nombre, onChange: function (v) { if (v.trim()) renombrar(p, v); }, onCommit: function () { finRenombrar(p); } }),
           (p.alias || []).length ? h('div', null, h('small', { title: 'También se reconoce como' }, '≈ ' + p.alias.join(', '))) : null,
+          nombres.get(E.normNombre(p.nombre)) > 1 ? h('div', null, App.badge('nombre repetido: usa Fusionar…', 'bad')) : null,
           h('div', null, p.rut ? h('small', { class: E.validarRut(p.rut) ? '' : 'bad-t' }, 'RUT ' + p.rut + (p.razonSocial ? ' · ' + p.razonSocial : '')) :
             p.factura !== 'no' ? App.badge('faltan datos de facturación', 'warn') : null)),
         h('td', null, App.select({ fk: 'pv-t-' + p.id, cls: 'w90', value: p.tipo || 'otro', options: TIPOS, onChange: function (v) { upd(p, function (x) { x.tipo = v; }); } })),
@@ -4070,7 +4138,7 @@ window.CLOUD = {
   function formularioCompra() {
     const s = Store.get(), F = App.ui.compra, ctx = App.ctx(), f = 1 + (ctx.p.ivaPct || 0) / 100;
     const prov = App.proveedor(F.proveedorId);
-    const insDe = function (l) { const k = (l.insumo || '').trim().toLowerCase(); return s.insumos.find(function (i) { return i.nombre.toLowerCase() === k; }) || null; };
+    const insDe = function (l) { return App.insumoPorNombre(l.insumo); };
     const total = F.lineas.reduce(function (t, l) { return t + (Number(l.total) || 0); }, 0);
     const conDesp = total + (Number(F.despacho) || 0);
     const factura = E.esFactura(F.tipoDoc);
