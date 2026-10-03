@@ -52,6 +52,7 @@ input.wide { width: 100%; } input.ing { width: 100%; min-width: 180px; } input.a
 .tab { padding: 7px 12px; border-radius: 8px; color: var(--ink); text-decoration: none; white-space: nowrap; font-weight: 500; }
 .tab:hover { background: var(--surface2); }
 .tab.on { background: var(--accent); color: var(--accent-ink); }
+.tab .count { display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--warn); color: #fff; font-size: 11px; text-align: center; }
 .tools { display: flex; align-items: center; gap: 8px; }
 .saved { white-space: nowrap; } .saved.bad { color: var(--bad); }
 .esc-banner { flex-basis: 100%; background: var(--sim-soft); color: var(--ink); border: 1px solid var(--sim); border-radius: 8px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -244,8 +245,11 @@ window.CLOUD = {
     return Object.assign({}, DEFAULT_PARAMS, state.params || {}, (opts && opts.params) || {});
   }
 
+  // fecha local (no UTC: en Chile de noche UTC ya es el día siguiente)
   function hoyISO(p) {
-    return p.hoy || new Date().toISOString().slice(0, 10);
+    if (p.hoy) return p.hoy;
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
   function diasEntre(a, b) {
@@ -284,8 +288,9 @@ window.CLOUD = {
     return denom > 0 ? precioOferta(ctx, o) / denom : 0;
   }
 
+  // ofertas utilizables: disponibles y ya revisadas (una cotización "pendiente" no entra a los costos hasta aprobarla)
   function ofertasDisponibles(ctx, insumoId) {
-    return (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return o.disponible !== false; });
+    return (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return o.disponible !== false && !o.pendiente; });
   }
 
   // oferta/costo vigente de un insumo según modo (preferida | barata | promedio) o fijación de escenario
@@ -294,7 +299,7 @@ window.CLOUD = {
     let res = { unit: 0, oferta: null, missing: true, modo: ctx.p.modoOferta };
     const pin = ctx.opts.ofertaElegida && ctx.opts.ofertaElegida[insumoId];
     let lista = ofertasDisponibles(ctx, insumoId);
-    if (!lista.length) lista = ctx.ofertasPorInsumo.get(insumoId) || [];
+    if (!lista.length) lista = (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return !o.pendiente; });
     if (pin && ctx.ofertas.get(pin)) {
       const o = ctx.ofertas.get(pin);
       res = { unit: costoNetoOferta(ctx, o), oferta: o, missing: false, modo: 'fijada' };
@@ -559,7 +564,7 @@ window.CLOUD = {
       const q = (Number(ln.cantidad) || 0) / porciones;
       const opciones = [];
       (ctx.ofertasPorInsumo.get(ln.ref) || []).forEach(function (o) {
-        if (o.disponible === false) return;
+        if (o.disponible === false || o.pendiente) return;
         if (actual.oferta && o.id === actual.oferta.id) return;
         const c = costoNetoOferta(ctx, o);
         opciones.push({ tipo: 'oferta', insumoId: ln.ref, ofertaId: o.id, nombre: ins.nombre, lugar: o.lugar, marca: o.marca,
@@ -746,7 +751,7 @@ window.CLOUD = {
   'use strict';
   const ORDEN_UPSERT = ['insumos', 'recetas', 'ofertas', 'recetas_precios', 'plan', 'ajustes'];
   const ORDEN_DELETE = ['ofertas', 'recetas_precios', 'plan', 'ajustes', 'insumos', 'recetas'];
-  const TABLAS_TODOS = ['insumos', 'recetas', 'plan'];
+  const TABLAS_TODOS = ['insumos', 'recetas', 'plan', 'ofertas'];   // ofertas: la base solo entrega las propias a quien no es staff
   const TABLAS_STAFF = ['insumos', 'ofertas', 'recetas', 'recetas_precios', 'plan', 'ajustes'];
   const CAMPOS_PRECIO = ['pvp', 'costoManual', 'envaseManual'];
   const LOTE = 200;
@@ -836,9 +841,13 @@ window.CLOUD = {
       return out;
     }
 
-    async function pasada(state) {
-      const actual = mapa(aFilas(state));
-      const d = diferencias(snap, actual);
+    // tablas: si se indica, solo se comparan y escriben esas tablas (ej. cocina → solo sus cotizaciones)
+    async function pasada(state, tablas) {
+      const dentro = function (k) { return !tablas || tablas.indexOf(k.slice(0, k.indexOf('|'))) >= 0; };
+      const actual = new Map(), base = new Map();
+      mapa(aFilas(state)).forEach(function (v, k) { if (dentro(k)) actual.set(k, v); });
+      snap.forEach(function (j, k) { if (dentro(k)) base.set(k, j); });
+      const d = diferencias(base, actual);
       for (const t of ORDEN_UPSERT) {
         const filas = d.ups[t] || [];
         for (let i = 0; i < filas.length; i += LOTE) {
@@ -853,7 +862,8 @@ window.CLOUD = {
           if (r.error) throw r.error;
         }
       }
-      const nuevo = new Map(); actual.forEach(function (v, k) { nuevo.set(k, v.json); });
+      const nuevo = new Map(); snap.forEach(function (j, k) { if (!dentro(k)) nuevo.set(k, j); });
+      actual.forEach(function (v, k) { nuevo.set(k, v.json); });
       snap = nuevo;
       return Object.keys(d.ups).reduce(function (s, t) { return s + d.ups[t].length; }, 0) + Object.keys(d.dels).reduce(function (s, t) { return s + d.dels[t].length; }, 0);
     }
@@ -879,13 +889,13 @@ window.CLOUD = {
       // acepta un estado traído del servidor como nueva base
       aceptar: function (base) { snap = base; },
       // guarda los cambios del estado (encola si ya hay un guardado en curso)
-      guardar: async function (state) {
+      guardar: async function (state, tablas) {
         pendiente = true;
-        if (enCurso) { siguiente = state; return; }
+        if (enCurso) { siguiente = { state: state, tablas: tablas }; return; }
         enCurso = true; avisar('guardando');
-        let s = state, cambios = 0;
+        let s = { state: state, tablas: tablas }, cambios = 0;
         try {
-          while (s) { siguiente = null; cambios += await pasada(s); s = siguiente; }
+          while (s) { siguiente = null; cambios += await pasada(s.state, s.tablas); s = siguiente; }
           pendiente = false; avisar('ok', cambios);
         } catch (e) {
           avisar('error', (e && (e.message || e.details)) || String(e));
@@ -1247,7 +1257,7 @@ window.CLOUD = {
   }
 
   const NAV = [['panel', 'Panel'], ['platos', 'Platos y PVP'], ['recetas', 'Recetas'], ['insumos', 'Insumos y compras'], ['alternativas', 'Alternativas'],
-    ['cocina', 'Cocina'], ['compras', 'Lista de compras'], ['ajustes', 'Ajustes'], ['usuarios', 'Usuarios']];
+    ['cocina', 'Cocina'], ['cotizaciones', 'Cotizaciones'], ['compras', 'Lista de compras'], ['ajustes', 'Ajustes'], ['usuarios', 'Usuarios']];
 
   function headerNode() {
     const s = Store.get(), esc = App.escenario(), staff = App.esStaff();
@@ -1255,13 +1265,14 @@ window.CLOUD = {
     return h('header', { class: 'top' },
       h('div', { class: 'brand' }, h('span', { class: 'logo' }, '🍲'), h('div', null, h('b', null, 'Colaciones Cerro Jiménez'), h('small', null, 'Costeo, recetas y compras'))),
       h('nav', { class: 'tabs', role: 'tablist' }, NAV.filter(function (n) { return App.puedeVer(n[0]); }).map(function (n) {
-        return h('a', { href: '#/' + n[0], class: 'tab' + (App.route.name === n[0] ? ' on' : ''), role: 'tab' }, n[1]);
+        const pend = n[0] === 'cotizaciones' && App.cotizacionesPendientes ? App.cotizacionesPendientes() : 0;
+        return h('a', { href: '#/' + n[0], class: 'tab' + (App.route.name === n[0] ? ' on' : ''), role: 'tab' }, n[1], pend ? h('span', { class: 'count' }, pend) : null);
       })),
       h('div', { class: 'tools' },
         !staff ? null : App.select({ cls: 'esc-sel', fk: 'esc-sel', value: s.escenarioActivo || '', options: [['', 'Datos reales']].concat(s.escenarios.map(function (e) { return [e.id, '🧪 ' + e.nombre]; })),
           onChange: function (v) { Store.mutate(function (st) { st.escenarioActivo = v || null; }); } }),
         !staff ? null : h('button', { class: 'btn ghost', onclick: function () { Store.undo(); }, disabled: !Store.canUndo(), title: 'Deshacer (Ctrl+Z)' }, '↶ Deshacer'),
-        !staff ? null : h('small', { class: 'saved' + ((App.nube.activo ? App.nube.guardado.estado === 'error' : !Store.storageOk()) ? ' bad' : '') }, guardado),
+        !(staff || App.nube.activo) ? null : h('small', { class: 'saved' + ((App.nube.activo ? App.nube.guardado.estado === 'error' : !Store.storageOk()) ? ' bad' : '') }, guardado),
         App.usuarioHeader ? App.usuarioHeader() : null),
       esc ? h('div', { class: 'esc-banner' }, h('b', null, '🧪 Simulación: ' + esc.nombre), ' — los números de toda la app incluyen este escenario; tus datos reales no cambian.',
         App.btn('Aplicar a datos reales', function () { App.confirm('¿Aplicar los cambios de "' + esc.nombre + '" a tus precios y recetas reales?', function () { App.aplicarEscenario(esc.id); }, 'Aplicar'); }, 'small primary'),
@@ -1331,7 +1342,7 @@ window.CLOUD = {
   App.puedeVer = function (vista) {
     const r = App.rol();
     if (vista === 'usuarios') return N.activo && r === 'admin';
-    if (r === 'cocina') return vista === 'cocina';
+    if (r === 'cocina') return vista === 'cocina' || vista === 'cotizaciones';
     return !!r;
   };
   App.vistaInicial = function () { return App.rol() === 'cocina' ? 'cocina' : 'panel'; };
@@ -1344,9 +1355,6 @@ window.CLOUD = {
     N.guardado = { estado: estado, msg: msg, hora: estado === 'ok' ? new Date() : N.guardado.hora };
     const el = document.querySelector('.saved');
     if (el) { el.textContent = App.textoGuardado(); el.className = 'saved' + (estado === 'error' ? ' bad' : ''); }
-    if (estado === 'error' && !N.reintento) {
-      N.reintento = setTimeout(function () { N.reintento = null; if (N.fase === 'listo' && App.esStaff()) guardar(Store.get()); }, 8000);
-    }
   }
   App.textoGuardado = function () {
     const g = N.guardado;
@@ -1354,7 +1362,28 @@ window.CLOUD = {
     if (g.estado === 'error') return '⚠ Sin guardar: reintentando (' + (g.msg || 'error') + ')';
     return g.hora ? '☁ Guardado ' + g.hora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : '☁ Sincronizado';
   };
-  function guardar(state) { if (App.esStaff()) N.sync.guardar(state).catch(function () { /* onEstado ya avisó y programó reintento */ }); }
+  // staff guarda todo; el resto solo sus cotizaciones (la base rechaza cualquier otra cosa)
+  function guardar(state) {
+    if (!App.rol()) return;
+    N.sync.guardar(state, App.esStaff() ? undefined : ['ofertas']).catch(function (e) {
+      const m = (e && (e.message || e.details)) || '';
+      if (/row-level security|permission denied|violates/i.test(m)) {
+        App.toast('Ese cambio no está permitido para tu rol; se restauraron los datos.');
+        recargarDatos();
+      } else if (!N.reintento) {
+        N.reintento = setTimeout(function () { N.reintento = null; if (N.fase === 'listo') guardar(Store.get()); }, 8000);
+      }
+    });
+  }
+  async function recargarDatos() {
+    try {
+      const r = await N.sync.traer(App.esStaff());
+      r.state.escenarioActivo = Store.get().escenarioActivo;
+      N.sync.aceptar(r.base);
+      N.guardado = { estado: 'ok', msg: '', hora: N.guardado.hora };
+      Store.establecer(r.state);
+    } catch (e) { /* sin conexión: el próximo refresco lo intenta */ }
+  }
 
   /* ---------- sesión y carga ---------- */
   async function leerPerfil() {
@@ -1628,7 +1657,7 @@ window.CLOUD = {
         const viejo = ofs.some(function (o) { return precioViejo(o, p); });
         return h('tr', { class: i.id === sel ? 'on' : '', onclick: function () { App.go('insumos', i.id); } },
           h('td', null, h('div', { class: 'nm' }, i.nombre), h('small', null, i.categoria, c.missing ? ' ' : null, c.missing ? App.badge('sin precio', 'bad') : null,
-            viejo ? App.badge('precio viejo', 'warn') : null, ofs.length > 1 ? App.badge(ofs.length + ' ofertas', 'info') : null)),
+            viejo ? App.badge('precio viejo', 'warn') : null, ofs.some(function (o) { return o.pendiente; }) ? App.badge('cotización nueva', 'info') : null, ofs.length > 1 ? App.badge(ofs.length + ' ofertas', 'info') : null)),
           h('td', { class: 'r' }, c.missing ? '—' : App.costoVisible(c.unit, i.unidad)),
           h('td', null, c.oferta ? c.oferta.lugar : (c.modo === 'promedio' ? 'promedio' : '—')),
           h('td', { class: 'c' }, u.length ? u.length + ' plato' + (u.length > 1 ? 's' : '') : h('span', { class: 'mut' }, '—')));
@@ -1687,7 +1716,8 @@ window.CLOUD = {
       const esUsada = activo.oferta && activo.oferta.id === o.id;
       return h('tr', { class: (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada' : '') },
         h('td', null, App.textInput({ fk: 'o-lugar-' + o.id, value: o.lugar, ph: 'Lugar / proveedor', list: 'dl-lugares', onChange: function (v) { upO(o, function (x) { x.lugar = v; }, 'lg' + o.id); } })),
-        h('td', null, App.textInput({ fk: 'o-marca-' + o.id, value: o.marca, ph: 'Marca / detalle', onChange: function (v) { upO(o, function (x) { x.marca = v; }, 'mc' + o.id); } })),
+        h('td', null, App.textInput({ fk: 'o-marca-' + o.id, value: o.marca, ph: 'Marca / detalle', onChange: function (v) { upO(o, function (x) { x.marca = v; }, 'mc' + o.id); } }),
+          o.pendiente ? h('div', null, App.badge('por revisar', 'warn')) : null, o.autor ? h('div', null, h('small', null, 'cotizó ' + o.autor)) : null),
         h('td', null, App.textInput({ fk: 'o-fl-' + o.id, cls: 'w90', value: o.formatoLabel, ph: 'ej. saco 25 kg', onChange: function (v) { upO(o, function (x) { x.formatoLabel = v; }, 'fl' + o.id); } })),
         h('td', null, App.numInput({ fk: 'o-fq-' + o.id, cls: 'w70', value: o.formatoQty, title: 'Cantidad por formato en ' + ins.unidad + ' (ej. 1 kg = 1000 g)',
           onChange: function (n) { if (n > 0) upO(o, function (x) { x.formatoQty = n; }, 'fq' + o.id); } }), h('small', null, ' ' + ins.unidad)),
@@ -1708,7 +1738,7 @@ window.CLOUD = {
         h('td', null, App.select({ fk: 'o-fu-' + o.id, cls: 'w90', value: o.fuente || 'estimado', options: FUENTES, onChange: function (v) { upO(o, function (x) { x.fuente = v; }); } }),
           h('small', { class: precioViejo(o, p) ? 'warn-t' : '' }, o.fecha || '')),
         h('td', { class: 'c' }, h('input', { type: 'radio', name: 'pref-' + ins.id, checked: !!o.preferida, title: 'Oferta preferida (la que usan los costos)',
-          onchange: function () { Store.mutate(function (st) { st.ofertas.forEach(function (x) { if (x.insumoId === ins.id) x.preferida = (x.id === o.id); }); }); } })),
+          onchange: function () { Store.mutate(function (st) { st.ofertas.forEach(function (x) { if (x.insumoId === ins.id) x.preferida = (x.id === o.id); if (x.id === o.id) x.pendiente = false; }); }); } })),
         h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: o.disponible !== false, title: 'Disponible', onchange: function (ev) { upO(o, function (x) { x.disponible = ev.target.checked; }); } })),
         h('td', null, App.btn('✕', function () {
           if (ofs.length <= 1) { App.toast('Cada insumo necesita al menos una oferta'); return; }
@@ -2484,6 +2514,8 @@ window.CLOUD = {
     if (pocos.length) alertas.push(alerta('📝', pocos.length + ' plato(s) con menos de 5 ingredientes: probablemente incompletos', 'info', function () { App.go('recetas', pocos[0].id); }));
     if (sinEnvase.length) alertas.push(alerta('📝', sinEnvase.length + ' plato(s) sin envase asignado', 'info', function () { App.go('recetas', sinEnvase[0].id); }));
     if (ah.filas.length) alertas.push(alerta('💡', 'Podrías ahorrar ~' + App.clp(ahTotal) + '/mes cambiando de proveedor en ' + ah.filas.length + ' insumo(s)', 'good', function () { App.go('alternativas', 'proveedores'); }));
+    const pendCot = App.cotizacionesPendientes ? App.cotizacionesPendientes() : 0;
+    if (pendCot) alertas.unshift(alerta('📥', pendCot + ' cotización(es) nueva(s) por revisar', 'info', function () { App.go('cotizaciones'); }));
     if (!alertas.length) alertas.push(alerta('✅', 'Todo en orden.', 'good'));
 
     return h('div', { class: 'stack' },
@@ -2614,6 +2646,142 @@ window.CLOUD = {
       h('div', { class: 'chips big noprint' }, App.chip('Recetas', modo === 'receta', function () { App.go('cocina'); }), App.chip('Producción del día', modo === 'dia', function () { App.go('cocina', 'dia'); }),
         h('span', { class: 'mut' }, 'Vista para el personal: sin costos ni precios.')),
       modo === 'dia' ? modoDia(s) : modoReceta(s));
+  };
+})();
+
+/* src/ui/cotizaciones.js */
+/* Cotizaciones: cualquier rol registra precios que vio; solo admin/gerente las revisan y eligen cuál se usa.
+ * Quien no es staff solo ve sus propias cotizaciones (lo garantiza la base de datos). */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const PRESETS = {
+    g: [['kg', 1000], ['500 g', 500], ['250 g', 250], ['saco 25 kg', 25000]],
+    ml: [['litro', 1000], ['500 ml', 500], ['bidón 5 L', 5000]],
+    un: [['unidad', 1], ['docena', 12], ['bandeja 30', 30]]
+  };
+
+  function yo() {
+    const N = App.nube;
+    if (N.activo && N.perfil) return { id: N.user.id, nombre: N.perfil.nombre || N.perfil.email };
+    return { id: 'local', nombre: 'Yo' };
+  }
+  App.cotizacionesPendientes = function () {
+    return App.esStaff() ? Store.get().ofertas.filter(function (o) { return o.pendiente; }).length : 0;
+  };
+  function precioPorBase(precio, qty, unidad) {
+    if (!(precio > 0) || !(qty > 0)) return '—';
+    const u = precio / qty;
+    return unidad === 'g' ? App.clp(u * 1000) + '/kg' : unidad === 'ml' ? App.clp(u * 1000) + '/L' : App.clpU(u) + '/un';
+  }
+
+  /* ---------- formulario ---------- */
+  function formulario() {
+    const s = Store.get(), staff = App.esStaff();
+    const F = App.ui.cot = App.ui.cot || { insumo: '', lugar: '', marca: '', fl: '', fq: null, precio: null, nota: '' };
+    const ins = s.insumos.find(function (i) { return i.nombre.toLowerCase() === (F.insumo || '').trim().toLowerCase(); });
+    const presets = ins ? PRESETS[ins.unidad] || [] : [];
+    if (ins && !F.fl && presets.length) { F.fl = presets[0][0]; F.fq = presets[0][1]; }
+    const lugares = Array.from(new Set(s.ofertas.map(function (o) { return o.lugar; }).filter(Boolean)));
+
+    const enviar = function () {
+      if (!ins) { App.toast('Elige un insumo de la lista'); return; }
+      if (!(F.precio > 0)) { App.toast('Ingresa el precio'); return; }
+      if (!(F.fq > 0)) { App.toast('Indica cuánto trae el formato'); return; }
+      if (!(F.lugar || '').trim()) { App.toast('Indica dónde lo viste (lugar)'); return; }
+      const u = yo();
+      Store.mutate(function (st) {
+        st.ofertas.push({ id: Store.uid('OF-'), insumoId: ins.id, lugar: F.lugar.trim(), marca: (F.marca || '').trim(), formatoLabel: F.fl || ins.unidad,
+          formatoQty: F.fq, precio: F.precio, rendimiento: null, fecha: App.hoy(), fuente: 'cotizacion', disponible: true, preferida: false,
+          pendiente: !staff, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim() });
+      });
+      App.toast(staff ? 'Cotización agregada como alternativa' : 'Cotización enviada para revisión');
+      App.ui.cot = { insumo: '', lugar: F.lugar, marca: '', fl: '', fq: null, precio: null, nota: '' };
+      App.render();
+    };
+
+    return App.card('Registrar una cotización', h('div', { class: 'stack' },
+      h('p', { class: 'help' }, staff ? 'Agrega precios que viste en otro lugar o marca. Quedan como alternativa; para usarlos márcalos en Insumos o en la bandeja de abajo.'
+        : 'Anota un precio que viste (feria, almacén, supermercado). El gerente lo revisa y decide si se usa.'),
+      h('div', { class: 'form-grid' },
+        h('label', null, 'Insumo', App.textInput({ fk: 'cot-ins', value: F.insumo, list: 'dl-cot-ins', ph: 'Escribe y elige de la lista…',
+          onChange: function (v) { F.insumo = v; F.fl = ''; F.fq = null; App.render(); } })),
+        h('label', null, 'Lugar', App.textInput({ fk: 'cot-lugar', value: F.lugar, list: 'dl-cot-lugar', ph: 'ej. Feria Playa Ancha', onChange: function (v) { F.lugar = v; } })),
+        h('label', null, 'Marca / detalle (opcional)', App.textInput({ fk: 'cot-marca', value: F.marca, ph: 'ej. Super Pollo, granel', onChange: function (v) { F.marca = v; } })),
+        h('label', null, 'Precio (CLP)', App.numInput({ fk: 'cot-precio', value: F.precio, ph: 'ej. 4500', onChange: function (n) { F.precio = n; App.render(); }, onEmpty: function () { F.precio = null; } }))),
+      ins ? h('div', { class: 'stack' },
+        h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'Formato:'),
+          h('div', { class: 'chips' }, presets.map(function (p) { return App.chip(p[0], F.fl === p[0] && F.fq === p[1], function () { F.fl = p[0]; F.fq = p[1]; App.render(); }); })),
+          h('span', { class: 'mut' }, 'u otro:'),
+          App.textInput({ fk: 'cot-fl', cls: 'w90', value: F.fl, ph: 'nombre', onChange: function (v) { F.fl = v; } }),
+          App.numInput({ fk: 'cot-fq', cls: 'w80', value: F.fq, ph: 'cantidad', onChange: function (n) { F.fq = n; App.render(); } }), h('small', null, ins.unidad)),
+        h('div', { class: 'help' }, 'Equivale a ', h('b', null, precioPorBase(F.precio, F.fq, ins.unidad)), ' (precio de compra, antes de mermas).')) : null,
+      h('label', { class: 'block' }, 'Nota (opcional)', App.textInput({ fk: 'cot-nota', value: F.nota, ph: 'ej. precio de oferta, calidad, solo los sábados…', onChange: function (v) { F.nota = v; } })),
+      h('div', null, App.btn(staff ? 'Agregar cotización' : 'Enviar cotización', enviar, 'primary')),
+      h('datalist', { id: 'dl-cot-ins' }, s.insumos.filter(function (i) { return i.categoria !== 'Envases' || staff; }).map(function (i) { return h('option', { value: i.nombre }); })),
+      h('datalist', { id: 'dl-cot-lugar' }, lugares.map(function (l) { return h('option', { value: l }); }))));
+  }
+
+  /* ---------- bandeja de revisión (admin/gerente) ---------- */
+  function bandeja() {
+    const s = Store.get(), ctx = App.ctx();
+    const pend = s.ofertas.filter(function (o) { return o.pendiente; }).sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
+    const uso = E.usoSemanalInsumos(ctx).uso;
+    const usar = function (o) {
+      Store.mutate(function (st) {
+        st.ofertas.forEach(function (x) { if (x.insumoId === o.insumoId) x.preferida = (x.id === o.id); });
+        const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.revisadoPor = yo().nombre;
+      });
+      App.toast('Ahora se usa la cotización de ' + (o.lugar || 'ese lugar'));
+    };
+    const alternativa = function (o) {
+      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.revisadoPor = yo().nombre; });
+      App.toast('Guardada como alternativa');
+    };
+    const descartar = function (o) {
+      App.confirm('¿Descartar la cotización de ' + (o.lugar || '') + '?', function () { Store.mutate(function (st) { st.ofertas = st.ofertas.filter(function (x) { return x.id !== o.id; }); }); }, 'Descartar', true);
+    };
+    return App.card('Por revisar (' + pend.length + ')', pend.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' },
+      h('thead', null, h('tr', null, ['Insumo', 'Dónde / quién', 'Formato y precio', 'vs. en uso', 'Impacto/mes', ''].map(function (t, i) { return h('th', { class: i === 3 || i === 4 ? 'r' : '' }, t); }))),
+      h('tbody', null, pend.map(function (o) {
+        const ins = s.insumos.find(function (i) { return i.id === o.insumoId; }) || { nombre: '?', unidad: 'g' };
+        const actual = E.costoInsumo(ctx, o.insumoId);
+        const nuevo = E.costoNetoOferta(ctx, o);
+        const dif = actual.missing ? null : (nuevo - actual.unit) / actual.unit * 100;
+        const mes = actual.missing ? null : (nuevo - actual.unit) * (uso.get(o.insumoId) || 0) * 4.33;
+        return h('tr', null,
+          h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(o.insumoId) }, ins.nombre), h('div', null, h('small', null, (App.usoMap().get(o.insumoId) || []).length + ' platos'))),
+          h('td', null, h('b', null, o.lugar || '—'), o.marca ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
+          h('td', null, App.clp(o.precio) + ' / ' + o.formatoLabel, h('div', null, h('small', null, App.costoVisible(nuevo, ins.unidad) + ' neto'))),
+          h('td', { class: 'r ' + (dif == null ? '' : dif < 0 ? 'good-t' : 'bad-t') }, dif == null ? 'sin precio actual' : (dif > 0 ? '+' : '') + App.num(dif, 0) + '%',
+            actual.oferta ? h('div', null, h('small', { class: 'mut' }, 'hoy ' + App.costoVisible(actual.unit, ins.unidad))) : null),
+          h('td', { class: 'r ' + (mes == null ? '' : mes < 0 ? 'good-t' : 'bad-t') }, mes == null ? '—' : App.sg(mes)),
+          h('td', { class: 'nowrap' }, App.btn('Usar esta', function () { usar(o); }, 'small primary'), App.btn('Alternativa', function () { alternativa(o); }, 'small', 'Aprobar sin usarla todavía (queda para comparar)'),
+            App.btn('✕', function () { descartar(o); }, 'small ghost', 'Descartar')));
+      })))) : App.empty('No hay cotizaciones nuevas. Las que registren tú o el equipo aparecerán aquí.'),
+      '', null);
+  }
+
+  /* ---------- mis cotizaciones ---------- */
+  function mias() {
+    const s = Store.get(), u = yo(), staff = App.esStaff();
+    const lista = s.ofertas.filter(function (o) { return staff ? o.autorId === u.id : true; }).sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
+    if (!lista.length) return null;
+    const estado = function (o) { return o.preferida ? App.badge('✓ En uso', 'good') : o.pendiente ? App.badge('En revisión', 'warn') : App.badge('Guardada como alternativa', 'info'); };
+    return App.card(staff ? 'Mis cotizaciones' : 'Mis cotizaciones enviadas', h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+      h('thead', null, h('tr', null, h('th', null, 'Insumo'), h('th', null, 'Lugar'), h('th', { class: 'r' }, 'Precio'), h('th', null, 'Fecha'), h('th', null, 'Estado'), h('th'))),
+      h('tbody', null, lista.slice(0, 40).map(function (o) {
+        const ins = s.insumos.find(function (i) { return i.id === o.insumoId; });
+        return h('tr', null, h('td', null, ins ? ins.nombre : '?'), h('td', null, o.lugar + (o.marca ? ' · ' + o.marca : '')),
+          h('td', { class: 'r' }, App.clp(o.precio) + ' / ' + o.formatoLabel), h('td', null, o.fecha || ''), h('td', null, estado(o)),
+          h('td', null, !o.preferida ? App.btn('Retirar', function () {
+            App.confirm('¿Retirar esta cotización?', function () { Store.mutate(function (st) { st.ofertas = st.ofertas.filter(function (x) { return x.id !== o.id; }); }); }, 'Retirar', true);
+          }, 'small ghost') : null));
+      })))));
+  }
+
+  App.views.cotizaciones = function () {
+    return h('div', { class: 'stack' }, formulario(), App.esStaff() ? bandeja() : null, mias());
   };
 })();
 
