@@ -176,10 +176,22 @@ tr.subhead td { font-weight: 700; background: var(--surface2); } tr.hijo td { co
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 9px; z-index: 200; box-shadow: var(--shadow); transition: opacity .4s; } .toast.out { opacity: 0; }
 details summary { cursor: pointer; color: var(--accent); margin: 6px 0; }
 
+/* proveedores */
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.card.mejor { border-color: var(--good); box-shadow: 0 0 0 1px var(--good) inset, var(--shadow); }
+b.big { font-size: 22px; }
+.tbl.prov td { vertical-align: top; } .desp { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; font-size: 12px; color: var(--mut); }
+.desp span { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+select.w-prov { width: 160px; }
+.tbl tr.sub-row > td { background: var(--surface2); padding: 10px 12px; } .montos { align-items: flex-end; }
+.tbl.sub { background: var(--surface2); border-radius: 8px; }
+.chart-wrap { width: 100%; overflow: hidden; } .chart { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--line); stroke-width: 1; } .chart .axis { fill: var(--mut); font-size: 11px; }
+
 @media (max-width: 980px) {
   .split, .split.wide, .split.wide:has(.drawer) { grid-template-columns: minmax(0, 1fr); }
   .pane-list, .drawer { position: static; max-height: none; } .pane-list .scroll { max-height: 320px; }
-  .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); }
   .top { position: static; } .tabs { flex-wrap: wrap; overflow: visible; } .main { padding: 10px; } .top { padding: 8px 10px; } .brand small { display: none; } .brand { min-width: 0; }
   .ficha { padding: 14px; } .param { flex-direction: column; align-items: flex-start; }
 }
@@ -234,6 +246,7 @@ window.CLOUD = {
     costosFijosMes: 0,        // CLP costos fijos mensuales (para punto de equilibrio)
     diasOperacionMes: 22,
     trilogiaPrecio: 2000,     // precio adicional del combo Entrada+Ensalada+Postre
+    ivaRecuperable: 'potencial', // no | potencial | si — 'si': lo comprado con factura se costea sin IVA (crédito fiscal)
     hoy: null                 // ISO yyyy-mm-dd; null = fecha actual
   };
 
@@ -262,8 +275,10 @@ window.CLOUD = {
     const ctx = {
       state: state, opts: opts, p: params(state, opts),
       insumos: new Map(), ofertas: new Map(), ofertasPorInsumo: new Map(), recetas: new Map(),
+      proveedores: new Map(), provPorNombre: indiceProveedores(state.proveedores),
       memoInsumo: new Map(), memoReceta: new Map(), errors: []
     };
+    (state.proveedores || []).forEach(function (p) { ctx.proveedores.set(p.id, p); });
     (state.insumos || []).forEach(function (i) { ctx.insumos.set(i.id, i); });
     (state.ofertas || []).forEach(function (o) {
       ctx.ofertas.set(o.id, o);
@@ -274,18 +289,86 @@ window.CLOUD = {
     return ctx;
   }
 
+  /* ---------- proveedores ---------- */
+  const SEMANAS_MES = 4.33;
+
+  function normNombre(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+  // id determinista: dos usuarios que migran los mismos datos generan el mismo proveedor
+  function idProveedor(nombre) { return 'PRV-' + normNombre(nombre).replace(/ /g, '-'); }
+
+  function adivinarProveedor(nombre) {
+    const n = normNombre(nombre);
+    if (/supermercado|lider|jumbo|unimarc|tottus|santa isabel/.test(n)) return { tipo: 'supermercado', factura: 'si' };
+    if (/distribuidora|empaque/.test(n)) return { tipo: 'distribuidora', factura: 'si' };
+    if (/mayorista|alvi/.test(n)) return { tipo: 'mayorista', factura: 'si' };
+    if (/feria|vega|caleta|mercado|cardonal/.test(n)) return { tipo: 'feria', factura: 'no' };
+    if (/carniceria|polleria|pescaderia|tostaduria/.test(n)) return { tipo: 'carniceria', factura: 'a_pedido' };
+    return { tipo: 'otro', factura: 'a_pedido' };
+  }
+
+  function nuevoProveedor(nombre, extra) {
+    const g = adivinarProveedor(nombre);
+    return Object.assign({ id: idProveedor(nombre), nombre: String(nombre || '').trim(), alias: [], tipo: g.tipo, factura: g.factura,
+      despacho: { ofrece: false, costo: 0, gratisDesde: null, minimoPedido: null }, retiro: true, costoVisita: 0,
+      contacto: '', nota: '', activo: true }, extra || {});
+  }
+
+  // nombre o alias normalizado → proveedor
+  function indiceProveedores(lista) {
+    const m = new Map();
+    (lista || []).forEach(function (p) {
+      m.set(normNombre(p.nombre), p);
+      (p.alias || []).forEach(function (a) { const k = normNombre(a); if (k && !m.has(k)) m.set(k, p); });
+    });
+    return m;
+  }
+
+  // Crea los proveedores que faltan para los "lugar" de las ofertas (id determinista). No modifica las ofertas:
+  // la relación oferta → proveedor se resuelve por proveedorId o, si no hay, por nombre/alias.
+  function asegurarProveedores(state) {
+    state.proveedores = state.proveedores || [];
+    const idx = indiceProveedores(state.proveedores);
+    const ids = new Set(state.proveedores.map(function (p) { return p.id; }));
+    let creados = 0;
+    (state.ofertas || []).forEach(function (o) {
+      if (o.proveedorId && ids.has(o.proveedorId)) return;
+      const k = normNombre(o.lugar);
+      if (!k || idx.has(k)) return;
+      const p = nuevoProveedor(o.lugar);
+      if (ids.has(p.id)) return;
+      state.proveedores.push(p); idx.set(k, p); ids.add(p.id); creados++;
+    });
+    return creados;
+  }
+
+  function proveedorDe(ctx, o) {
+    if (!o) return null;
+    return (o.proveedorId && ctx.proveedores.get(o.proveedorId)) || ctx.provPorNombre.get(normNombre(o.lugar)) || null;
+  }
+  function daFactura(p) { return !!p && p.factura !== 'no'; }   // 'a_pedido' cuenta: basta pedirla
+  function factorIva(ctx) { return 1 + (Number(ctx.p.ivaPct) || 0) / 100; }
+  function ivaAplica(ctx) { return ctx.p.ivaRecuperable === 'si' || !!ctx.opts.simularIva; }
+  function divisorIva(ctx, prov) { return ivaAplica(ctx) && daFactura(prov) ? factorIva(ctx) : 1; }
+
   /* ---------- insumos y ofertas ---------- */
   function precioOferta(ctx, o) {
     const ov = ctx.opts.precios && ctx.opts.precios[o.id];
     return ov != null ? ov : o.precio;
   }
 
-  // costo neto por unidad base de una oferta
-  function costoNetoOferta(ctx, o) {
+  // costo por unidad base utilizable de una oferta, tal como se paga (IVA incluido si lo trae)
+  function costoBrutoOferta(ctx, o) {
     const ins = ctx.insumos.get(o.insumoId);
     const rend = o.rendimiento != null ? o.rendimiento : (ins && ins.rendimiento != null ? ins.rendimiento : 1);
     const denom = (o.formatoQty || 0) * (rend || 1);
     return denom > 0 ? precioOferta(ctx, o) / denom : 0;
+  }
+
+  // costo neto (después de merma y, si el negocio recupera IVA y el proveedor da factura, sin IVA) por unidad base
+  function costoNetoOferta(ctx, o) {
+    return costoBrutoOferta(ctx, o) / divisorIva(ctx, proveedorDe(ctx, o));
   }
 
   // ofertas utilizables: disponibles y ya revisadas (una cotización "pendiente" no entra a los costos hasta aprobarla)
@@ -676,13 +759,419 @@ window.CLOUD = {
       const comprarBase = rend > 0 ? usable / rend : usable;
       const formato = o && o.formatoQty > 0 ? o.formatoQty : 0;
       const packs = formato > 0 ? Math.ceil(comprarBase / formato - 1e-9) : 0;
-      filas.push({ insumoId: insId, nombre: ins.nombre, categoria: ins.categoria, unidad: ins.unidad,
-        usable: usable, comprarBase: comprarBase, lugar: o ? o.lugar : '(sin oferta)', formatoLabel: o ? o.formatoLabel : '',
+      const prov = proveedorDe(ctx, o);
+      filas.push({ insumoId: insId, nombre: ins.nombre, categoria: ins.categoria, unidad: ins.unidad, ofertaId: o ? o.id : null, proveedorId: prov ? prov.id : null,
+        usable: usable, comprarBase: comprarBase, lugar: prov ? prov.nombre : o ? (o.lugar || '(sin lugar)') : '(sin oferta)', formatoLabel: o ? o.formatoLabel : '',
         formatoQty: formato, packs: packs, precioPack: o ? precioOferta(ctx, o) : 0,
         costo: formato > 0 ? packs * precioOferta(ctx, o) : usable * c.unit, costoTeorico: usable * c.unit, missing: c.missing });
     });
     filas.sort(function (a, b) { return a.lugar === b.lugar ? a.nombre.localeCompare(b.nombre) : a.lugar.localeCompare(b.lugar); });
     return filas;
+  }
+
+  /* ---------- evolución de precios ---------- */
+  function fechaMenos(iso, dias) { return new Date(Date.parse(iso) - dias * 86400000).toISOString().slice(0, 10); }
+
+  // puntos de precio de una oferta (precio de compra por unidad base, antes de merma).
+  // Las compras registradas se leen desde `compras`, así que aquí se omiten los precios con fuente 'compra'.
+  function puntosOferta(o) {
+    const q = o.formatoQty > 0 ? o.formatoQty : 0, pts = [];
+    if (!q) return pts;
+    const tipo = function (f) { return f === 'comprado' ? 'compra' : 'cotizacion'; };
+    (o.historial || []).forEach(function (x) {
+      if (x.fecha && x.precio > 0 && x.fuente !== 'compra') pts.push({ fecha: x.fecha, unit: x.precio / q, precio: x.precio, tipo: tipo(x.fuente), ofertaId: o.id });
+    });
+    if (o.fecha && o.precio > 0 && o.fuente !== 'compra') pts.push({ fecha: o.fecha, unit: o.precio / q, precio: o.precio, tipo: tipo(o.fuente), ofertaId: o.id, actual: true });
+    return pts;
+  }
+  function puntosCompras(ctx, filtro) {
+    const pts = [];
+    (ctx.state.compras || []).forEach(function (c) {
+      (c.lineas || []).forEach(function (l) {
+        const q = (Number(l.cantidad) || 0) * (Number(l.formatoQty) || 0);
+        if (!(q > 0) || !(l.total > 0) || !filtro(l, c)) return;
+        pts.push({ fecha: c.fecha, unit: l.total / q, precio: l.total / l.cantidad, tipo: 'compra', ofertaId: l.ofertaId, compraId: c.id, proveedorId: c.proveedorId, conFactura: !!c.conFactura });
+      });
+    });
+    return pts;
+  }
+  const porFecha = function (a, b) { return a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0; };
+
+  // series de precio de un insumo, una por proveedor
+  function historialPrecios(ctx, insumoId) {
+    const series = new Map();
+    const add = function (key, nombre, pt) {
+      if (!series.has(key)) series.set(key, { key: key, nombre: nombre, puntos: [] });
+      series.get(key).puntos.push(pt);
+    };
+    (ctx.ofertasPorInsumo.get(insumoId) || []).forEach(function (o) {
+      const p = proveedorDe(ctx, o);
+      puntosOferta(o).forEach(function (pt) { add(p ? p.id : 'L:' + (o.lugar || ''), p ? p.nombre : (o.lugar || 'Sin lugar'), pt); });
+    });
+    puntosCompras(ctx, function (l) { return l.insumoId === insumoId; }).forEach(function (pt) {
+      const p = ctx.proveedores.get(pt.proveedorId);
+      add(p ? p.id : 'C:' + pt.proveedorId, p ? p.nombre : 'Proveedor eliminado', pt);
+    });
+    const out = Array.from(series.values());
+    out.forEach(function (s) { s.puntos.sort(porFecha); });
+    out.sort(function (a, b) { return a.nombre.localeCompare(b.nombre); });
+    return out;
+  }
+
+  // variación del precio de compra de la oferta en uso entre hace `dias` y hoy
+  function variacionInsumo(ctx, insumoId, dias) {
+    const c = costoInsumo(ctx, insumoId), o = c.oferta;
+    if (!o) return null;
+    const pts = puntosOferta(o).concat(puntosCompras(ctx, function (l) { return l.ofertaId === o.id; })).sort(porFecha);
+    if (!pts.length) return null;
+    const limite = fechaMenos(hoyISO(ctx.p), dias);
+    let antes = null;
+    pts.forEach(function (pt) { if (pt.fecha <= limite) antes = pt; });
+    const ahora = pts[pts.length - 1];
+    if (!antes || !(antes.unit > 0)) return null;
+    return { antes: antes, ahora: ahora, pct: (ahora.unit / antes.unit - 1) * 100 };
+  }
+
+  // alza de la canasta (ponderada por uso semanal) en los últimos `dias`
+  function inflacionCanasta(ctx, dias) {
+    const u = usoSemanalInsumos(ctx);
+    let wA = 0, wB = 0, total = 0;
+    const filas = [];
+    u.uso.forEach(function (q, id) {
+      if (!(q > 0)) return;
+      total++;
+      const v = variacionInsumo(ctx, id, dias);
+      if (!v) return;
+      wA += q * v.antes.unit; wB += q * v.ahora.unit;
+      const ins = ctx.insumos.get(id);
+      filas.push({ insumoId: id, nombre: ins ? ins.nombre : id, antes: v.antes, ahora: v.ahora, pct: v.pct });
+    });
+    filas.sort(function (a, b) { return Math.abs(b.pct) - Math.abs(a.pct); });
+    return { pct: wA > 0 ? (wB / wA - 1) * 100 : null, cubiertos: filas.length, total: total, filas: filas };
+  }
+
+  /* ---------- datos tributarios (Chile) ---------- */
+  const TIPOS_DOC = { '33': 'Factura electrónica', '34': 'Factura exenta electrónica', '39': 'Boleta electrónica', 'sd': 'Sin documento' };
+
+  function limpiarRut(r) { return String(r || '').toUpperCase().replace(/[^0-9K]/g, ''); }
+  function dvRut(cuerpo) {
+    let s = 0, m = 2;
+    for (let i = cuerpo.length - 1; i >= 0; i--) { s += Number(cuerpo[i]) * m; m = m === 7 ? 2 : m + 1; }
+    const r = 11 - (s % 11);
+    return r === 11 ? '0' : r === 10 ? 'K' : String(r);
+  }
+  // RUT válido según dígito verificador (módulo 11)
+  function validarRut(r) {
+    const c = limpiarRut(r);
+    if (c.length < 2) return false;
+    const cuerpo = c.slice(0, -1);
+    return /^\d+$/.test(cuerpo) && dvRut(cuerpo) === c.slice(-1);
+  }
+  function formatearRut(r) {
+    const c = limpiarRut(r);
+    if (c.length < 2) return String(r || '');
+    return c.slice(0, -1).replace(/^0+/, '').replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '-' + c.slice(-1);
+  }
+
+  // compras antiguas solo tenían conFactura
+  function tipoDocCompra(c) { return c.tipoDoc || (c.conFactura ? '33' : 'sd'); }
+  function esFactura(doc) { return doc === '33' || doc === '34'; }
+
+  // montos del documento: los de la factura si se ingresaron; si no, calculados desde el total pagado (con despacho)
+  function montosCompra(ctx, c) {
+    const f = factorIva(ctx), doc = tipoDocCompra(c);
+    const total = (Number(c.total) || 0) + (Number(c.despachoPagado) || 0);
+    let neto, iva, exento;
+    if (c.neto != null && c.iva != null) { neto = Number(c.neto) || 0; iva = Number(c.iva) || 0; exento = Number(c.exento) || 0; }
+    else if (doc === '34') { neto = 0; iva = 0; exento = total; }
+    else { exento = Number(c.exento) || 0; neto = Math.round((total - exento) / f); iva = total - exento - neto; }
+    return { doc: doc, total: total, neto: neto, iva: iva, exento: exento,
+      credito: doc === '33' ? iva : 0, perdido: esFactura(doc) ? 0 : iva };
+  }
+
+  // libro de compras: una fila por documento, con avisos de datos que faltan para contabilidad
+  function libroCompras(ctx, desde, hasta, soloFacturas) {
+    const filas = [];
+    (ctx.state.compras || []).forEach(function (c) {
+      if ((desde && c.fecha < desde) || (hasta && c.fecha > hasta)) return;
+      const m = montosCompra(ctx, c);
+      if (soloFacturas && !esFactura(m.doc)) return;
+      const p = ctx.proveedores.get(c.proveedorId) || {};
+      const avisos = [];
+      if (esFactura(m.doc)) {
+        if (!p.rut) avisos.push('proveedor sin RUT');
+        else if (!validarRut(p.rut)) avisos.push('RUT del proveedor inválido');
+        if (!p.razonSocial) avisos.push('proveedor sin razón social');
+        if (!String(c.nroDoc || '').trim()) avisos.push('sin folio');
+      }
+      filas.push({ compraId: c.id, fecha: c.fecha, tipoDoc: m.doc, tipoNombre: TIPOS_DOC[m.doc] || m.doc, folio: String(c.nroDoc || '').trim(),
+        rut: p.rut ? formatearRut(p.rut) : '', razonSocial: p.razonSocial || '', proveedor: p.nombre || '(eliminado)',
+        neto: m.neto, exento: m.exento, iva: m.iva, total: m.total, credito: m.credito, avisos: avisos });
+    });
+    filas.sort(function (a, b) { return a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : String(a.folio).localeCompare(String(b.folio), 'es', { numeric: true }); });
+    return filas;
+  }
+
+  /* ---------- IVA de compras ---------- */
+  // IVA de compras registradas: crédito fiscal (con factura) e IVA que no se recupera (sin factura)
+  function ivaCompras(ctx, desde, hasta) {
+    const r = { bruto: 0, credito: 0, perdido: 0, conFactura: 0, sinFactura: 0, n: 0, porMes: {} };
+    (ctx.state.compras || []).forEach(function (c) {
+      if ((desde && c.fecha < desde) || (hasta && c.fecha > hasta)) return;
+      const m = montosCompra(ctx, c), b = m.total;
+      const mes = String(c.fecha || '').slice(0, 7);
+      const pm = r.porMes[mes] = r.porMes[mes] || { bruto: 0, credito: 0, perdido: 0, n: 0 };
+      r.n++; r.bruto += b; pm.bruto += b; pm.n++;
+      r.credito += m.credito; pm.credito += m.credito; r.perdido += m.perdido; pm.perdido += m.perdido;
+      if (esFactura(m.doc)) r.conFactura += b; else r.sinFactura += b;
+    });
+    return r;
+  }
+
+  // crédito fiscal mensual proyectado con el volumen semanal y las ofertas en uso
+  function proyeccionIva(ctx) {
+    const u = usoSemanalInsumos(ctx), f = factorIva(ctx), filas = [];
+    let credito = 0, perdido = 0, gastoCon = 0, gastoSin = 0;
+    u.uso.forEach(function (q, id) {
+      const ins = ctx.insumos.get(id);
+      if (!ins || !(q > 0)) return;
+      const c = costoInsumo(ctx, id);
+      const o = c.oferta || (ofertasDisponibles(ctx, id)[0] || null);
+      if (c.missing || !o) return;
+      const prov = proveedorDe(ctx, o), bruto = costoBrutoOferta(ctx, o);
+      const gastoMes = q * bruto * SEMANAS_MES, iva = gastoMes - gastoMes / f;
+      const fila = { insumoId: id, nombre: ins.nombre, oferta: o, proveedor: prov, gastoMes: gastoMes, iva: iva, conFactura: daFactura(prov) };
+      if (fila.conFactura) { credito += iva; gastoCon += gastoMes; }
+      else {
+        perdido += iva; gastoSin += gastoMes;
+        // mejor alternativa con factura, comparando su costo una vez recuperado el IVA
+        let mejor = null;
+        ofertasDisponibles(ctx, id).forEach(function (x) {
+          const px = proveedorDe(ctx, x);
+          if (x.id === o.id || !daFactura(px)) return;
+          const cb = costoBrutoOferta(ctx, x);
+          if (!(cb > 0)) return;
+          if (!mejor || cb < mejor.bruto) mejor = { oferta: x, proveedor: px, bruto: cb, neto: cb / f };
+        });
+        if (mejor) { fila.alternativa = mejor; fila.difMesAfecto = (mejor.neto - bruto) * q * SEMANAS_MES; fila.difMesHoy = (mejor.bruto - bruto) * q * SEMANAS_MES; }
+      }
+      filas.push(fila);
+    });
+    filas.sort(function (a, b) { return b.iva - a.iva; });
+    return { creditoMes: credito, perdidoMes: perdido, gastoConFactura: gastoCon, gastoSinFactura: gastoSin, filas: filas, usoPlan: u.usoPlan };
+  }
+
+  /* ---------- evaluación de proveedores ---------- */
+  function evaluarProveedores(ctx) {
+    const u = usoSemanalInsumos(ctx);
+    const minimo = new Map(), porProv = new Map();
+    u.uso.forEach(function (q, id) {
+      if (!(q > 0)) return;
+      ofertasDisponibles(ctx, id).forEach(function (o) {
+        const p = proveedorDe(ctx, o), c = costoNetoOferta(ctx, o);
+        if (!p || !(c > 0)) return;
+        if (!minimo.has(id) || c < minimo.get(id)) minimo.set(id, c);
+        if (!porProv.has(p.id)) porProv.set(p.id, new Map());
+        const m = porProv.get(p.id);
+        if (!m.has(id) || c < m.get(id)) m.set(id, c);
+      });
+    });
+    let valorTotal = 0;
+    minimo.forEach(function (c, id) { valorTotal += c * u.uso.get(id); });
+    const desde = fechaMenos(hoyISO(ctx.p), 30), gasto = new Map(), ultima = new Map();
+    (ctx.state.compras || []).forEach(function (c) {
+      if (c.fecha >= desde) gasto.set(c.proveedorId, (gasto.get(c.proveedorId) || 0) + (Number(c.total) || 0));
+      if (!ultima.has(c.proveedorId) || c.fecha > ultima.get(c.proveedorId)) ultima.set(c.proveedorId, c.fecha);
+    });
+    const filas = (ctx.state.proveedores || []).map(function (p) {
+      const m = porProv.get(p.id) || new Map();
+      let vMin = 0, vProv = 0, mas = 0;
+      m.forEach(function (c, id) {
+        const q = u.uso.get(id);
+        vMin += minimo.get(id) * q; vProv += c * q;
+        if (c <= minimo.get(id) * 1.0001) mas++;
+      });
+      return { proveedor: p, cubiertos: m.size, masBaratos: mas, coberturaPct: valorTotal > 0 ? vMin / valorTotal * 100 : 0,
+        indicePrecio: vMin > 0 ? vProv / vMin : null, costoSemana: vProv, gasto30: gasto.get(p.id) || 0, ultimaCompra: ultima.get(p.id) || null };
+    });
+    filas.sort(function (a, b) { return b.coberturaPct - a.coberturaPct || a.proveedor.nombre.localeCompare(b.proveedor.nombre); });
+    return { filas: filas, insumosCanasta: minimo.size, valorCanastaSemana: valorTotal, usoPlan: u.usoPlan };
+  }
+
+  /* ---------- canasta óptima ---------- */
+  // cantidades utilizables por insumo: del plan dado o, si no hay, del volumen semanal supuesto
+  function necesidades(ctx, items) {
+    const acc = new Map();
+    if (items && items.length) {
+      items.forEach(function (it) {
+        if (!ctx.recetas.get(it.recetaId)) return;
+        explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0).forEach(function (q, ins) { acc.set(ins, (acc.get(ins) || 0) + q); });
+      });
+    } else usoSemanalInsumos(ctx).uso.forEach(function (q, id) { acc.set(id, q); });
+    return acc;
+  }
+
+  // cubrir `usable` con una oferta, en formatos enteros
+  function compraConOferta(ctx, o, usable) {
+    const ins = ctx.insumos.get(o.insumoId);
+    const rend = o.rendimiento != null ? o.rendimiento : (ins && ins.rendimiento != null ? ins.rendimiento : 1);
+    const base = rend > 0 ? usable / rend : usable;
+    const packs = o.formatoQty > 0 ? Math.ceil(base / o.formatoQty - 1e-9) : 0;
+    const bruto = packs * precioOferta(ctx, o);
+    const prov = proveedorDe(ctx, o);
+    return { ofertaId: o.id, proveedorId: prov ? prov.id : null, packs: packs, bruto: bruto, costo: bruto / divisorIva(ctx, prov) };
+  }
+
+  // cómo llega la compra de un proveedor y cuánto cuesta (despacho, despacho gratis o ir a buscar); null = imposible
+  function logistica(ctx, prov, bruto) {
+    const d = prov.despacho || {}, ops = [];
+    const minimo = Number(d.minimoPedido) || 0, gratisDesde = Number(d.gratisDesde) || 0;
+    if (d.ofrece && !(minimo > 0 && bruto < minimo)) {
+      const gratis = gratisDesde > 0 && bruto >= gratisDesde;
+      const b = gratis ? 0 : (Number(d.costo) || 0);
+      ops.push({ modo: gratis ? 'despacho gratis' : 'despacho', bruto: b, costo: b / divisorIva(ctx, prov) });
+    }
+    if (prov.retiro !== false) ops.push({ modo: 'retiro', bruto: 0, costo: Number(prov.costoVisita) || 0 });
+    if (!ops.length) return null;
+    const r = ops.reduce(function (a, b) { return b.costo < a.costo ? b : a; });
+    r.faltaGratis = d.ofrece && gratisDesde > 0 && bruto < gratisDesde ? gratisDesde - bruto : 0;
+    r.faltaMinimo = d.ofrece && minimo > 0 && bruto < minimo ? minimo - bruto : 0;
+    return r;
+  }
+
+  // arma un plan de compra a partir de la elección insumo → compra
+  function armarPlan(ctx, nec, eleccion) {
+    const grupos = new Map(), f = factorIva(ctx);
+    let totalItems = 0, totalLog = 0, credito = 0, bruto = 0, viable = true;
+    eleccion.forEach(function (e, insId) {
+      const o = ctx.ofertas.get(e.ofertaId), p = proveedorDe(ctx, o), k = p ? p.id : 'L:' + (o.lugar || '');
+      if (!grupos.has(k)) grupos.set(k, { proveedor: p, nombre: p ? p.nombre : (o.lugar || 'Sin proveedor'), items: [], bruto: 0, costo: 0 });
+      const g = grupos.get(k);
+      g.items.push(Object.assign({ insumoId: insId, usable: nec.get(insId) }, e));
+      g.bruto += e.bruto; g.costo += e.costo; totalItems += e.costo;
+    });
+    grupos.forEach(function (g) {
+      g.logistica = g.proveedor ? logistica(ctx, g.proveedor, g.bruto) : { modo: '—', bruto: 0, costo: 0, faltaGratis: 0, faltaMinimo: 0 };
+      if (!g.logistica) {
+        viable = false;
+        g.logistica = { modo: 'bajo el mínimo', bruto: 0, costo: 0, faltaGratis: 0, faltaMinimo: (Number(g.proveedor.despacho.minimoPedido) || 0) - g.bruto };
+      }
+      totalLog += g.logistica.costo;
+      bruto += g.bruto + g.logistica.bruto;
+      if (g.proveedor && daFactura(g.proveedor)) credito += (g.bruto + g.logistica.bruto) * (1 - 1 / f);
+    });
+    const proveedores = Array.from(grupos.values()).sort(function (a, b) { return b.bruto - a.bruto; });
+    return { proveedores: proveedores, nProveedores: proveedores.length, totalItems: totalItems, totalLogistica: totalLog,
+      total: totalItems + totalLog, bruto: bruto, creditoIva: credito, viable: viable };
+  }
+
+  // Elige en qué proveedores comprar la canasta para minimizar precio (en formatos reales) + despacho/visitas.
+  // Prueba todas las combinaciones de proveedores (hasta 13 opcionales + los que son la única opción de algún insumo).
+  function optimizarCanasta(ctx, items, opts) {
+    opts = opts || {};
+    const nec = necesidades(ctx, items);
+    const cand = new Map(), sinOferta = [];
+    nec.forEach(function (q, id) {
+      if (!(q > 0)) return;
+      const m = new Map();
+      ofertasDisponibles(ctx, id).forEach(function (o) {
+        if (!(o.formatoQty > 0) || !(precioOferta(ctx, o) > 0)) return;
+        const p = proveedorDe(ctx, o);
+        if (!p || p.activo === false) return;
+        const c = compraConOferta(ctx, o, q), prev = m.get(p.id);
+        if (!prev || c.costo < prev.costo) m.set(p.id, c);
+      });
+      if (m.size) cand.set(id, m); else sinOferta.push(id);
+    });
+    const insIds = Array.from(cand.keys());
+
+    // proveedores obligatorios (única opción de algún insumo) y opcionales, ordenados por cuánto cubren
+    const obligatorios = new Set(), cuenta = new Map();
+    insIds.forEach(function (id) {
+      const m = cand.get(id);
+      if (m.size === 1) obligatorios.add(m.keys().next().value);
+      m.forEach(function (c, pid) { cuenta.set(pid, (cuenta.get(pid) || 0) + c.costo); });
+    });
+    const MAX_OPC = opts.maxOpcionales || 13;
+    const opcionales = Array.from(cuenta.keys()).filter(function (pid) { return !obligatorios.has(pid); })
+      .sort(function (a, b) { return cuenta.get(b) - cuenta.get(a); }).slice(0, MAX_OPC);
+
+    const elegir = function (permitidos) {
+      const el = new Map();
+      for (let i = 0; i < insIds.length; i++) {
+        let best = null;
+        cand.get(insIds[i]).forEach(function (c, pid) { if (permitidos.has(pid) && (!best || c.costo < best.costo)) best = c; });
+        if (!best) return null;
+        el.set(insIds[i], best);
+      }
+      return el;
+    };
+
+    // mueve insumos hacia proveedores que quedaron bajo su despacho gratis o pedido mínimo, si eso abarata el total
+    const mejorar = function (el, plan, permitidos) {
+      let mejor = { el: el, plan: plan };
+      for (let vuelta = 0; vuelta < 3; vuelta++) {
+        let cambio = false;
+        mejor.plan.proveedores.forEach(function (g) {
+          if (!g.proveedor) return;
+          const lg = g.logistica;
+          const meta = lg.faltaMinimo > 0 ? lg.faltaMinimo : (lg.faltaGratis > 0 && (Number(g.proveedor.despacho.costo) || 0) > 0 ? lg.faltaGratis : 0);
+          if (!(meta > 0)) return;
+          const pid = g.proveedor.id;
+          const movibles = [];
+          mejor.el.forEach(function (c, id) {
+            if (c.proveedorId === pid) return;
+            const alt = cand.get(id).get(pid);
+            if (alt && permitidos.has(pid)) movibles.push({ id: id, alt: alt, extra: alt.costo - c.costo });
+          });
+          movibles.sort(function (a, b) { return a.extra / (a.alt.bruto || 1) - b.extra / (b.alt.bruto || 1); });
+          const el2 = new Map(mejor.el);
+          let sumado = 0;
+          for (let i = 0; i < movibles.length && sumado < meta; i++) { el2.set(movibles[i].id, movibles[i].alt); sumado += movibles[i].alt.bruto; }
+          if (sumado < meta) return;
+          const p2 = armarPlan(ctx, nec, el2);
+          if ((p2.viable && !mejor.plan.viable) || (p2.viable === mejor.plan.viable && p2.total < mejor.plan.total - 0.5)) { mejor = { el: el2, plan: p2 }; cambio = true; }
+        });
+        if (!cambio) break;
+      }
+      return mejor;
+    };
+
+    const firma = function (el) { const ids = []; el.forEach(function (c) { ids.push(c.ofertaId); }); return ids.sort().join('|'); };
+    const vistos = new Map();
+    const n = opcionales.length;
+    for (let mask = 0; mask < (1 << n); mask++) {
+      if (!mask && !obligatorios.size) continue;
+      const permitidos = new Set(obligatorios);
+      for (let i = 0; i < n; i++) if (mask & (1 << i)) permitidos.add(opcionales[i]);
+      const el = elegir(permitidos);
+      if (!el) continue;
+      const r = mejorar(el, armarPlan(ctx, nec, el), permitidos);
+      const k = firma(r.el);
+      if (!vistos.has(k)) vistos.set(k, r);
+    }
+    const todos = Array.from(vistos.values()).sort(function (a, b) { return (b.plan.viable - a.plan.viable) || (a.plan.total - b.plan.total); });
+    // los mejores planes con combinaciones de proveedores distintas
+    const planes = [], combos = new Set();
+    for (let i = 0; i < todos.length && planes.length < (opts.cuantos || 3); i++) {
+      const combo = todos[i].plan.proveedores.map(function (g) { return g.nombre; }).sort().join('|');
+      if (combos.has(combo)) continue;
+      combos.add(combo);
+      planes.push(Object.assign({ eleccion: todos[i].el }, todos[i].plan));
+    }
+
+    // referencias: lo que compras hoy (ofertas en uso) y lo más barato ítem por ítem
+    const elActual = new Map();
+    insIds.forEach(function (id) {
+      const o = costoInsumo(ctx, id).oferta;
+      if (o && o.formatoQty > 0) elActual.set(id, compraConOferta(ctx, o, nec.get(id)));
+    });
+    const elBarato = elegir(new Set(cuenta.keys()));
+    return {
+      planes: planes, actual: Object.assign({ eleccion: elActual }, armarPlan(ctx, nec, elActual)),
+      porItem: elBarato ? Object.assign({ eleccion: elBarato }, armarPlan(ctx, nec, elBarato)) : null,
+      sinOferta: sinOferta, necesidades: nec, combinaciones: vistos.size, proveedoresConsiderados: obligatorios.size + n
+    };
   }
 
   /* ---------- chequeos de calidad de receta ---------- */
@@ -731,7 +1220,13 @@ window.CLOUD = {
     impacto: impacto, violacionesDieta: violacionesDieta, dietaCompatible: dietaCompatible,
     alternativasReceta: alternativasReceta, volumenSemanal: volumenSemanal, usoSemanalInsumos: usoSemanalInsumos,
     ahorrosPosibles: ahorrosPosibles, pesoEnCosto: pesoEnCosto, listaCompras: listaCompras, chequeos: chequeos,
-    puntoEquilibrio: puntoEquilibrio
+    puntoEquilibrio: puntoEquilibrio, SEMANAS_MES: SEMANAS_MES, fechaMenos: fechaMenos,
+    normNombre: normNombre, idProveedor: idProveedor, nuevoProveedor: nuevoProveedor, asegurarProveedores: asegurarProveedores,
+    proveedorDe: proveedorDe, daFactura: daFactura, costoBrutoOferta: costoBrutoOferta,
+    historialPrecios: historialPrecios, variacionInsumo: variacionInsumo, inflacionCanasta: inflacionCanasta,
+    TIPOS_DOC: TIPOS_DOC, validarRut: validarRut, formatearRut: formatearRut, tipoDocCompra: tipoDocCompra, esFactura: esFactura,
+    montosCompra: montosCompra, libroCompras: libroCompras, ivaCompras: ivaCompras, proyeccionIva: proyeccionIva, evaluarProveedores: evaluarProveedores,
+    necesidades: necesidades, compraConOferta: compraConOferta, logistica: logistica, armarPlan: armarPlan, optimizarCanasta: optimizarCanasta
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;
@@ -741,19 +1236,24 @@ window.CLOUD = {
 /* src/cloud.js */
 /* Nube (Supabase): sesión, perfil/rol y sincronización del estado de la app.
  *
- * El estado de la app (insumos, ofertas, recetas, plan, parámetros, escenarios) se reparte en tablas:
- *   insumos, recetas, plan           → legibles por todos los roles
- *   ofertas, recetas_precios, ajustes → solo admin/gerente (aquí está el dinero)
+ * El estado de la app (insumos, ofertas, recetas, plan, parámetros, escenarios, proveedores, compras) se reparte en tablas:
+ *   insumos, recetas, plan, proveedores        → legibles por todos los roles
+ *   ofertas, recetas_precios, ajustes, compras → solo admin/gerente (aquí está el dinero)
+ *   proveedores_privado                        → solo admin/gerente (correo, contacto y notas de cada proveedor)
  * Cada cambio local se compara con la última versión sincronizada y solo se envían las filas
  * que cambiaron (upsert) o desaparecieron (delete). La seguridad la aplica la base de datos (RLS).
  */
 (function (root) {
   'use strict';
-  const ORDEN_UPSERT = ['insumos', 'recetas', 'ofertas', 'recetas_precios', 'plan', 'ajustes'];
-  const ORDEN_DELETE = ['ofertas', 'recetas_precios', 'plan', 'ajustes', 'insumos', 'recetas'];
-  const TABLAS_TODOS = ['insumos', 'recetas', 'plan', 'ofertas'];   // ofertas: la base solo entrega las propias a quien no es staff
-  const TABLAS_STAFF = ['insumos', 'ofertas', 'recetas', 'recetas_precios', 'plan', 'ajustes'];
+  const ORDEN_UPSERT = ['insumos', 'recetas', 'proveedores', 'proveedores_privado', 'ofertas', 'recetas_precios', 'plan', 'ajustes', 'compras'];
+  const ORDEN_DELETE = ['compras', 'ofertas', 'recetas_precios', 'plan', 'ajustes', 'proveedores_privado', 'proveedores', 'insumos', 'recetas'];
+  const TABLAS_TODOS = ['insumos', 'recetas', 'plan', 'ofertas', 'proveedores'];   // ofertas: la base solo entrega las propias a quien no es staff
+  const TABLAS_STAFF = ['insumos', 'ofertas', 'recetas', 'recetas_precios', 'plan', 'ajustes', 'proveedores', 'proveedores_privado', 'compras'];
+  // tablas agregadas después (04_proveedores_compras.sql): si aún no existen, la app sigue funcionando sin guardarlas
+  const OPCIONALES = ['proveedores', 'proveedores_privado', 'compras'];
+  const NO_EXISTE = /PGRST205|42P01|does not exist|Could not find the table|schema cache/i;
   const CAMPOS_PRECIO = ['pvp', 'costoManual', 'envaseManual'];
+  const CAMPOS_PROV_PRIVADOS = ['emailFacturacion', 'contacto', 'nota'];   // de un proveedor, solo para admin/gerente
   const LOTE = 200;
 
   // JSON con llaves ordenadas: jsonb reordena las llaves, así comparamos contenido y no orden
@@ -774,7 +1274,14 @@ window.CLOUD = {
 
   // estado de la app → filas por tabla
   function aFilas(state) {
-    const f = { insumos: [], ofertas: [], recetas: [], recetas_precios: [], plan: [], ajustes: [] };
+    const f = { insumos: [], ofertas: [], recetas: [], recetas_precios: [], plan: [], ajustes: [], proveedores: [], proveedores_privado: [], compras: [] };
+    (state.proveedores || []).forEach(function (p) {
+      f.proveedores.push({ id: p.id, data: sinCampos(p, ['id'].concat(CAMPOS_PROV_PRIVADOS)) });
+      const priv = {};
+      CAMPOS_PROV_PRIVADOS.forEach(function (k) { if (p[k] !== undefined && p[k] !== null && p[k] !== '') priv[k] = p[k]; });
+      f.proveedores_privado.push({ id: p.id, data: priv });
+    });
+    (state.compras || []).forEach(function (c) { f.compras.push({ id: c.id, data: sinCampos(c, ['id']) }); });
     (state.insumos || []).forEach(function (i) { f.insumos.push({ id: i.id, data: sinCampos(i, ['id']) }); });
     (state.ofertas || []).forEach(function (o) { f.ofertas.push({ id: o.id, insumo_id: o.insumoId, data: sinCampos(o, ['id', 'insumoId']) }); });
     (state.recetas || []).forEach(function (r) {
@@ -796,6 +1303,7 @@ window.CLOUD = {
     const precios = new Map((f.recetas_precios || []).map(function (x) { return [x.id, x.data || {}]; }));
     const aj = new Map((f.ajustes || []).map(function (x) { return [x.id, x.data || {}]; }));
     const plan = (f.plan || []).find(function (x) { return x.id === 'semana'; });
+    const privados = new Map((f.proveedores_privado || []).map(function (x) { return [x.id, x.data || {}]; }));
     return {
       meta: { version: 1, origen: 'nube' },
       params: aj.get('params') || {},
@@ -803,7 +1311,9 @@ window.CLOUD = {
       ofertas: (f.ofertas || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id, insumoId: x.insumo_id }, x.data); }),
       recetas: (f.recetas || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id }, x.data, precios.get(x.id) || {}); }),
       plan: plan ? plan.data : { lun: [], mar: [], mie: [], jue: [], vie: [] },
-      escenarios: (aj.get('escenarios') || {}).lista || []
+      escenarios: (aj.get('escenarios') || {}).lista || [],
+      proveedores: (f.proveedores || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id }, x.data, privados.get(x.id) || {}); }),
+      compras: (f.compras || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id }, x.data); })
     };
   }
 
@@ -826,6 +1336,7 @@ window.CLOUD = {
   function crearSync(cliente, onEstado) {
     let snap = new Map();              // key → json de lo último confirmado por el servidor
     let enCurso = false, siguiente = null, pendiente = false;
+    const faltantes = new Set();      // tablas opcionales que todavía no existen en la base
     const avisar = function (estado, msg) { if (onEstado) onEstado(estado, msg); };
 
     async function seleccionarTodo(t) {
@@ -843,7 +1354,7 @@ window.CLOUD = {
 
     // tablas: si se indica, solo se comparan y escriben esas tablas (ej. cocina → solo sus cotizaciones)
     async function pasada(state, tablas) {
-      const dentro = function (k) { return !tablas || tablas.indexOf(k.slice(0, k.indexOf('|'))) >= 0; };
+      const dentro = function (k) { const t = k.slice(0, k.indexOf('|')); return !faltantes.has(t) && (!tablas || tablas.indexOf(t) >= 0); };
       const actual = new Map(), base = new Map();
       mapa(aFilas(state)).forEach(function (v, k) { if (dentro(k)) actual.set(k, v); });
       snap.forEach(function (j, k) { if (dentro(k)) base.set(k, j); });
@@ -879,7 +1390,12 @@ window.CLOUD = {
       traer: async function (staff) {
         const tablas = staff ? TABLAS_STAFF : TABLAS_TODOS;
         const f = {};
-        const res = await Promise.all(tablas.map(seleccionarTodo));
+        const res = await Promise.all(tablas.map(function (t) {
+          return seleccionarTodo(t).then(function (filas) { faltantes.delete(t); return filas; }, function (e) {
+            if (OPCIONALES.indexOf(t) >= 0 && NO_EXISTE.test((e && (e.code + ' ' + e.message)) || String(e))) { faltantes.add(t); return []; }
+            throw e;
+          });
+        }));
         tablas.forEach(function (t, i) { f[t] = res[i]; });
         const base = new Map(); mapa(f).forEach(function (v, k) { base.set(k, v.json); });
         let cambio = base.size !== snap.size;
@@ -903,11 +1419,12 @@ window.CLOUD = {
         } finally { enCurso = false; }
       },
       pendiente: function () { return pendiente || enCurso; },
+      faltantes: function () { return Array.from(faltantes); },
       tamañoBase: function () { return snap.size; }
     };
   }
 
-  const Nube = { canon: canon, aFilas: aFilas, desdeFilas: desdeFilas, diferencias: diferencias, mapa: mapa, crearSync: crearSync, CAMPOS_PRECIO: CAMPOS_PRECIO };
+  const Nube = { canon: canon, aFilas: aFilas, desdeFilas: desdeFilas, diferencias: diferencias, mapa: mapa, crearSync: crearSync, CAMPOS_PRECIO: CAMPOS_PRECIO, CAMPOS_PROV_PRIVADOS: CAMPOS_PROV_PRIVADOS };
   if (typeof module !== 'undefined' && module.exports) module.exports = Nube;
   else root.Nube = Nube;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -930,6 +1447,8 @@ window.CLOUD = {
     s.escenarios = s.escenarios || [];
     if (s.escenarioActivo === undefined) s.escenarioActivo = null;
     s.meta = s.meta || { version: 1 };
+    s.compras = s.compras || [];
+    if (window.Engine) window.Engine.asegurarProveedores(s);   // proveedores desde los "lugar" de las ofertas
     return s;
   }
 
@@ -1234,11 +1753,12 @@ window.CLOUD = {
     });
     App.toast('Escenario aplicado a los datos reales');
   };
-  App.registrarPrecio = function (o, nuevo) {
-    if (o.precio === nuevo) return;
+  // guarda el precio vigente en el historial antes de reemplazarlo; un precio del mismo día se corrige, no se acumula
+  App.registrarPrecio = function (o, nuevo, fecha) {
+    if (o.precio === nuevo || !(o.precio > 0) || !o.fecha || o.fecha >= (fecha || App.hoy())) return;
     o.historial = o.historial || [];
-    o.historial.push({ fecha: o.fecha || App.hoy(), precio: o.precio });
-    if (o.historial.length > 30) o.historial.shift();
+    o.historial.push({ fecha: o.fecha, precio: o.precio, fuente: o.fuente || null });
+    if (o.historial.length > 60) o.historial.shift();
   };
 
   /* ---------- render ---------- */
@@ -1257,7 +1777,7 @@ window.CLOUD = {
   }
 
   const NAV = [['panel', 'Panel'], ['platos', 'Platos y PVP'], ['recetas', 'Recetas'], ['insumos', 'Insumos y compras'], ['alternativas', 'Alternativas'],
-    ['cocina', 'Cocina'], ['cotizaciones', 'Cotizaciones'], ['compras', 'Lista de compras'], ['ajustes', 'Ajustes'], ['usuarios', 'Usuarios']];
+    ['cocina', 'Cocina'], ['cotizaciones', 'Cotizaciones'], ['compras', 'Lista de compras'], ['proveedores', 'Proveedores'], ['ajustes', 'Ajustes'], ['usuarios', 'Usuarios']];
 
   function headerNode() {
     const s = Store.get(), esc = App.escenario(), staff = App.esStaff();
@@ -1631,6 +2151,28 @@ window.CLOUD = {
     return App.clpU(unit) + '/un';
   };
 
+  function lugarTxt(o) {
+    const p = App.proveedorDeOferta(o);
+    return (p ? p.nombre : o.lugar || '—') + (p && E.daFactura(p) ? ' 🧾' : '');
+  }
+
+  // proveedor de una oferta: lista del directorio + crear uno nuevo
+  function selProveedor(o) {
+    const s = Store.get(), p = App.proveedorDeOferta(o);
+    const lista = (s.proveedores || []).filter(function (x) { return x.activo !== false || (p && x.id === p.id); }).sort(function (a, b) { return a.nombre.localeCompare(b.nombre); });
+    const fijar = function (st, prov) { const x = st.ofertas.find(function (y) { return y.id === o.id; }); x.proveedorId = prov ? prov.id : null; x.lugar = prov ? prov.nombre : ''; };
+    return App.select({ fk: 'o-prov-' + o.id, cls: 'w-prov', value: p ? p.id : '', title: p ? 'Factura: ' + (p.factura === 'si' ? 'sí' : p.factura === 'no' ? 'no' : 'a pedido') : '',
+      options: [['', '— proveedor —']].concat(lista.map(function (x) { return [x.id, x.nombre + (E.daFactura(x) ? ' 🧾' : '')]; }), [['__nuevo', '+ Nuevo proveedor…']]),
+      onChange: function (v) {
+        if (v === '__nuevo') {
+          App.render();
+          App.prompt('Nuevo proveedor', '', function (nombre) { Store.mutate(function (st) { fijar(st, App.vincularProveedor(st, nombre)); }); }, 'Ej.: Mayorista 10');
+          return;
+        }
+        Store.mutate(function (st) { fijar(st, (st.proveedores || []).find(function (x) { return x.id === v; }) || null); });
+      } });
+  }
+
   function precioViejo(o, p) {
     return o.fecha && E.diasEntre(o.fecha, App.hoy()) > p.precioViejoDias;
   }
@@ -1659,7 +2201,7 @@ window.CLOUD = {
           h('td', null, h('div', { class: 'nm' }, i.nombre), h('small', null, i.categoria, c.missing ? ' ' : null, c.missing ? App.badge('sin precio', 'bad') : null,
             viejo ? App.badge('precio viejo', 'warn') : null, ofs.some(function (o) { return o.pendiente; }) ? App.badge('cotización nueva', 'info') : null, ofs.length > 1 ? App.badge(ofs.length + ' ofertas', 'info') : null)),
           h('td', { class: 'r' }, c.missing ? '—' : App.costoVisible(c.unit, i.unidad)),
-          h('td', null, c.oferta ? c.oferta.lugar : (c.modo === 'promedio' ? 'promedio' : '—')),
+          h('td', null, c.oferta ? lugarTxt(c.oferta) : (c.modo === 'promedio' ? 'promedio' : '—')),
           h('td', { class: 'c' }, u.length ? u.length + ' plato' + (u.length > 1 ? 's' : '') : h('span', { class: 'mut' }, '—')));
       }) : h('tr', null, h('td', { colspan: 4 }, App.empty('Sin resultados')))));
 
@@ -1715,7 +2257,7 @@ window.CLOUD = {
       const esMejor = mejor && mejor.o.id === o.id && ofs.length > 1;
       const esUsada = activo.oferta && activo.oferta.id === o.id;
       return h('tr', { class: (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada' : '') },
-        h('td', null, App.textInput({ fk: 'o-lugar-' + o.id, value: o.lugar, ph: 'Lugar / proveedor', list: 'dl-lugares', onChange: function (v) { upO(o, function (x) { x.lugar = v; }, 'lg' + o.id); } })),
+        h('td', null, selProveedor(o)),
         h('td', null, App.textInput({ fk: 'o-marca-' + o.id, value: o.marca, ph: 'Marca / detalle', onChange: function (v) { upO(o, function (x) { x.marca = v; }, 'mc' + o.id); } }),
           o.pendiente ? h('div', null, App.badge('por revisar', 'warn')) : null, o.autor ? h('div', null, h('small', null, 'cotizó ' + o.autor)) : null),
         h('td', null, App.textInput({ fk: 'o-fl-' + o.id, cls: 'w90', value: o.formatoLabel, ph: 'ej. saco 25 kg', onChange: function (v) { upO(o, function (x) { x.formatoLabel = v; }, 'fl' + o.id); } })),
@@ -1756,7 +2298,7 @@ window.CLOUD = {
 
     const tablaOfertas = App.card('Dónde y a qué precio lo compras',
       h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
-        h('thead', null, h('tr', null, ['Lugar', 'Marca / detalle', 'Formato', 'Cant. formato', 'Precio formato', 'Rend. %', 'Costo neto', 'Fuente / fecha', 'Usar', 'Disp.', ''].map(function (t, i) { return h('th', { class: i === 6 ? 'r' : (i === 8 || i === 9 ? 'c' : '') }, t); }))),
+        h('thead', null, h('tr', null, ['Proveedor', 'Marca / detalle', 'Formato', 'Cant. formato', 'Precio formato', 'Rend. %', 'Costo neto', 'Fuente / fecha', 'Usar', 'Disp.', ''].map(function (t, i) { return h('th', { class: i === 6 ? 'r' : (i === 8 || i === 9 ? 'c' : '') }, t); }))),
         h('tbody', null, ofs.map(filaOferta)))),
       '', App.btn('+ Agregar cotización', nuevaOferta, 'small primary'));
 
@@ -1794,11 +2336,14 @@ window.CLOUD = {
 
     // historial
     const hist = [];
-    ofs.forEach(function (o) { (o.historial || []).forEach(function (x) { hist.push({ lugar: o.lugar, fecha: x.fecha, precio: x.precio }); }); });
+    ofs.forEach(function (o) { (o.historial || []).forEach(function (x) { hist.push({ lugar: lugarTxt(o), formato: o.formatoLabel, fecha: x.fecha, precio: x.precio, fuente: x.fuente }); }); });
     hist.sort(function (a, b) { return a.fecha < b.fecha ? 1 : -1; });
+    const verGrafico = App.btn('Ver evolución', function () { App.ui.evoInsumo = ins.id; App.go('proveedores', 'evolucion'); }, 'small');
     const tHist = hist.length ? App.card('Historial de precios', h('table', { class: 'tbl compact' },
-      h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Lugar'), h('th', { class: 'r' }, 'Precio anterior'))),
-      h('tbody', null, hist.slice(0, 12).map(function (x) { return h('tr', null, h('td', null, x.fecha), h('td', null, x.lugar), h('td', { class: 'r' }, App.clp(x.precio))); })))) : null;
+      h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Proveedor'), h('th', null, 'Formato'), h('th', { class: 'r' }, 'Precio anterior'), h('th', null, 'Origen'))),
+      h('tbody', null, hist.slice(0, 12).map(function (x) {
+        return h('tr', null, h('td', null, x.fecha), h('td', null, x.lugar), h('td', null, x.formato), h('td', { class: 'r' }, App.clp(x.precio)), h('td', null, h('small', null, x.fuente || '')));
+      }))), '', verGrafico) : null;
 
     return h('div', { class: 'stack' }, cabecera, tablaOfertas, impacto, tUsos, tHist);
   }
@@ -1822,7 +2367,6 @@ window.CLOUD = {
     const s = Store.get(), ctx = App.ctx();
     const F = App.ui.filtros.ins = App.ui.filtros.ins || { q: '', cat: '', mode: '' };
     const sel = arg && s.insumos.find(function (i) { return i.id === arg; }) ? arg : null;
-    const lugares = Array.from(new Set(s.ofertas.map(function (o) { return o.lugar; }).filter(Boolean)));
     const fams = Array.from(new Set(s.insumos.map(function (i) { return i.familia; }).filter(Boolean)));
     const cats = Array.from(new Set(CATS.concat(s.insumos.map(function (i) { return i.categoria; }))));
     return h('div', { class: 'split' },
@@ -1831,10 +2375,9 @@ window.CLOUD = {
         sel ? detalle(s.insumos.find(function (i) { return i.id === sel; }), ctx)
           : App.card('Insumos y compras', h('div', null,
             h('p', null, 'Elige un insumo de la lista para ver y editar dónde lo compras, a qué precio, en qué formato, y cómo impacta en tus platos.'),
-            h('ul', { class: 'help' }, h('li', null, 'Cada insumo puede tener varias ',  h('b', null, 'ofertas'), ' (lugar + marca + formato). Los costos usan la oferta marcada como "Usar".'),
+            h('ul', { class: 'help' }, h('li', null, 'Cada insumo puede tener varias ',  h('b', null, 'ofertas'), ' (proveedor + marca + formato). Los costos usan la oferta marcada como "Usar". Los proveedores (factura, despacho) se editan en la pestaña Proveedores.'),
               h('li', null, 'Al cambiar un precio, todos los platos, márgenes y la lista de compras se recalculan al instante.'),
               h('li', null, 'Con un escenario activo (selector arriba), los cambios de precio son simulaciones y no tocan tus datos reales.')))),
-        h('datalist', { id: 'dl-lugares' }, lugares.map(function (l) { return h('option', { value: l }); })),
         h('datalist', { id: 'dl-fams' }, fams.map(function (l) { return h('option', { value: l }); })),
         h('datalist', { id: 'dl-cats' }, cats.map(function (l) { return h('option', { value: l }); }))));
   };
@@ -2324,6 +2867,8 @@ window.CLOUD = {
       h('div', { class: 'kpis' }, App.kpi('Ahorro posible por mes', App.clp(total), a.filas.length + ' insumos con una oferta más barata', total > 0 ? 'good' : ''),
         App.kpi('Insumos con una sola cotización', unaOferta + ' de ' + s.insumos.length, 'agrega más lugares para comparar', unaOferta > s.insumos.length / 2 ? 'warn' : ''),
         App.kpi('Volumen supuesto', a.usoPlan ? 'Plan semanal' : ctx.p.porcionesSemana + ' porc./sem.', a.usoPlan ? 'de la pestaña Lista de compras' : 'repartidas parejo entre platos activos (Ajustes)')),
+      h('div', { class: 'alert info link', onclick: function () { App.go('proveedores', 'canasta'); } }, h('span', null, '🧺'),
+        h('span', null, 'Esta tabla compara insumo por insumo. Para ver si conviene concentrar compras (despacho gratis, menos viajes), abre la canasta óptima en Proveedores →')),
       App.card('Dónde comprar más barato', a.filas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' },
         h('thead', null, h('tr', null, ['Insumo', 'Hoy compras en', 'Más barata', 'Ahorro', 'Uso semanal', 'Ahorro / mes', ''].map(function (t, i) { return h('th', { class: i >= 3 && i < 6 ? 'r' : '' }, t); }))),
         h('tbody', null, a.filas.map(function (f) {
@@ -2514,6 +3059,11 @@ window.CLOUD = {
     if (pocos.length) alertas.push(alerta('📝', pocos.length + ' plato(s) con menos de 5 ingredientes: probablemente incompletos', 'info', function () { App.go('recetas', pocos[0].id); }));
     if (sinEnvase.length) alertas.push(alerta('📝', sinEnvase.length + ' plato(s) sin envase asignado', 'info', function () { App.go('recetas', sinEnvase[0].id); }));
     if (ah.filas.length) alertas.push(alerta('💡', 'Podrías ahorrar ~' + App.clp(ahTotal) + '/mes cambiando de proveedor en ' + ah.filas.length + ' insumo(s)', 'good', function () { App.go('alternativas', 'proveedores'); }));
+    const alza = E.inflacionCanasta(ctx, 90);
+    if (alza.pct != null && alza.pct >= 5) alertas.push(alerta('📈', 'Tu canasta subió ' + App.pct(alza.pct) + ' en 90 días (' + alza.cubiertos + ' insumos con historial)', 'warn', function () { App.go('proveedores', 'evolucion'); }));
+    const iv = E.proyeccionIva(ctx);
+    if (iv.creditoMes > 1000) alertas.push(alerta('🧾', (p.ivaRecuperable === 'si' ? 'Crédito fiscal proyectado ~' : 'Crédito fiscal potencial ~') + App.clp(iv.creditoMes) + '/mes en compras con factura' +
+      (iv.perdidoMes > 1000 ? ' · ' + App.clp(iv.perdidoMes) + '/mes de IVA en compras sin factura' : ''), 'info', function () { App.go('proveedores', 'iva'); }));
     const pendCot = App.cotizacionesPendientes ? App.cotizacionesPendientes() : 0;
     if (pendCot) alertas.unshift(alerta('📥', pendCot + ' cotización(es) nueva(s) por revisar', 'info', function () { App.go('cotizaciones'); }));
     if (!alertas.length) alertas.push(alerta('✅', 'Todo en orden.', 'good'));
@@ -2682,7 +3232,8 @@ window.CLOUD = {
     const ins = s.insumos.find(function (i) { return i.nombre.toLowerCase() === (F.insumo || '').trim().toLowerCase(); });
     const presets = ins ? PRESETS[ins.unidad] || [] : [];
     if (ins && !F.fl && presets.length) { F.fl = presets[0][0]; F.fq = presets[0][1]; }
-    const lugares = Array.from(new Set(s.ofertas.map(function (o) { return o.lugar; }).filter(Boolean)));
+    const lugares = Array.from(new Set((s.proveedores || []).filter(function (p) { return p.activo !== false; }).map(function (p) { return p.nombre; })
+      .concat(s.ofertas.map(function (o) { return o.lugar; })).filter(Boolean))).sort();
 
     const enviar = function () {
       if (!ins) { App.toast('Elige un insumo de la lista'); return; }
@@ -2691,7 +3242,8 @@ window.CLOUD = {
       if (!(F.lugar || '').trim()) { App.toast('Indica dónde lo viste (lugar)'); return; }
       const u = yo();
       Store.mutate(function (st) {
-        st.ofertas.push({ id: Store.uid('OF-'), insumoId: ins.id, lugar: F.lugar.trim(), marca: (F.marca || '').trim(), formatoLabel: F.fl || ins.unidad,
+        const prov = staff ? App.vincularProveedor(st, F.lugar) : null;   // quien no es staff no edita proveedores: se vincula por nombre al revisarla
+        st.ofertas.push({ id: Store.uid('OF-'), insumoId: ins.id, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(), formatoLabel: F.fl || ins.unidad,
           formatoQty: F.fq, precio: F.precio, rendimiento: null, fecha: App.hoy(), fuente: 'cotizacion', disponible: true, preferida: false,
           pendiente: !staff, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim() });
       });
@@ -2836,6 +3388,14 @@ window.CLOUD = {
     const grupos = {};
     filas.forEach(function (f) { const g = grupos[f.lugar] = grupos[f.lugar] || { filas: [], total: 0 }; g.filas.push(f); g.total += f.costo; });
     const total = filas.reduce(function (t, f) { return t + f.costo; }, 0);
+    // cómo llega cada compra: despacho (gratis desde X, mínimo) o ir a buscar
+    let totalLog = 0;
+    Object.keys(grupos).forEach(function (lugar) {
+      const g = grupos[lugar], pid = g.filas[0].proveedorId, prov = pid ? App.proveedor(pid) : null;
+      g.proveedor = prov;
+      g.log = prov ? E.logistica(ctx, prov, g.total) : null;
+      if (g.log) totalLog += g.log.costo;
+    });
     const teorico = filas.reduce(function (t, f) { return t + f.costoTeorico; }, 0);
     // ingresos y margen esperados del plan
     let ingreso = 0, costoPlan = 0, porcTot = 0;
@@ -2857,7 +3417,15 @@ window.CLOUD = {
         App.btn('🖨 Imprimir', function () { window.print(); }, 'small')),
       filas.length ? Object.keys(grupos).map(function (lugar) {
         const g = grupos[lugar];
-        return App.card(lugar, h('table', { class: 'tbl compact' },
+        const lg = g.log, prov = g.proveedor;
+        const pie = prov ? h('div', { class: 'row gap wrap mt' },
+          App.badgeFactura(prov),
+          lg ? h('small', null, lg.modo + (lg.costo > 0.5 ? ' ' + App.clp(lg.costo) : '')) : h('small', { class: 'bad-t' }, 'no alcanza el pedido mínimo y no se puede ir a buscar'),
+          lg && lg.faltaMinimo > 0 ? h('small', { class: 'bad-t' }, 'faltan ' + App.clp(lg.faltaMinimo) + ' para el pedido mínimo') :
+            lg && lg.faltaGratis > 0 ? h('small', { class: 'warn-t' }, 'faltan ' + App.clp(lg.faltaGratis) + ' para despacho gratis') : null,
+          h('span', { class: 'spacer' }),
+          App.btn('Registrar esta compra', function () { App.abrirRegistroCompra(prov.id, g.filas); }, 'small noprint')) : null;
+        return App.card(lugar, h('div', null, h('table', { class: 'tbl compact' },
           h('thead', null, h('tr', null, h('th', null, 'Insumo'), h('th', { class: 'r' }, 'Necesito'), h('th', { class: 'r' }, 'Comprar'), h('th', { class: 'r' }, 'Precio formato'), h('th', { class: 'r' }, 'Subtotal'))),
           h('tbody', null, g.filas.map(function (f) {
             return h('tr', { class: f.missing ? 'warnrow' : '' }, h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(f.insumoId) }, f.nombre)),
@@ -2865,9 +3433,625 @@ window.CLOUD = {
               h('td', { class: 'r strong' }, f.packs ? f.packs + ' × ' + f.formatoLabel : '—'),
               h('td', { class: 'r' }, f.missing ? App.badge('sin precio', 'bad') : App.clp(f.precioPack)), h('td', { class: 'r' }, App.clp(f.costo)));
           })),
-          h('tfoot', null, h('tr', null, h('td', { colspan: 4 }, 'Subtotal ' + lugar), h('td', { class: 'r strong' }, App.clp(g.total))))), 'compra');
+          h('tfoot', null, h('tr', null, h('td', { colspan: 4 }, 'Subtotal ' + lugar), h('td', { class: 'r strong' }, App.clp(g.total))))), pie), 'compra');
       }) : App.empty('Agrega platos al plan semanal para generar la lista de compras.'),
-      filas.length ? h('div', { class: 'total-bar' }, 'Total de la compra: ', h('b', null, App.clp(total))) : null);
+      filas.length ? h('div', { class: 'total-bar' }, 'Total de la compra: ', h('b', null, App.clp(total)),
+        totalLog > 0.5 ? h('span', null, ' + despacho/visitas ', h('b', null, App.clp(totalLog))) : null,
+        h('div', null, h('a', { class: 'small noprint', href: '#/proveedores/canasta' }, '¿Conviene repartir distinto? Ver canasta óptima →'))) : null);
+  };
+})();
+
+/* src/ui/proveedores.js */
+/* Proveedores: directorio (factura, despacho), compras reales, evolución de precios, IVA / crédito fiscal
+ * y canasta óptima (dónde conviene comprar considerando precio en formatos reales + despacho o visita). */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const TABS = [['directorio', 'Directorio'], ['compras', 'Compras'], ['evolucion', 'Evolución de precios'], ['iva', 'IVA y crédito fiscal'], ['canasta', 'Evaluación y canasta óptima']];
+  const TIPOS = [['supermercado', 'Supermercado'], ['mayorista', 'Mayorista'], ['feria', 'Feria / mercado'], ['carniceria', 'Carnicería / especialista'], ['distribuidora', 'Distribuidora'], ['otro', 'Otro']];
+  const FACTURA = [['si', 'Da factura'], ['a_pedido', 'Factura a pedido'], ['no', 'Sin factura']];
+
+  /* ---------- helpers compartidos ---------- */
+  App.proveedor = function (id) { return (Store.get().proveedores || []).find(function (p) { return p.id === id; }) || null; };
+  App.proveedorDeOferta = function (o) { return E.proveedorDe(App.ctx(), o); };
+  App.badgeFactura = function (p) {
+    if (!p) return null;
+    return p.factura === 'si' ? App.badge('🧾 factura', 'good') : p.factura === 'a_pedido' ? App.badge('🧾 a pedido', 'info') : App.badge('sin factura', '');
+  };
+  // ¿la oferta pertenece al proveedor? (por id o, si no tiene, por nombre/alias)
+  function esDe(o, p) {
+    if (o.proveedorId) return o.proveedorId === p.id;
+    const k = E.normNombre(o.lugar);
+    return !!k && (k === E.normNombre(p.nombre) || (p.alias || []).some(function (a) { return E.normNombre(a) === k; }));
+  }
+  // dentro de Store.mutate: proveedor con ese nombre (o alias), creándolo si no existe
+  App.vincularProveedor = function (st, nombre) {
+    const k = E.normNombre(nombre);
+    if (!k) return null;
+    st.proveedores = st.proveedores || [];
+    let p = st.proveedores.find(function (x) { return E.normNombre(x.nombre) === k || (x.alias || []).some(function (a) { return E.normNombre(a) === k; }); });
+    if (!p) { p = E.nuevoProveedor(nombre); st.proveedores.push(p); }
+    return p;
+  };
+  function despachoTxt(p) {
+    const d = p.despacho || {}, out = [];
+    if (d.ofrece) {
+      out.push('despacho ' + (Number(d.costo) > 0 ? App.clp(d.costo) : 'sin costo'));
+      if (d.gratisDesde > 0) out.push('gratis desde ' + App.clp(d.gratisDesde));
+      if (d.minimoPedido > 0) out.push('mínimo ' + App.clp(d.minimoPedido));
+    }
+    if (p.retiro !== false) out.push('ir a buscar' + (Number(p.costoVisita) > 0 ? ' (' + App.clp(p.costoVisita) + ')' : ''));
+    return out.join(' · ') || '—';
+  }
+  function fmtFecha(iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(2, 4) : ''; }
+  function fechaCL(iso) { return iso ? iso.slice(8, 10) + '-' + iso.slice(5, 7) + '-' + iso.slice(0, 4) : ''; }
+  // CSV con ; y BOM: Excel en español lo abre directo con columnas y tildes correctas
+  App.descargarCSV = function (nombre, encabezados, filas) {
+    const celda = function (v) { const t = v == null ? '' : String(v); return /[;"\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const txt = [encabezados].concat(filas).map(function (f) { return f.map(celda).join(';'); }).join('\r\n');
+    App.descargar(nombre, '\ufeff' + txt, 'text/csv;charset=utf-8');
+  };
+  const DOCS = Object.keys(E.TIPOS_DOC).map(function (k) { return [k, E.TIPOS_DOC[k]]; });
+  function docPorDefecto(p) { return p && p.factura === 'si' ? '33' : 'sd'; }
+  function faltaTributario(p) { return !p.rut || !E.validarRut(p.rut) || !p.razonSocial; }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function avisoNube() {
+    const N = App.nube;
+    const f = N.activo && N.sync && N.sync.faltantes ? N.sync.faltantes() : [];
+    return f.length ? h('div', { class: 'alert warn' }, h('span', null, '⚠️'), h('span', null, 'La base de datos en la nube aún no tiene las tablas ' + f.join(' y ') +
+      ': lo que hagas aquí no se guardará para los demás. Ejecuta supabase/04_proveedores_compras.sql en Supabase → SQL Editor.')) : null;
+  }
+  function itemsPlan() {
+    const s = Store.get(), out = [];
+    ['lun', 'mar', 'mie', 'jue', 'vie'].forEach(function (d) { (s.plan[d] || []).forEach(function (it) { out.push(it); }); });
+    return out;
+  }
+
+  /* ================= Directorio ================= */
+  function directorio() {
+    const s = Store.get(), ctx = App.ctx();
+    const lista = (s.proveedores || []).slice().sort(function (a, b) { return (b.activo !== false) - (a.activo !== false) || a.nombre.localeCompare(b.nombre); });
+    const nOfertas = new Map(), nCompras = new Map();
+    s.ofertas.forEach(function (o) { const p = E.proveedorDe(ctx, o); if (p) nOfertas.set(p.id, (nOfertas.get(p.id) || 0) + 1); });
+    (s.compras || []).forEach(function (c) { nCompras.set(c.proveedorId, (nCompras.get(c.proveedorId) || 0) + 1); });
+
+    const upd = function (p, fn, key) { Store.mutate(function (st) { fn(st.proveedores.find(function (x) { return x.id === p.id; }), st); }, key); };
+    const renombrar = function (p, v) {
+      App.cache.renombrando = App.cache.renombrando && App.cache.renombrando.id === p.id ? App.cache.renombrando : { id: p.id, original: p.nombre };
+      upd(p, function (x, st) {
+        st.ofertas.forEach(function (o) { if (esDe(o, x)) { o.proveedorId = x.id; o.lugar = v; } });
+        x.nombre = v;
+      }, 'pvn' + p.id);
+    };
+    const finRenombrar = function (p) {
+      const r = App.cache.renombrando; App.cache.renombrando = null;
+      if (!r || r.id !== p.id) return;
+      upd(p, function (x) { if (E.normNombre(r.original) !== E.normNombre(x.nombre) && (x.alias || []).indexOf(r.original) < 0) x.alias = (x.alias || []).concat(r.original); });
+    };
+    const fusionar = function (p) {
+      const otros = lista.filter(function (x) { return x.id !== p.id; });
+      let destino = otros[0] ? otros[0].id : '';
+      const sel = App.select({ fk: 'fus-' + p.id, value: destino, options: otros.map(function (x) { return [x.id, x.nombre]; }), onChange: function (v) { destino = v; } });
+      App.modal('Fusionar "' + p.nombre + '"', h('div', { class: 'stack' },
+        h('p', null, 'Sus ofertas y compras pasan al proveedor elegido y "' + p.nombre + '" queda como nombre alternativo (alias). Útil cuando el mismo lugar se escribió de varias formas.'),
+        h('label', null, 'Unir con', sel)), function (close) {
+        return [App.btn('Cancelar', close), App.btn('Fusionar', function () {
+          if (!destino) return;
+          close();
+          Store.mutate(function (st) {
+            const a = st.proveedores.find(function (x) { return x.id === p.id; }), b = st.proveedores.find(function (x) { return x.id === destino; });
+            st.ofertas.forEach(function (o) { if (esDe(o, a)) { o.proveedorId = b.id; o.lugar = b.nombre; } });
+            (st.compras || []).forEach(function (c) { if (c.proveedorId === a.id) c.proveedorId = b.id; });
+            b.alias = Array.from(new Set((b.alias || []).concat([a.nombre], a.alias || [])));
+            st.proveedores = st.proveedores.filter(function (x) { return x.id !== a.id; });
+          });
+          App.toast('Proveedores fusionados');
+        }, 'primary')];
+      });
+    };
+    const eliminar = function (p) {
+      if (nOfertas.get(p.id) || nCompras.get(p.id)) { App.toast('Tiene ofertas o compras: fusiónalo con otro o márcalo inactivo'); return; }
+      App.confirm('¿Eliminar el proveedor "' + p.nombre + '"?', function () { Store.mutate(function (st) { st.proveedores = st.proveedores.filter(function (x) { return x.id !== p.id; }); }); }, 'Eliminar', true);
+    };
+    const nuevo = function () {
+      App.prompt('Nuevo proveedor', '', function (nombre) {
+        if (s.proveedores.some(function (x) { return E.normNombre(x.nombre) === E.normNombre(nombre); })) { App.toast('Ya existe un proveedor con ese nombre'); return; }
+        Store.mutate(function (st) { App.vincularProveedor(st, nombre); });
+      }, 'Ej.: Mayorista 10 Viña');
+    };
+
+    const fila = function (p) {
+      const d = p.despacho || {};
+      const setD = function (k, v) { upd(p, function (x) { x.despacho = Object.assign({ ofrece: false, costo: 0, gratisDesde: null, minimoPedido: null }, x.despacho || {}); x.despacho[k] = v; }, 'pd' + k + p.id); };
+      return h('tr', { class: p.activo === false ? 'off' : '' },
+        h('td', null, App.textInput({ fk: 'pv-n-' + p.id, value: p.nombre, onChange: function (v) { if (v.trim()) renombrar(p, v); }, onCommit: function () { finRenombrar(p); } }),
+          (p.alias || []).length ? h('div', null, h('small', { title: 'También se reconoce como' }, '≈ ' + p.alias.join(', '))) : null,
+          h('div', null, p.rut ? h('small', { class: E.validarRut(p.rut) ? '' : 'bad-t' }, 'RUT ' + p.rut + (p.razonSocial ? ' · ' + p.razonSocial : '')) :
+            p.factura !== 'no' ? App.badge('faltan datos de facturación', 'warn') : null)),
+        h('td', null, App.select({ fk: 'pv-t-' + p.id, cls: 'w90', value: p.tipo || 'otro', options: TIPOS, onChange: function (v) { upd(p, function (x) { x.tipo = v; }); } })),
+        h('td', null, App.select({ fk: 'pv-f-' + p.id, value: p.factura || 'no', options: FACTURA, onChange: function (v) { upd(p, function (x) { x.factura = v; }); } })),
+        h('td', null, h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!d.ofrece, onchange: function (ev) { setD('ofrece', ev.target.checked); } }), ' despacha'),
+          d.ofrece ? h('div', { class: 'desp' },
+            h('span', null, 'costo ', App.numInput({ fk: 'pv-dc-' + p.id, cls: 'w70', value: d.costo || 0, onChange: function (n) { setD('costo', n); } })),
+            h('span', null, 'gratis desde ', App.numInput({ fk: 'pv-dg-' + p.id, cls: 'w80', value: d.gratisDesde, ph: '—', onChange: function (n) { setD('gratisDesde', n); }, onEmpty: function () { setD('gratisDesde', null); } })),
+            h('span', null, 'mínimo ', App.numInput({ fk: 'pv-dm-' + p.id, cls: 'w80', value: d.minimoPedido, ph: '—', onChange: function (n) { setD('minimoPedido', n); }, onEmpty: function () { setD('minimoPedido', null); } }))) : null),
+        h('td', null, h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: p.retiro !== false, onchange: function (ev) { upd(p, function (x) { x.retiro = ev.target.checked; }); } }), ' se puede ir'),
+          p.retiro !== false ? h('div', { class: 'desp' }, h('span', { title: 'Lo que te cuesta ir: bencina, estacionamiento, tiempo' }, 'costo visita ',
+            App.numInput({ fk: 'pv-cv-' + p.id, cls: 'w70', value: p.costoVisita || 0, onChange: function (n) { upd(p, function (x) { x.costoVisita = n; }, 'pcv' + p.id); } }))) : null),
+        h('td', { class: 'c' }, nOfertas.get(p.id) || 0, h('div', null, h('small', null, (nCompras.get(p.id) || 0) + ' compras'))),
+        h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: p.activo !== false, title: 'Activo: se considera en la canasta óptima', onchange: function (ev) { upd(p, function (x) { x.activo = ev.target.checked; }); } })),
+        h('td', { class: 'nowrap' }, App.btn(App.ui.provAbierto === p.id ? 'Cerrar' : 'Facturación', function () { App.ui.provAbierto = App.ui.provAbierto === p.id ? null : p.id; App.render(); }, 'small', 'RUT, razón social, giro, dirección'),
+          App.btn('Fusionar…', function () { fusionar(p); }, 'small ghost', 'Unir con otro proveedor (mismo lugar escrito distinto)'),
+          App.btn('✕', function () { eliminar(p); }, 'small ghost', 'Eliminar')));
+    };
+
+    const tributario = function (p) {
+      const campo = function (k, label, ph, cls) {
+        return h('label', { class: cls || '' }, label, App.textInput({ fk: 'pv-' + k + '-' + p.id, value: p[k] || '', ph: ph || '', onChange: function (v) { upd(p, function (x) { x[k] = v; }, 'pt' + k + p.id); } }));
+      };
+      const rutOk = E.validarRut(p.rut);
+      return h('tr', { class: 'sub-row' }, h('td', { colspan: 8 }, h('div', { class: 'stack' },
+        h('div', { class: 'form-grid' },
+          h('label', null, 'RUT', App.textInput({ fk: 'pv-rut-' + p.id, value: p.rut || '', ph: '76.123.456-7',
+            onChange: function (v) { upd(p, function (x) { x.rut = v; }, 'ptrut' + p.id); },
+            onCommit: function (v) { if (E.validarRut(v)) upd(p, function (x) { x.rut = E.formatearRut(v); }); } }),
+            p.rut ? h('small', { class: rutOk ? 'good-t' : 'bad-t' }, rutOk ? '✓ RUT válido' : '✗ el dígito verificador no corresponde') : null),
+          campo('razonSocial', 'Razón social', 'ej. Comercial Alvi SpA'), campo('giro', 'Giro', 'ej. Venta al por mayor de alimentos'),
+          campo('direccion', 'Dirección', 'Calle y número'), campo('comuna', 'Comuna', 'ej. Valparaíso'),
+          campo('emailFacturacion', 'Correo de facturación', 'facturas@…'), campo('contacto', 'Teléfono / contacto', '+56 9 …'), campo('nota', 'Nota', 'ej. pedir factura al pagar')),
+        h('p', { class: 'help' }, 'Estos datos salen en el libro de compras que exportas para tu contador. El RUT y la razón social son los que importan para el SII. Correo, contacto y nota solo los ven admin y gerente.'))));
+    };
+
+    const exportar = function () {
+      App.descargarCSV('proveedores-' + App.hoy() + '.csv',
+        ['Nombre', 'RUT', 'Razón social', 'Giro', 'Dirección', 'Comuna', 'Correo facturación', 'Contacto', 'Tipo', 'Factura', 'Despacho / retiro', 'Activo'],
+        lista.map(function (p) {
+          return [p.nombre, p.rut ? E.formatearRut(p.rut) : '', p.razonSocial || '', p.giro || '', p.direccion || '', p.comuna || '', p.emailFacturacion || '', p.contacto || '',
+            (TIPOS.find(function (t) { return t[0] === p.tipo; }) || ['', ''])[1], (FACTURA.find(function (t) { return t[0] === p.factura; }) || ['', ''])[1], despachoTxt(p), p.activo === false ? 'no' : 'sí'];
+        }));
+    };
+    const sinDatos = lista.filter(function (p) { return p.activo !== false && p.factura !== 'no' && faltaTributario(p); }).length;
+
+    return h('div', { class: 'stack' },
+      App.card('Proveedores (' + lista.length + ')', h('div', { class: 'stack' },
+        h('p', { class: 'help' }, 'Aquí defines quién da factura y cómo te llega cada compra. "Costo visita" es lo que te cuesta ir a buscar (bencina, tiempo): la canasta óptima lo usa para decidir si conviene concentrar compras en menos lugares.'),
+        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact prov' },
+          h('thead', null, h('tr', null, ['Nombre', 'Tipo', 'Factura', 'Despacho', 'Retiro', 'Ofertas', 'Activo', ''].map(function (t, i) { return h('th', { class: i === 5 || i === 6 ? 'c' : '' }, t); }))),
+          h('tbody', null, lista.length ? lista.map(function (p) { return [fila(p), App.ui.provAbierto === p.id ? tributario(p) : null]; })
+            : h('tr', null, h('td', { colspan: 8 }, App.empty('Sin proveedores. Se crean solos a partir de los lugares de tus ofertas, o agrégalos aquí.')))))),
+        sinDatos ? h('p', { class: 'help warn-t' }, sinDatos + ' proveedor(es) que dan factura no tienen RUT válido o razón social. Complétalos con el botón “Facturación” para que el libro de compras salga completo.') : null),
+        '', h('div', { class: 'row gap' }, App.btn('⬇ Exportar (.csv)', exportar, 'small', 'Lista de proveedores con datos de facturación, para Excel'), App.btn('+ Nuevo proveedor', nuevo, 'small primary'))));
+  }
+
+  /* ================= Compras ================= */
+  function lineaDesdeOferta(o, cantidad) {
+    return { insumo: (App.insumo(o.insumoId) || {}).nombre || '', ofertaId: o.id, formatoLabel: o.formatoLabel, formatoQty: o.formatoQty, cantidad: cantidad || 1, total: (cantidad || 1) * o.precio };
+  }
+  // abre el formulario de compra (desde la lista de compras, precargado)
+  App.abrirRegistroCompra = function (proveedorId, filas) {
+    const p = App.proveedor(proveedorId);
+    App.ui.compra = { proveedorId: proveedorId || '', fecha: App.hoy(), tipoDoc: docPorDefecto(p), nroDoc: '', despacho: null, montos: { manual: false },
+      lineas: (filas || []).filter(function (f) { return f.ofertaId && f.packs > 0; }).map(function (f) {
+        const o = Store.get().ofertas.find(function (x) { return x.id === f.ofertaId; });
+        return o ? lineaDesdeOferta(o, f.packs) : null;
+      }).filter(Boolean) };
+    if (!App.ui.compra.lineas.length) App.ui.compra.lineas.push({ insumo: '', ofertaId: '', formatoLabel: '', formatoQty: null, cantidad: 1, total: null });
+    App.go('proveedores', 'compras');
+  };
+
+  function formularioCompra() {
+    const s = Store.get(), F = App.ui.compra, ctx = App.ctx(), f = 1 + (ctx.p.ivaPct || 0) / 100;
+    const prov = App.proveedor(F.proveedorId);
+    const insDe = function (l) { const k = (l.insumo || '').trim().toLowerCase(); return s.insumos.find(function (i) { return i.nombre.toLowerCase() === k; }) || null; };
+    const total = F.lineas.reduce(function (t, l) { return t + (Number(l.total) || 0); }, 0);
+    const conDesp = total + (Number(F.despacho) || 0);
+    const factura = E.esFactura(F.tipoDoc);
+    F.montos = F.montos || { manual: false };
+    if (!F.montos.manual) {
+      const auto = E.montosCompra(ctx, { tipoDoc: F.tipoDoc, total: total, despachoPagado: F.despacho, exento: F.montos.exento });
+      F.montos.neto = auto.neto; F.montos.iva = auto.iva; F.montos.exento = auto.exento;
+    }
+    const descuadre = factura ? conDesp - (Number(F.montos.neto) || 0) - (Number(F.montos.iva) || 0) - (Number(F.montos.exento) || 0) : 0;
+    const setMonto = function (k) { return function (n) { F.montos[k] = n; F.montos.manual = true; App.render(); }; };
+
+    const precargar = function () {
+      if (!prov) { App.toast('Elige primero el proveedor'); return; }
+      const filas = E.listaCompras(ctx, itemsPlan()).filter(function (x) { return x.proveedorId === prov.id && x.packs > 0; });
+      if (!filas.length) { App.toast('La lista de compras no tiene nada para ' + prov.nombre); return; }
+      F.lineas = filas.map(function (x) { return lineaDesdeOferta(s.ofertas.find(function (o) { return o.id === x.ofertaId; }), x.packs); });
+      App.render();
+    };
+
+    const filaLinea = function (l, i) {
+      const ins = insDe(l);
+      const ofs = ins ? s.ofertas.filter(function (o) { return o.insumoId === ins.id && o.formatoQty > 0; })
+        .sort(function (a, b) { return (prov ? esDe(b, prov) - esDe(a, prov) : 0); }) : [];
+      const o = l.ofertaId ? s.ofertas.find(function (x) { return x.id === l.ofertaId; }) : null;
+      const q = (Number(l.cantidad) || 0) * (Number(l.formatoQty) || 0);
+      const unit = q > 0 && l.total > 0 ? l.total / q : null;
+      const ref = o && o.formatoQty > 0 && o.precio > 0 ? o.precio / o.formatoQty : null;
+      const dif = unit && ref ? (unit / ref - 1) * 100 : null;
+      const setL = function (fn) { fn(F.lineas[i]); App.render(); };
+      return h('tr', null,
+        h('td', null, App.textInput({ fk: 'cl-i-' + i, value: l.insumo, list: 'dl-compra-ins', ph: 'Insumo…', onChange: function (v) {
+          F.lineas[i].insumo = v;
+          const ni = insDe(F.lineas[i]);
+          if (ni) {
+            const cand = s.ofertas.filter(function (x) { return x.insumoId === ni.id && x.formatoQty > 0; });
+            const mejor = (prov && cand.find(function (x) { return esDe(x, prov); })) || cand[0];
+            if (mejor) Object.assign(F.lineas[i], lineaDesdeOferta(mejor, F.lineas[i].cantidad || 1));
+          }
+          App.render();
+        } }), ins ? null : (l.insumo ? h('div', null, h('small', { class: 'bad-t' }, 'elige de la lista')) : null)),
+        h('td', null, App.select({ fk: 'cl-o-' + i, value: l.ofertaId || '', options: ofs.map(function (x) { return [x.id, x.formatoLabel + ' · ' + (x.lugar || '?') + ' ' + App.clp(x.precio)]; }).concat([['', 'Otro formato…']]),
+          onChange: function (v) { const x = s.ofertas.find(function (y) { return y.id === v; }); setL(function (L) { if (x) Object.assign(L, lineaDesdeOferta(x, L.cantidad)); else { L.ofertaId = ''; } }); } }),
+          !l.ofertaId && ins ? h('div', { class: 'row gap' }, App.textInput({ fk: 'cl-fl-' + i, cls: 'w90', value: l.formatoLabel, ph: 'ej. saco 25 kg', onChange: function (v) { F.lineas[i].formatoLabel = v; } }),
+            App.numInput({ fk: 'cl-fq-' + i, cls: 'w70', value: l.formatoQty, ph: 'cant.', onChange: function (n) { F.lineas[i].formatoQty = n; App.render(); } }), h('small', null, ins.unidad)) : null),
+        h('td', null, App.numInput({ fk: 'cl-c-' + i, cls: 'w60', value: l.cantidad, onChange: function (n) {
+          const L = F.lineas[i], porUno = L.cantidad > 0 && L.total > 0 ? L.total / L.cantidad : (o ? o.precio : 0);
+          L.cantidad = n; if (porUno > 0) L.total = Math.round(porUno * n); App.render();
+        } })),
+        h('td', null, App.numInput({ fk: 'cl-t-' + i, cls: 'w80', value: l.total, ph: 'CLP', onChange: function (n) { F.lineas[i].total = n; App.render(); }, onEmpty: function () { F.lineas[i].total = null; } })),
+        h('td', { class: 'r' }, unit && ins ? App.costoVisible(unit, ins.unidad) : '—',
+          dif != null && Math.abs(dif) >= 0.5 ? h('div', null, h('small', { class: dif > 0 ? 'bad-t' : 'good-t' }, (dif > 0 ? '+' : '') + App.num(dif, 0) + '% vs registrado')) : null),
+        h('td', null, App.btn('✕', function () { F.lineas.splice(i, 1); App.render(); }, 'small ghost')));
+    };
+
+    const guardar = function () {
+      if (!prov) { App.toast('Elige el proveedor'); return; }
+      if (!F.fecha) { App.toast('Indica la fecha'); return; }
+      const validas = [];
+      for (let i = 0; i < F.lineas.length; i++) {
+        const l = F.lineas[i], ins = insDe(l);
+        if (!l.insumo && !l.total) continue;
+        if (!ins) { App.toast('Línea ' + (i + 1) + ': elige un insumo de la lista'); return; }
+        if (!(l.cantidad > 0) || !(l.formatoQty > 0) || !(l.total > 0)) { App.toast('Línea ' + (i + 1) + ': revisa formato, cantidad y total'); return; }
+        validas.push({ l: l, ins: ins });
+      }
+      if (!validas.length) { App.toast('Agrega al menos una línea'); return; }
+      if (factura && Math.abs(descuadre) > 2) { App.toast('Neto + exento + IVA no cuadra con el total pagado (diferencia ' + App.clp(descuadre) + ')'); return; }
+      const autor = App.nube.activo && App.nube.perfil ? (App.nube.perfil.nombre || App.nube.perfil.email) : 'Yo';
+      let nuevas = 0, actualizadas = 0;
+      App.ui.compra = null;   // antes de mutate: el render que dispara ya no muestra el formulario
+      Store.mutate(function (st) {
+        const p = st.proveedores.find(function (x) { return x.id === prov.id; });
+        const lineas = validas.map(function (v) {
+          const l = v.l, precio = l.total / l.cantidad;
+          let o = st.ofertas.find(function (x) { return x.id === l.ofertaId && x.insumoId === v.ins.id && esDe(x, p); }) ||
+            st.ofertas.find(function (x) { return x.insumoId === v.ins.id && x.formatoQty === l.formatoQty && esDe(x, p); });
+          if (o) {
+            if (F.fecha >= (o.fecha || '')) {
+              App.registrarPrecio(o, precio, F.fecha);
+              o.precio = precio; o.fecha = F.fecha; o.fuente = 'compra'; o.disponible = true; o.pendiente = false; o.proveedorId = p.id; o.lugar = p.nombre;
+              actualizadas++;
+            }
+          } else {
+            const tieneOtra = st.ofertas.some(function (x) { return x.insumoId === v.ins.id; });
+            o = { id: Store.uid('OF-'), insumoId: v.ins.id, proveedorId: p.id, lugar: p.nombre, marca: '', formatoLabel: l.formatoLabel || v.ins.unidad, formatoQty: l.formatoQty,
+              precio: precio, rendimiento: null, fecha: F.fecha, fuente: 'compra', disponible: true, preferida: !tieneOtra, nota: 'Creada al registrar una compra' };
+            st.ofertas.push(o); nuevas++;
+          }
+          return { insumoId: v.ins.id, ofertaId: o.id, cantidad: l.cantidad, formatoLabel: l.formatoLabel || o.formatoLabel, formatoQty: l.formatoQty, total: l.total };
+        });
+        const compra = { id: Store.uid('CP-'), fecha: F.fecha, proveedorId: p.id, tipoDoc: F.tipoDoc, conFactura: factura, nroDoc: (F.nroDoc || '').trim(),
+          despachoPagado: Number(F.despacho) || 0, lineas: lineas, total: lineas.reduce(function (t, x) { return t + x.total; }, 0), autor: autor };
+        // montos tal como vienen en la factura (si se corrigieron a mano, mandan sobre el cálculo)
+        if (factura) { compra.neto = Number(F.montos.neto) || 0; compra.iva = Number(F.montos.iva) || 0; compra.exento = Number(F.montos.exento) || 0; }
+        st.compras.push(compra);
+      });
+      App.toast('Compra registrada · ' + actualizadas + ' precio(s) actualizado(s)' + (nuevas ? ' · ' + nuevas + ' oferta(s) nueva(s)' : ''));
+    };
+
+    return App.card('Registrar compra', h('div', { class: 'stack' },
+      h('div', { class: 'form-grid' },
+        h('label', null, 'Proveedor', App.select({ fk: 'cp-prov', value: F.proveedorId, options: [['', 'Elige…']].concat((s.proveedores || []).filter(function (p) { return p.activo !== false || p.id === F.proveedorId; })
+          .sort(function (a, b) { return a.nombre.localeCompare(b.nombre); }).map(function (p) { return [p.id, p.nombre]; })),
+          onChange: function (v) { F.proveedorId = v; F.tipoDoc = docPorDefecto(App.proveedor(v)); App.render(); } })),
+        h('label', null, 'Fecha', h('input', { type: 'date', value: F.fecha, 'data-fk': 'cp-fecha', onchange: function (ev) { F.fecha = ev.target.value; } })),
+        h('label', null, 'Documento', App.select({ fk: 'cp-tipo', value: F.tipoDoc, options: DOCS, onChange: function (v) { F.tipoDoc = v; F.montos = { manual: false }; App.render(); } })),
+        h('label', null, factura ? 'Folio de la factura' : 'N° de boleta (opcional)', App.textInput({ fk: 'cp-doc', value: F.nroDoc, ph: factura ? 'ej. 123456' : '', onChange: function (v) { F.nroDoc = v; } })),
+        h('label', null, 'Despacho pagado (CLP)', App.numInput({ fk: 'cp-desp', value: F.despacho, ph: '0', onChange: function (n) { F.despacho = n; App.render(); }, onEmpty: function () { F.despacho = null; App.render(); } }))),
+      factura && prov && faltaTributario(prov) ? h('div', { class: 'alert warn' }, h('span', null, '⚠️'), h('span', null, prov.nombre + ' no tiene RUT válido o razón social: complétalos en ',
+        h('a', { href: '#/proveedores/directorio', onclick: function () { App.ui.provAbierto = prov.id; } }, 'Directorio → Facturación'), ' para que la factura salga completa en el libro de compras.')) : null,
+      h('div', { class: 'row gap wrap' },
+        prov ? App.badgeFactura(prov) : null, h('span', { class: 'spacer' }),
+        App.btn('Precargar desde la lista de compras', precargar, 'small', 'Trae lo que la lista de compras asigna a este proveedor')),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, ['Insumo', 'Formato', 'Cant.', 'Total pagado', 'Precio unitario', ''].map(function (t, i) { return h('th', { class: i === 4 ? 'r' : '' }, t); }))),
+        h('tbody', null, F.lineas.map(filaLinea)))),
+      h('div', { class: 'row gap wrap' }, App.btn('+ Línea', function () { F.lineas.push({ insumo: '', ofertaId: '', formatoLabel: '', formatoQty: null, cantidad: 1, total: null }); App.render(); }, 'small'),
+        h('span', { class: 'spacer' }),
+        h('span', null, 'Total ', h('b', null, App.clp(conDesp)))),
+      factura ? h('div', { class: 'stack' },
+        h('div', { class: 'row gap wrap montos' },
+          h('label', null, 'Neto', App.numInput({ fk: 'cp-neto', cls: 'w90', value: F.montos.neto, onChange: setMonto('neto') })),
+          h('label', null, 'Exento', App.numInput({ fk: 'cp-exento', cls: 'w90', value: F.montos.exento, onChange: setMonto('exento') })),
+          h('label', null, 'IVA', App.numInput({ fk: 'cp-iva', cls: 'w90', value: F.montos.iva, onChange: setMonto('iva') })),
+          F.montos.manual ? App.btn('Recalcular desde el total', function () { F.montos = { manual: false }; App.render(); }, 'small ghost') : h('small', { class: 'mut' }, 'calculados desde el total; corrígelos para que coincidan con la factura'),
+          F.tipoDoc === '33' ? h('span', { class: 'good-t' }, 'crédito fiscal ' + App.clp(F.montos.iva)) : null),
+        Math.abs(descuadre) > 2 ? h('small', { class: 'bad-t' }, 'Neto + exento + IVA no cuadra con el total pagado: diferencia ' + App.clp(descuadre)) : null) : null,
+      h('p', { class: 'help' }, 'Ingresa el total que pagaste por cada línea (con IVA si la boleta/factura lo incluye). Al guardar se actualiza el precio de la oferta de este proveedor (o se crea una nueva) y queda en el historial.'),
+      h('div', { class: 'row gap' }, App.btn('Guardar compra', guardar, 'primary'), App.btn('Cancelar', function () { App.ui.compra = null; App.render(); })),
+      h('datalist', { id: 'dl-compra-ins' }, s.insumos.map(function (i) { return h('option', { value: i.nombre }); }))));
+  }
+
+  function compras() {
+    const s = Store.get(), ctx = App.ctx();
+    const lista = (s.compras || []).slice().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || '') || String(b.id).localeCompare(String(a.id)); });
+    const mes = App.hoy().slice(0, 7);
+    const delMes = lista.filter(function (c) { return (c.fecha || '').slice(0, 7) === mes; });
+    const iva = E.ivaCompras(ctx, mes + '-01');
+    const abierta = App.ui.compraAbierta;
+    const eliminar = function (c) {
+      App.confirm('¿Eliminar la compra del ' + fmtFecha(c.fecha) + '? (los precios ya actualizados se mantienen)', function () { Store.mutate(function (st) { st.compras = st.compras.filter(function (x) { return x.id !== c.id; }); }); }, 'Eliminar', true);
+    };
+    return h('div', { class: 'stack' },
+      App.ui.compra ? formularioCompra() : h('div', { class: 'row gap wrap' }, App.btn('+ Registrar compra', function () { App.abrirRegistroCompra('', []); }, 'primary'),
+        h('span', { class: 'help' }, 'Tip: desde la Lista de compras, el botón “Registrar esta compra” precarga todo lo de ese proveedor.')),
+      h('div', { class: 'kpis' },
+        App.kpi('Compras este mes', delMes.length, App.clp(iva.bruto) + ' en total'),
+        App.kpi('Con factura (mes)', App.clp(iva.conFactura), iva.bruto ? App.pct(iva.conFactura / iva.bruto * 100) + ' del gasto' : '', iva.bruto && iva.conFactura / iva.bruto > 0.6 ? 'good' : ''),
+        App.kpi('Crédito fiscal del mes', App.clp(iva.credito), ctx.p.ivaRecuperable === 'si' ? 'recuperable' : 'potencial (aún no afecto a IVA)', 'good')),
+      libro(ctx, lista),
+      App.card('Compras registradas (' + lista.length + ')', lista.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, ['Fecha', 'Proveedor', 'Documento', 'Líneas', 'Total', 'IVA', ''].map(function (t, i) { return h('th', { class: i >= 3 && i <= 5 ? 'r' : '' }, t); }))),
+        h('tbody', null, lista.slice(0, 80).map(function (c) {
+          const p = App.proveedor(c.proveedorId), m = E.montosCompra(ctx, c), b = m.total;
+          const filas = [h('tr', { class: 'link', onclick: function () { App.ui.compraAbierta = abierta === c.id ? null : c.id; App.render(); } },
+            h('td', null, fmtFecha(c.fecha)), h('td', null, p ? p.nombre : '(eliminado)'),
+            h('td', null, E.esFactura(m.doc) ? App.badge('🧾 ' + (m.doc === '34' ? 'exenta' : 'factura'), 'good') : App.badge(m.doc === '39' ? 'boleta' : 'sin documento', ''), c.nroDoc ? ' ' + c.nroDoc : ''),
+            h('td', { class: 'r' }, (c.lineas || []).length), h('td', { class: 'r strong' }, App.clp(b)),
+            h('td', { class: 'r ' + (m.credito ? 'good-t' : 'mut') }, App.clp(m.iva)),
+            h('td', null, App.btn('✕', function (ev) { ev.stopPropagation(); eliminar(c); }, 'small ghost', 'Eliminar compra')))];
+          if (abierta === c.id) filas.push(h('tr', null, h('td', { colspan: 7 }, h('table', { class: 'tbl compact sub' }, h('tbody', null, (c.lineas || []).map(function (l) {
+            const ins = App.insumo(l.insumoId);
+            return h('tr', null, h('td', null, ins ? ins.nombre : '?'), h('td', null, l.cantidad + ' × ' + l.formatoLabel), h('td', { class: 'r' }, App.clp(l.total)),
+              h('td', { class: 'r mut' }, ins && l.formatoQty > 0 ? App.costoVisible(l.total / (l.cantidad * l.formatoQty), ins.unidad) : ''));
+          }), c.despachoPagado ? h('tr', null, h('td', { colspan: 2 }, 'Despacho'), h('td', { class: 'r' }, App.clp(c.despachoPagado)), h('td')) : null)), c.autor ? h('small', null, 'Registró: ' + c.autor) : null)));
+          return filas;
+        })))) : App.empty('Aún no registras compras. Cada compra registrada actualiza los precios, alimenta la evolución de precios y el cálculo del crédito fiscal.')));
+  }
+
+  // libro de compras del mes para el contador (y más adelante para cruzar con el RCV del SII)
+  function libro(ctx, lista) {
+    if (!lista.length) return null;
+    const L = App.ui.libro = App.ui.libro || { mes: App.hoy().slice(0, 7), solo: true };
+    const meses = Array.from(new Set(lista.map(function (c) { return (c.fecha || '').slice(0, 7); }).concat([App.hoy().slice(0, 7)]))).filter(Boolean).sort().reverse();
+    const filas = E.libroCompras(ctx, L.mes + '-01', L.mes + '-31', L.solo);
+    const conAviso = filas.filter(function (x) { return x.avisos.length; });
+    const tot = filas.reduce(function (t, x) { t.neto += x.neto; t.exento += x.exento; t.iva += x.iva; t.total += x.total; t.credito += x.credito; return t; }, { neto: 0, exento: 0, iva: 0, total: 0, credito: 0 });
+    const exportar = function () {
+      const enc = ['Fecha', 'Tipo documento', 'Código', 'Folio', 'RUT proveedor', 'Razón social', 'Proveedor', 'Neto', 'Exento', 'IVA', 'Total', 'IVA crédito fiscal', 'Observaciones'];
+      const rows = filas.map(function (x) {
+        return [fechaCL(x.fecha), x.tipoNombre, x.tipoDoc === 'sd' ? '' : x.tipoDoc, x.folio, x.rut, x.razonSocial, x.proveedor, Math.round(x.neto), Math.round(x.exento), Math.round(x.iva), Math.round(x.total), Math.round(x.credito), x.avisos.join(', ')];
+      });
+      rows.push(['', '', '', '', '', '', 'TOTAL', Math.round(tot.neto), Math.round(tot.exento), Math.round(tot.iva), Math.round(tot.total), Math.round(tot.credito), '']);
+      App.descargarCSV('libro-compras-' + L.mes + (L.solo ? '' : '-todo') + '.csv', enc, rows);
+    };
+    return App.card('Libro de compras', h('div', { class: 'stack' },
+      h('div', { class: 'row gap wrap' },
+        h('label', null, 'Mes ', App.select({ fk: 'lb-mes', value: L.mes, options: meses.map(function (m) { return [m, m.slice(5, 7) + '/' + m.slice(0, 4)]; }), onChange: function (v) { L.mes = v; App.render(); } })),
+        h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: L.solo, onchange: function (ev) { L.solo = ev.target.checked; App.render(); } }), ' Solo facturas'),
+        h('span', { class: 'spacer' }),
+        App.btn('⬇ Descargar libro (.csv)', exportar, 'small primary', 'Para Excel o para tu contador')),
+      h('div', { class: 'kpis' },
+        App.kpi('Documentos', filas.length, L.solo ? 'facturas del mes' : 'todas las compras del mes'),
+        App.kpi('Neto', App.clp(tot.neto), tot.exento ? 'exento ' + App.clp(tot.exento) : ''),
+        App.kpi('IVA crédito fiscal', App.clp(tot.credito), 'facturas afectas (33)', 'good'),
+        App.kpi('Con datos faltantes', conAviso.length, conAviso.length ? 'revisa antes de enviar' : 'todo completo', conAviso.length ? 'warn' : 'good')),
+      conAviso.length ? h('ul', { class: 'help' }, conAviso.slice(0, 8).map(function (x) {
+        return h('li', null, fmtFecha(x.fecha) + ' · ' + x.proveedor + (x.folio ? ' · folio ' + x.folio : '') + ': ' + x.avisos.join(', '));
+      })) : null,
+      h('p', { class: 'help' }, 'El SII ya recibe tus facturas electrónicas en el Registro de Compras y Ventas (RCV). Este libro sirve para entregárselo a tu contador y, más adelante, para cruzarlo con el RCV y detectar facturas faltantes.')));
+  }
+
+  /* ================= Evolución de precios ================= */
+  function grafico(series, unidad) {
+    const W = 680, H = 250, L = 70, R = 14, T = 12, B = 28, DIA = 86400000;
+    const mult = unidad === 'un' ? 1 : 1000;
+    const pts = [];
+    series.forEach(function (s) { s.puntos.forEach(function (p) { pts.push(p); }); });
+    if (!pts.length) return null;
+    const ts = pts.map(function (p) { return Date.parse(p.fecha); }), vs = pts.map(function (p) { return p.unit * mult; });
+    let x0 = Math.min.apply(null, ts), x1 = Math.max.apply(null, ts), y0 = Math.min.apply(null, vs), y1 = Math.max.apply(null, vs);
+    if (x1 - x0 < 14 * DIA) { x0 -= 7 * DIA; x1 += 7 * DIA; }
+    const pad = (y1 - y0) * 0.15 || y1 * 0.1 || 1;
+    y0 = Math.max(0, y0 - pad); y1 += pad;
+    const X = function (t) { return L + (t - x0) / (x1 - x0) * (W - L - R); };
+    const Y = function (v) { return T + (1 - (v - y0) / (y1 - y0)) * (H - T - B); };
+    let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart" role="img" aria-label="Evolución del precio">';
+    for (let i = 0; i <= 4; i++) {
+      const v = y0 + (y1 - y0) * i / 4, y = Y(v).toFixed(1);
+      svg += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y + '" y2="' + y + '" class="grid"/><text x="' + (L - 6) + '" y="' + (+y + 4) + '" class="axis" text-anchor="end">' + esc(App.clp(v)) + '</text>';
+    }
+    [x0, (x0 + x1) / 2, x1].forEach(function (t, i) {
+      svg += '<text x="' + X(t).toFixed(1) + '" y="' + (H - 8) + '" class="axis" text-anchor="' + (i === 0 ? 'start' : i === 2 ? 'end' : 'middle') + '">' + fmtFecha(new Date(t).toISOString().slice(0, 10)) + '</text>';
+    });
+    series.forEach(function (s, i) {
+      const col = 'var(--seg' + (i % 7) + ')';
+      const ps = s.puntos.map(function (p) { return [X(Date.parse(p.fecha)), Y(p.unit * mult), p]; });
+      if (ps.length > 1) svg += '<polyline points="' + ps.map(function (q) { return q[0].toFixed(1) + ',' + q[1].toFixed(1); }).join(' ') + '" style="fill:none;stroke:' + col + ';stroke-width:2"/>';
+      ps.forEach(function (q) {
+        svg += '<circle cx="' + q[0].toFixed(1) + '" cy="' + q[1].toFixed(1) + '" r="4.5" style="stroke:' + col + ';stroke-width:2;fill:' + (q[2].tipo === 'compra' ? col : 'var(--surface)') + '"><title>' +
+          esc(s.nombre + ' · ' + fmtFecha(q[2].fecha) + ' · ' + App.costoVisible(q[2].unit, unidad) + (q[2].tipo === 'compra' ? ' (compra)' : ' (cotización)')) + '</title></circle>';
+      });
+    });
+    return h('div', { class: 'chart-wrap', html: svg + '</svg>' });
+  }
+
+  function evolucion() {
+    const s = Store.get(), ctx = App.ctx();
+    const pe = E.pesoEnCosto(ctx);
+    const usados = pe.filas.map(function (f) { return f.insumoId; });
+    let sel = App.ui.evoInsumo && App.insumo(App.ui.evoInsumo) ? App.ui.evoInsumo : usados[0] || (s.insumos[0] && s.insumos[0].id);
+    const ins = App.insumo(sel);
+    const series = ins ? E.historialPrecios(ctx, ins.id) : [];
+    const nPts = series.reduce(function (t, x) { return t + x.puntos.length; }, 0);
+    const inf = [30, 90, 365].map(function (d) { return E.inflacionCanasta(ctx, d); });
+    const tabla = inf[1].filas.length ? inf[1] : inf[2];
+    const opciones = s.insumos.slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre); }).map(function (i) { return [i.id, i.nombre]; });
+    const kAlza = function (r, label) {
+      return App.kpi('Canasta · ' + label, r.pct == null ? '—' : (r.pct > 0 ? '+' : '') + App.pct(r.pct), r.pct == null ? 'sin precios anteriores a esa fecha' : r.cubiertos + ' de ' + r.total + ' insumos con historial', r.pct == null ? '' : r.pct > 3 ? 'bad' : r.pct < -1 ? 'good' : '');
+    };
+    return h('div', { class: 'stack' },
+      h('div', { class: 'kpis' }, kAlza(inf[0], 'últimos 30 días'), kAlza(inf[1], 'últimos 90 días'), kAlza(inf[2], 'último año')),
+      App.card('Precio de compra en el tiempo', h('div', { class: 'stack' },
+        h('div', { class: 'row gap wrap' }, h('label', null, 'Insumo ', App.select({ fk: 'evo-ins', value: sel, options: opciones, onChange: function (v) { App.ui.evoInsumo = v; App.render(); } })),
+          ins ? h('a', { href: '#/insumos/' + encodeURIComponent(ins.id) }, 'Ver ofertas de ' + ins.nombre) : null),
+        nPts ? grafico(series, ins.unidad) : App.empty('Todavía no hay historial para este insumo. Se forma solo: cada vez que cambias un precio, apruebas una cotización o registras una compra.'),
+        nPts ? h('div', { class: 'legend' }, series.map(function (x, i) { return h('span', null, h('span', { class: 'dot seg' + (i % 7) }), x.nombre + ' (' + x.puntos.length + ')'); }),
+          h('span', null, '● compra · ○ cotización / precio anotado · precio por ' + (ins.unidad === 'g' ? 'kg' : ins.unidad === 'ml' ? 'litro' : 'unidad') + ', antes de mermas')) : null)),
+      App.card('Variación por insumo (' + (tabla === inf[1] ? '90 días' : 'último año') + ')', tabla.filas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, ['Insumo', 'Antes', 'Ahora', 'Variación'].map(function (t, i) { return h('th', { class: i ? 'r' : '' }, t); }))),
+        h('tbody', null, tabla.filas.slice(0, 40).map(function (f) {
+          const u = (App.insumo(f.insumoId) || {}).unidad;
+          return h('tr', { class: 'link', onclick: function () { App.ui.evoInsumo = f.insumoId; App.render(); window.scrollTo(0, 0); } }, h('td', null, f.nombre),
+            h('td', { class: 'r' }, App.costoVisible(f.antes.unit, u), h('div', null, h('small', null, fmtFecha(f.antes.fecha)))),
+            h('td', { class: 'r' }, App.costoVisible(f.ahora.unit, u), h('div', null, h('small', null, fmtFecha(f.ahora.fecha)))),
+            h('td', { class: 'r strong ' + (f.pct > 0.5 ? 'bad-t' : f.pct < -0.5 ? 'good-t' : '') }, (f.pct > 0 ? '+' : '') + App.pct(f.pct)));
+        })))) : App.empty('Aún no hay precios anteriores para comparar. La variación aparece cuando un insumo tiene un precio con más de 90 días (o un año) y otro más reciente.')));
+  }
+
+  /* ================= IVA ================= */
+  function iva() {
+    const ctx = App.ctx(), p = ctx.p, f = 1 + (p.ivaPct || 0) / 100;
+    const mes = App.hoy().slice(0, 7);
+    const ivMes = E.ivaCompras(ctx, mes + '-01'), ivTodo = E.ivaCompras(ctx);
+    const pr = E.proyeccionIva(ctx);
+    const modo = p.ivaRecuperable || 'potencial';
+    const meses = Object.keys(ivTodo.porMes).sort().reverse();
+    const usar = function (insumoId, ofertaId) { Store.mutate(function (st) { st.ofertas.forEach(function (o) { if (o.insumoId === insumoId) o.preferida = (o.id === ofertaId); }); }); App.toast('Oferta preferida actualizada'); };
+    const banner = modo === 'si'
+      ? h('div', { class: 'alert good' }, h('span', null, '✅'), h('span', null, 'IVA recuperable: lo que compras con factura se costea sin IVA (el ' + p.ivaPct + '% vuelve como crédito fiscal en tu F29).'))
+      : h('div', { class: 'alert ' + (modo === 'potencial' ? 'info' : '') }, h('span', null, 'ℹ️'), h('span', null,
+        modo === 'potencial' ? 'Aún no estás afecto a IVA: estos montos son crédito fiscal POTENCIAL. Cuando inicies actividades afectas y declares IVA (F29), cambia “IVA de compras recuperable” a Sí en Ajustes: los costos de tus platos bajarán automáticamente en lo que compres con factura.'
+          : 'Marcaste que el IVA de compras no es recuperable: se muestra solo como referencia.',
+        ' ', h('a', { href: '#/ajustes' }, 'Ir a Ajustes')));
+    const sinFac = pr.filas.filter(function (x) { return !x.conFactura; });
+    const conFac = pr.gastoConFactura + pr.gastoSinFactura;
+    return h('div', { class: 'stack' }, banner,
+      h('div', { class: 'kpis' },
+        App.kpi('Crédito fiscal este mes', App.clp(ivMes.credito), 'compras registradas con factura', 'good'),
+        App.kpi('Crédito proyectado / mes', App.clp(pr.creditoMes), 'con tu volumen y las ofertas en uso' + (pr.usoPlan ? ' (plan semanal)' : ''), 'good'),
+        App.kpi('IVA sin recuperar / mes', App.clp(pr.perdidoMes), 'en lo que compras sin factura (feria, mercado…)', pr.perdidoMes > pr.creditoMes ? 'warn' : ''),
+        App.kpi('Gasto con factura', conFac ? App.pct(pr.gastoConFactura / conFac * 100) : '—', App.clp(pr.gastoConFactura) + ' de ' + App.clp(conFac) + ' al mes')),
+      App.card('Insumos que compras sin factura (' + sinFac.length + ')', sinFac.length ? h('div', { class: 'stack' },
+        h('p', { class: 'help' }, '“Si estuvieras afecto” compara la alternativa con factura descontando el IVA recuperable. Un número negativo es ahorro mensual.'),
+        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+          h('thead', null, h('tr', null, ['Insumo', 'Hoy en', 'Gasto/mes', 'IVA/mes', 'Mejor con factura', 'Diferencia hoy', 'Si estuvieras afecto', ''].map(function (t, i) { return h('th', { class: (i >= 2 && i <= 3) || (i >= 5 && i <= 6) ? 'r' : '' }, t); }))),
+          h('tbody', null, sinFac.map(function (x) {
+            const ins = App.insumo(x.insumoId), a = x.alternativa;
+            return h('tr', null, h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(x.insumoId) }, x.nombre)),
+              h('td', null, x.proveedor ? x.proveedor.nombre : (x.oferta.lugar || '—')),
+              h('td', { class: 'r' }, App.clp(x.gastoMes)), h('td', { class: 'r mut' }, App.clp(x.iva)),
+              h('td', null, a ? h('span', null, a.proveedor.nombre, h('div', null, h('small', null, App.costoVisible(a.bruto, ins.unidad) + ' con IVA'))) : h('span', { class: 'mut' }, 'sin cotización con factura')),
+              h('td', { class: 'r ' + (a ? (x.difMesHoy < 0 ? 'good-t' : 'bad-t') : '') }, a ? App.sg(x.difMesHoy) : '—'),
+              h('td', { class: 'r strong ' + (a ? (x.difMesAfecto < 0 ? 'good-t' : 'bad-t') : '') }, a ? App.sg(x.difMesAfecto) : '—'),
+              h('td', { class: 'nowrap' }, a ? App.btn('Simular', function () { const c = { ofertaElegida: {} }; c.ofertaElegida[x.insumoId] = a.oferta.id; App.simular(c); }, 'small') : null,
+                a ? App.btn('Usar', function () { usar(x.insumoId, a.oferta.id); }, 'small primary') : null));
+          }))))) : App.empty('Todo lo que usas se compra en proveedores con factura.')),
+      App.card('Por mes (compras registradas)', meses.length ? h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, ['Mes', 'Compras', 'Total pagado', 'Crédito fiscal', 'IVA sin recuperar'].map(function (t, i) { return h('th', { class: i ? 'r' : '' }, t); }))),
+        h('tbody', null, meses.map(function (m) {
+          const x = ivTodo.porMes[m];
+          return h('tr', null, h('td', null, m.slice(5, 7) + '/' + m.slice(0, 4)), h('td', { class: 'r' }, x.n), h('td', { class: 'r' }, App.clp(x.bruto)),
+            h('td', { class: 'r good-t strong' }, App.clp(x.credito)), h('td', { class: 'r mut' }, App.clp(x.perdido)));
+        })),
+        h('tfoot', null, h('tr', null, h('td', null, 'Total'), h('td', { class: 'r' }, ivTodo.n), h('td', { class: 'r' }, App.clp(ivTodo.bruto)), h('td', { class: 'r' }, App.clp(ivTodo.credito)), h('td', { class: 'r' }, App.clp(ivTodo.perdido)))))
+        : App.empty('Registra tus compras (pestaña Compras) marcando si fueron con factura para ver el crédito fiscal real de cada mes.')),
+      h('p', { class: 'help' }, 'IVA incluido en un monto = monto − monto ÷ ' + App.num(f, 2) + '. El crédito fiscal solo se aprovecha si declaras IVA mensual; si en un mes el crédito supera al IVA de tus ventas, el remanente pasa al mes siguiente. Confírmalo con tu contador.'));
+  }
+
+  /* ================= Evaluación y canasta óptima ================= */
+  function canasta() {
+    const s = Store.get(), C = App.ui.canasta = App.ui.canasta || { simIva: false };
+    const modoSi = (E.params(s).ivaRecuperable === 'si');
+    const simIva = C.simIva && !modoSi;
+    const items = itemsPlan();
+    const clave = App.version + '|' + simIva + '|' + (s.escenarioActivo || '');
+    if (App.cache.canastaK !== clave) {
+      const ctxC = simIva ? E.makeCtx(s, Object.assign({}, App.opts(), { simularIva: true })) : App.ctx();
+      App.cache.canasta = { r: E.optimizarCanasta(ctxC, items), ev: E.evaluarProveedores(ctxC), ctx: ctxC };
+      App.cache.canastaK = clave;
+    }
+    const r = App.cache.canasta.r, ev = App.cache.canasta.ev;
+    const best = r.planes[0];
+    const ahorro = best ? r.actual.total - best.total : 0;
+
+    const aplicar = function (plan, simular) {
+      const cambio = {};
+      plan.eleccion.forEach(function (c, insId) { cambio[insId] = c.ofertaId; });
+      if (simular) { App.simular({ ofertaElegida: cambio }); return; }
+      App.confirm('¿Marcar como preferidas las ' + Object.keys(cambio).length + ' ofertas de este plan? Los costos de los platos y la lista de compras pasarán a usarlas.', function () {
+        Store.mutate(function (st) { Object.keys(cambio).forEach(function (insId) { st.ofertas.forEach(function (o) { if (o.insumoId === insId) o.preferida = (o.id === cambio[insId]); }); }); });
+        App.toast('Plan aplicado: la lista de compras ya usa estos proveedores');
+      }, 'Usar este plan');
+    };
+
+    const tarjeta = function (plan, titulo, tipo) {
+      if (!plan) return null;
+      const dif = r.actual.total - plan.total;
+      return App.card(titulo, h('div', { class: 'stack' },
+        h('div', { class: 'row gap wrap' },
+          h('span', null, h('b', { class: 'big' }, App.clp(plan.total)), ' por semana'),
+          !plan.viable ? App.badge('no cumple un pedido mínimo', 'bad') : null,
+          tipo !== 'actual' && Math.abs(dif) > 1 ? App.badge((dif > 0 ? 'ahorra ' : 'cuesta ') + App.clp(Math.abs(dif)) + '/sem · ' + App.clp(Math.abs(dif) * E.SEMANAS_MES) + '/mes', dif > 0 ? 'good' : 'bad') : null),
+        h('small', null, 'Productos ' + App.clp(plan.totalItems) + ' + despacho/visitas ' + App.clp(plan.totalLogistica) + (plan.creditoIva > 1 ? ' · crédito IVA ' + (modoSi || simIva ? 'ya descontado ' : 'potencial ') + App.clp(plan.creditoIva) : '')),
+        h('table', { class: 'tbl compact' }, h('tbody', null, plan.proveedores.map(function (g) {
+          const lg = g.logistica;
+          return h('tr', null,
+            h('td', null, h('b', null, g.nombre), ' ', App.badgeFactura(g.proveedor),
+              h('details', null, h('summary', null, h('small', null, g.items.length + ' insumo(s)')), h('ul', { class: 'help' }, g.items.map(function (it) {
+                const ins = App.insumo(it.insumoId), o = s.ofertas.find(function (x) { return x.id === it.ofertaId; });
+                return h('li', null, (ins ? ins.nombre : '?') + ': ' + it.packs + ' × ' + (o ? o.formatoLabel : '') + ' = ' + App.clp(it.bruto));
+              })))),
+            h('td', { class: 'r' }, App.clp(g.bruto)),
+            h('td', null, h('small', null, lg.modo + (lg.costo > 0.5 ? ' ' + App.clp(lg.costo) : '')),
+              lg.faltaMinimo > 0 ? h('div', null, h('small', { class: 'bad-t' }, 'faltan ' + App.clp(lg.faltaMinimo) + ' para el mínimo')) :
+                lg.faltaGratis > 0 ? h('div', null, h('small', { class: 'warn-t' }, 'faltan ' + App.clp(lg.faltaGratis) + ' para despacho gratis')) : null));
+        }))),
+        tipo === 'plan' ? h('div', { class: 'row gap' }, App.btn('Simular', function () { aplicar(plan, true); }, 'small', 'Ver el efecto en costos sin tocar tus datos'),
+          App.btn('Usar este plan', function () { aplicar(plan, false); }, 'small primary')) : null), tipo === 'plan' && plan === best ? 'mejor' : '');
+    };
+
+    const evTabla = App.card('Evaluación de proveedores', ev.filas.length ? h('div', { class: 'stack' },
+      h('p', { class: 'help' }, 'Cobertura = parte del valor de tu canasta semanal que este proveedor puede venderte. Índice de precio = cuánto más caro es en lo que cubre, comparado con el más barato de cada insumo (0% = siempre el más barato).'),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, ['Proveedor', 'Factura', 'Despacho / retiro', 'Cobertura', 'Insumos', 'Más barato en', 'Índice de precio', 'Gasto 30 días'].map(function (t, i) { return h('th', { class: i >= 4 ? 'r' : '' }, t); }))),
+        h('tbody', null, ev.filas.map(function (x) {
+          const p = x.proveedor;
+          return h('tr', { class: p.activo === false ? 'off' : '' }, h('td', null, h('b', null, p.nombre), p.activo === false ? h('small', null, ' (inactivo)') : null),
+            h('td', null, App.badgeFactura(p)), h('td', null, h('small', null, despachoTxt(p))),
+            h('td', null, h('div', { class: 'cellbar' }, App.pct(x.coberturaPct), App.bar(x.coberturaPct, x.coberturaPct > 50 ? 'good' : '', 100))),
+            h('td', { class: 'r' }, x.cubiertos), h('td', { class: 'r' }, x.masBaratos),
+            h('td', { class: 'r ' + (x.indicePrecio == null ? '' : x.indicePrecio <= 1.02 ? 'good-t' : x.indicePrecio > 1.15 ? 'bad-t' : '') }, x.indicePrecio == null ? '—' : '+' + App.pct((x.indicePrecio - 1) * 100)),
+            h('td', { class: 'r' }, x.gasto30 ? App.clp(x.gasto30) : '—', x.ultimaCompra ? h('div', null, h('small', null, 'última ' + fmtFecha(x.ultimaCompra))) : null));
+        }))))) : App.empty('Sin proveedores.'));
+
+    return h('div', { class: 'stack' },
+      h('div', { class: 'row gap wrap' },
+        h('span', { class: 'help' }, items.length ? 'Canasta del plan semanal (' + items.length + ' platos planificados).' : 'Sin plan semanal: se usa el volumen supuesto de Ajustes (' + E.params(s).porcionesSemana + ' porciones/semana).'),
+        h('span', { class: 'spacer' }),
+        modoSi ? App.badge('IVA recuperable activo', 'good') : h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!C.simIva, onchange: function (ev2) { C.simIva = ev2.target.checked; App.render(); } }), ' Simular negocio afecto a IVA (lo con factura cuesta 19% menos)')),
+      h('div', { class: 'kpis' },
+        App.kpi('Hoy (ofertas en uso)', App.clp(r.actual.total), r.actual.nProveedores + ' proveedores · incluye despacho/visitas', r.actual.viable ? '' : 'warn'),
+        best ? App.kpi('Mejor combinación', App.clp(best.total), best.nProveedores + ' proveedores', 'good') : App.kpi('Mejor combinación', '—', 'faltan precios'),
+        App.kpi('Ahorro posible', App.clp(Math.max(0, ahorro) * E.SEMANAS_MES) + '/mes', App.clp(Math.max(0, ahorro)) + ' por semana', ahorro > 1 ? 'good' : ''),
+        r.porItem ? App.kpi('Lo más barato ítem por ítem', App.clp(r.porItem.total), r.porItem.nProveedores + ' proveedores · con sus despachos/visitas') : null),
+      r.sinOferta.length ? h('div', { class: 'alert warn' }, h('span', null, '⚠️'), h('span', null, r.sinOferta.length + ' insumo(s) sin precio disponible quedan fuera: ' +
+        r.sinOferta.slice(0, 6).map(function (id) { return (App.insumo(id) || {}).nombre || id; }).join(', '))) : null,
+      E.params(s).modoOferta !== 'preferida' ? h('div', { class: 'alert info' }, h('span', null, 'ℹ️'), h('span', null, '“Usar este plan” marca ofertas preferidas, pero en Ajustes los costos usan la oferta ' + (E.params(s).modoOferta === 'barata' ? 'más barata' : 'promedio') + '.')) : null,
+      h('div', { class: 'grid3' }, r.planes.map(function (p, i) { return tarjeta(p, i === 0 ? '⭐ Opción 1 · ' + p.nProveedores + ' proveedor(es)' : 'Opción ' + (i + 1) + ' · ' + p.nProveedores + ' proveedor(es)', 'plan'); }),
+        tarjeta(r.actual, 'Como compras hoy', 'actual')),
+      h('p', { class: 'help' }, 'Se probaron ' + r.combinaciones + ' combinaciones de ' + r.proveedoresConsiderados + ' proveedores. Cada insumo se compra en formatos enteros (ej. 5 kg, 2 bandejas). Para que el despacho y el costo de ir cuenten, complétalos en el Directorio.'),
+      evTabla);
+  }
+
+  App.views.proveedores = function (arg) {
+    const tab = TABS.some(function (t) { return t[0] === arg; }) ? arg : 'directorio';
+    const cuerpo = tab === 'directorio' ? directorio() : tab === 'compras' ? compras() : tab === 'evolucion' ? evolucion() : tab === 'iva' ? iva() : canasta();
+    return h('div', { class: 'stack' }, avisoNube(),
+      h('div', { class: 'chips big' }, TABS.map(function (t) { return App.chip(t[1], tab === t[0], function () { App.go('proveedores', t[0]); }); })), cuerpo);
   };
 })();
 
@@ -2887,6 +4071,7 @@ window.CLOUD = {
     ['Precio e impuestos', [
       ['ivaOn', 'El PVP incluye IVA', 'bool', 'Actívalo si emites boleta: el margen se calcula sobre el precio neto (PVP ÷ 1,19).'],
       ['ivaPct', 'IVA', '%', ''],
+      ['ivaRecuperable', 'IVA de compras recuperable (crédito fiscal)', 'ivarec', 'Sí = estás afecto a IVA y lo declaras (F29): lo que compras con factura se costea sin IVA. Potencial = todavía no, pero la app te muestra cuánto crédito tendrías.'],
       ['foodCostObjetivo', 'Food cost objetivo', '%', 'Parte del precio neto que quieres gastar en ingredientes. Define el PVP sugerido.'],
       ['foodCostAlerta', 'Alerta de food cost sobre', '%', 'Los platos sobre este valor aparecen como alerta.'],
       ['redondeo', 'Redondeo del PVP sugerido', 'CLP', 'Se redondea hacia arriba (ej. 100 → $4.900).'],
@@ -2903,6 +4088,7 @@ window.CLOUD = {
     const key = def[0];
     const set = function (v) { Store.mutate(function (st) { st.params[key] = v; }, 'par' + key); };
     if (def[2] === 'bool') return h('input', { type: 'checkbox', checked: !!p[key], onchange: function (ev) { set(ev.target.checked); } });
+    if (def[2] === 'ivarec') return App.select({ fk: 'par-' + key, value: p[key], options: [['potencial', 'Potencial (aún no afecto)'], ['si', 'Sí, lo recupero'], ['no', 'No']], onChange: set });
     if (def[2] === 'modo') return App.select({ fk: 'par-' + key, value: p[key], options: [['preferida', 'Preferida'], ['barata', 'La más barata'], ['promedio', 'Promedio']], onChange: set });
     return h('span', null, App.numInput({ fk: 'par-' + key, cls: 'w80', value: p[key], onChange: set }), ' ', h('small', null, def[2]));
   }
@@ -2934,7 +4120,9 @@ window.CLOUD = {
     const s = Store.get(), p = E.params(s);
     if (arg === 'informe') return h('div', { class: 'stack' }, h('div', { class: 'row' }, App.btn('← Volver a Ajustes', function () { App.go('ajustes'); }, 'small')), informe());
     const nube = App.nube.activo;
+    const faltan = nube && App.nube.sync && App.nube.sync.faltantes ? App.nube.sync.faltantes() : [];
     return h('div', { class: 'stack' },
+      faltan.length ? h('div', { class: 'alert warn' }, h('span', null, '⚠️'), h('span', null, 'Falta ejecutar supabase/04_proveedores_compras.sql en Supabase: las tablas ' + faltan.join(' y ') + ' no existen, así que proveedores y compras no se guardan en la nube.')) : null,
       GRUPOS.map(function (g) {
         return App.card(g[0], h('div', { class: 'params' }, g[1].map(function (d) {
           return h('div', { class: 'param' }, h('div', null, h('b', null, d[1]), d[3] ? h('div', { class: 'help' }, d[3]) : null), paramControl(d, p));
