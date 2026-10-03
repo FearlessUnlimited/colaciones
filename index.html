@@ -163,6 +163,9 @@ label.chk { flex-direction: row; align-items: center; gap: 6px; color: var(--ink
 .dia-h { display: flex; justify-content: space-between; align-items: baseline; }
 .plan-it { display: flex; align-items: center; gap: 6px; background: var(--surface); border-radius: 7px; padding: 3px 6px; } .plan-it .nm { flex: 1; font-weight: 500; font-size: 13px; }
 .total-bar { text-align: right; font-size: 17px; padding: 6px 4px; }
+.opc-dia { display: flex; flex-direction: column; gap: 5px; border-top: 1px dashed var(--line); padding-top: 6px; margin-top: 2px; }
+.opc-t { display: flex; flex-direction: column; gap: 3px; } .opc-t .grow { flex: 1; min-width: 0; width: 100%; }
+.plan-it.alt { background: transparent; padding-left: 10px; } .sug-alt { display: flex; flex-direction: column; gap: 3px; }
 
 /* parámetros */
 .params { display: flex; flex-direction: column; } .param { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
@@ -221,9 +224,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T19:32:42Z">
+<meta name="build" content="2026-10-03T20:21:16Z">
 <script>
-window.BUILD = "2026-10-03T19:32:42Z";
+window.BUILD = "2026-10-03T20:21:16Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -262,12 +265,16 @@ window.CLOUD = {
     stockMaxSemanas: 8,       // compras de oportunidad: máximo de semanas de consumo que conviene guardar
     costosFijosMes: 0,        // CLP costos fijos mensuales (para punto de equilibrio)
     diasOperacionMes: 22,
-    trilogiaPrecio: 2000,     // precio adicional del combo Entrada+Ensalada+Postre
+    recargoSueltoPct: 20,     // % "invisible" sobre el PVP sugerido de entradas, ensaladas, postres y bebestibles vendidos sueltos
+    toleranciaAlternativasPct: 10, // ± % de costo para sugerir una entrada/ensalada/postre alternativa del día
     ivaRecuperable: 'potencial', // no | potencial | si — 'si': lo comprado con factura se costea sin IVA (crédito fiscal)
     hoy: null                 // ISO yyyy-mm-dd; null = fecha actual
   };
 
-  const TIPOS_VENDIBLES = ['plato', 'entrada', 'ensalada', 'postre', 'acompanamiento'];
+  const TIPOS_VENDIBLES = ['plato', 'entrada', 'ensalada', 'postre', 'acompanamiento', 'bebestible'];
+  const TIPOS_SUELTOS = ['entrada', 'ensalada', 'postre', 'bebestible'];   // se venden en combos o sueltos (con recargo)
+  const DIAS = ['lun', 'mar', 'mie', 'jue', 'vie'];
+  const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
   const DIETA_NIVEL = { vegano: 0, vegetariano: 1, omni: 2 };
   const LINEA_NIVEL_MAX = { 'Vegano': 0, 'Vegetariano': 1 };
 
@@ -303,6 +310,7 @@ window.CLOUD = {
       ctx.ofertasPorInsumo.get(o.insumoId).push(o);
     });
     (state.recetas || []).forEach(function (r) { ctx.recetas.set(r.id, r); });
+    ctx.combos = (state.combos || []).slice().sort(function (a, b) { return (a.orden || 0) - (b.orden || 0); });
     return ctx;
   }
 
@@ -662,13 +670,15 @@ window.CLOUD = {
       envaseFalta = e.missing;
     } else if (r && r.envaseManual != null) {
       envase = r.envaseManual;
-    } else { envaseFalta = true; }
+    } else if (!(r && r.envasado)) { envaseFalta = true; }
 
+    // envasado (bebida, jugo en caja): se vende tal cual, sin imprevistos ni gas/mano de obra
+    const envasado = !!(r && r.envasado);
     const base = rc.porPorcion + guarn;
-    const imprev = base * p.imprevistosPct / 100;
+    const imprev = envasado ? 0 : base * p.imprevistosPct / 100;
     const insumosTot = base + imprev;
-    const overhead = (p.gasPorPorcion || 0) + (p.manoObraPorPorcion || 0);
-    const pvp = r ? Number(r.pvp) || 0 : 0;
+    const overhead = envasado ? 0 : (p.gasPorPorcion || 0) + (p.manoObraPorPorcion || 0);
+    const pvp = r ? precioPlato(ctx, r) : 0;
     const pvpNeto = p.ivaOn ? pvp / (1 + p.ivaPct / 100) : pvp;
     const comision = pvp * p.comisionPct / 100;
     const costoDirecto = insumosTot + envase;
@@ -680,6 +690,7 @@ window.CLOUD = {
     // PVP sugerido por food cost objetivo (redondeado hacia arriba)
     const netoSug = insumosTot / (p.foodCostObjetivo / 100);
     let sug = p.ivaOn ? netoSug * (1 + p.ivaPct / 100) : netoSug;
+    if (r && TIPOS_SUELTOS.indexOf(r.tipo) >= 0) sug *= 1 + (Number(p.recargoSueltoPct) || 0) / 100;   // recargo invisible del suelto
     const rnd = p.redondeo > 0 ? p.redondeo : 1;
     const pvpSugerido = insumosTot > 0 ? Math.ceil(sug / rnd) * rnd : 0;
     // PVP mínimo (margen $0)
@@ -691,7 +702,8 @@ window.CLOUD = {
       envase: envase, imprevistos: imprev, overhead: overhead, comision: comision,
       costoDirecto: costoDirecto, costoTotal: costoTotal, pvp: pvp, pvpNeto: pvpNeto,
       margen: margen, margenPct: margenPct, foodCostPct: foodCostPct,
-      pvpSugerido: pvpSugerido, pvpMinimo: pvpMinimo,
+      pvpSugerido: pvpSugerido, pvpMinimo: pvpMinimo, envasado: envasado,
+      pvpDeLinea: !!(r && r.tipo === 'plato' && (r.pvp == null || r.pvp === '')), pvpLinea: r && r.tipo === 'plato' ? precioLinea(ctx, r.linea) : null,
       rango: { min: (rc.minPorPorcion + guarn) * (1 + p.imprevistosPct / 100) + envase + overhead + comision,
                max: (rc.maxPorPorcion + guarn) * (1 + p.imprevistosPct / 100) + envase + overhead + comision },
       faltantes: rc.faltantes.concat(g ? g.faltantes : []), envaseFalta: envaseFalta, ciclo: rc.ciclo
@@ -854,13 +866,11 @@ window.CLOUD = {
   // porciones semanales por plato: plan semanal si existe, si no reparto parejo de porcionesSemana
   function volumenSemanal(ctx) {
     const vol = new Map();
-    const plan = ctx.state.plan;
     let usoPlan = false;
-    if (plan) {
-      Object.keys(plan).forEach(function (dia) {
-        (plan[dia] || []).forEach(function (it) {
-          if (!ctx.recetas.get(it.recetaId)) return;
-          vol.set(it.recetaId, (vol.get(it.recetaId) || 0) + (Number(it.porciones) || 0)); usoPlan = true;
+    if (ctx.state.plan) {
+      DIAS.forEach(function (dia) {
+        itemsDelDia(ctx, dia).forEach(function (it) {
+          vol.set(it.recetaId, (vol.get(it.recetaId) || 0) + it.porciones); usoPlan = true;
         });
       });
     }
@@ -1523,6 +1533,203 @@ window.CLOUD = {
     };
   }
 
+  /* ---------- combos, precio de línea y menú del día ---------- */
+  // Un combo agrega componentes a la colación. "Solo colación" (sin componentes) fija el precio de cada línea;
+  // un plato con PVP propio es una excepción y sus combos se corren en la misma diferencia.
+  const COMBO_SOLO = 'CMB-solo';
+  const COMPONENTES = ['entrada', 'ensalada', 'postre', 'bebestible'];
+  const COMBOS_BASE = [
+    { id: COMBO_SOLO, nombre: 'Solo colación', incluye: [], extra: 0, mezclaPct: 45 },
+    { id: 'CMB-simple', nombre: 'Combo Simple', incluye: ['bebestible'], extra: 800, mezclaPct: 20 },
+    { id: 'CMB-mix', nombre: 'Combo Mix', incluye: ['ensalada', 'bebestible'], extra: 1500, mezclaPct: 10 },
+    { id: 'CMB-trilogia', nombre: 'Combo Trilogía', incluye: ['entrada', 'ensalada', 'postre'], extra: null, mezclaPct: 15 },
+    { id: 'CMB-full', nombre: 'Combo Full', incluye: ['entrada', 'ensalada', 'postre', 'bebestible'], extra: null, mezclaPct: 10 }
+  ];
+
+  // líneas de menú de los platos: las conocidas primero, en su orden
+  function lineasPlatos(state) {
+    const vistas = [];
+    (state.recetas || []).forEach(function (r) { if (r.tipo === 'plato' && r.linea && vistas.indexOf(r.linea) < 0) vistas.push(r.linea); });
+    return LINEAS.filter(function (l) { return vistas.indexOf(l) >= 0; }).concat(vistas.filter(function (l) { return LINEAS.indexOf(l) < 0; }).sort());
+  }
+
+  // precio de una línea: el PVP más repetido; si ninguno se repite más que otro, la mediana redondeada a 100
+  function precioBaseLinea(pvps) {
+    if (!pvps.length) return null;
+    const n = new Map();
+    pvps.forEach(function (v) { n.set(v, (n.get(v) || 0) + 1); });
+    const max = Math.max.apply(null, Array.from(n.values()));
+    const modas = Array.from(n.keys()).filter(function (v) { return n.get(v) === max; });
+    if (max > 1 && modas.length === 1) return modas[0];
+    const o = pvps.slice().sort(function (a, b) { return a - b; }), m = o.length >> 1;
+    return Math.round((o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2) / 100) * 100;
+  }
+
+  // crea los combos la primera vez (desde el antiguo precio de la Trilogía) y deja en "precio de línea" los platos
+  // cuyo PVP ya era el de su línea: ningún precio efectivo cambia
+  function asegurarCombos(state) {
+    if (Array.isArray(state.combos) && state.combos.length) {
+      state.combos.forEach(function (c) { c.incluye = Array.isArray(c.incluye) ? c.incluye : []; c.precios = c.precios || {}; });
+      return false;
+    }
+    state.recetas = state.recetas || [];
+    const tri = state.params && Number(state.params.trilogiaPrecio) > 0 ? Number(state.params.trilogiaPrecio) : 2000;
+    const base = {};
+    lineasPlatos(state).forEach(function (l) {
+      const pvps = state.recetas.filter(function (r) { return r.tipo === 'plato' && r.linea === l && Number(r.pvp) > 0; }).map(function (r) { return Number(r.pvp); });
+      const b = precioBaseLinea(pvps);
+      if (b != null) base[l] = b;
+    });
+    state.combos = COMBOS_BASE.map(function (c, i) {
+      const extra = c.extra != null ? c.extra : (c.id === 'CMB-trilogia' ? tri : tri + 800);
+      const precios = {};
+      Object.keys(base).forEach(function (l) { precios[l] = base[l] + extra; });
+      return { id: c.id, nombre: c.nombre, incluye: c.incluye.slice(), precios: precios, mezclaPct: c.mezclaPct, activo: true, orden: i };
+    });
+    state.recetas.forEach(function (r) { if (r.tipo === 'plato' && base[r.linea] != null && Number(r.pvp) === base[r.linea]) r.pvp = null; });
+    if (state.params) delete state.params.trilogiaPrecio;
+    return true;
+  }
+
+  function comboPorId(ctx, id) { return ctx.combos.find(function (c) { return c.id === id; }) || null; }
+  function combosActivos(ctx) { return ctx.combos.filter(function (c) { return c.activo !== false; }); }
+
+  // precio final de un combo para una línea (null si no está definido)
+  function precioLinea(ctx, linea, comboId) {
+    const c = comboPorId(ctx, comboId || COMBO_SOLO);
+    const v = c && c.precios ? Number(c.precios[linea]) : NaN;
+    return v > 0 ? v : null;
+  }
+
+  // PVP propio si lo tiene (excepción); si no, el precio de su línea
+  function precioPlato(ctx, r) {
+    if (r.pvp != null && r.pvp !== '') return Number(r.pvp) || 0;
+    return r.tipo === 'plato' ? (precioLinea(ctx, r.linea) || 0) : 0;
+  }
+
+  // precio de un plato dentro de un combo: grilla de su línea + su diferencia con el precio de la línea
+  function precioEnCombo(ctx, r, comboId) {
+    const k = precioLinea(ctx, r.linea, comboId);
+    if (k == null) return null;
+    const solo = precioLinea(ctx, r.linea);
+    return k + (solo != null ? precioPlato(ctx, r) - solo : 0);
+  }
+
+  function bebestiblePermitido(r, linea) { return !linea || !(r.soloLineas && r.soloLineas.length) || r.soloLineas.indexOf(linea) >= 0; }
+
+  // recetas activas que pueden ir como componente (las del menú del día, si se indica un día que las tiene)
+  function opcionesComponente(ctx, tipo, linea, dia) {
+    const menu = dia && ctx.state.plan && ctx.state.plan.menu && ctx.state.plan.menu[dia];
+    const delDia = tipo !== 'bebestible' && menu && menu[tipo] ? menu[tipo].map(function (id) { return ctx.recetas.get(id); }).filter(function (r) { return r && r.activo !== false; }) : [];
+    if (delDia.length) return delDia;
+    return ctx.state.recetas.filter(function (r) { return r.tipo === tipo && r.activo !== false && (tipo !== 'bebestible' || bebestiblePermitido(r, linea)); });
+  }
+
+  function promedio(lista, f) { return lista.length ? lista.reduce(function (s, x) { return s + f(x); }, 0) / lista.length : 0; }
+
+  // costo y margen de un combo para una línea (promedio de sus platos activos y de los componentes posibles)
+  function costoCombo(ctx, comboId, linea, opts) {
+    opts = opts || {};
+    const combo = comboPorId(ctx, comboId), p = ctx.p;
+    if (!combo) return null;
+    const platos = ctx.state.recetas.filter(function (r) { return r.tipo === 'plato' && r.linea === linea && r.activo !== false; });
+    if (!platos.length) return null;
+    const cp = platos.map(function (r) { return costoPlato(ctx, r.id); });
+    let directo = promedio(cp, function (c) { return c.costoDirecto + c.overhead; });
+    let ingred = promedio(cp, function (c) { return c.insumos + c.guarnicion + c.imprevistos; });
+    let suelto = precioLinea(ctx, linea) || promedio(cp, function (c) { return c.pvp; });
+    let recargo = 0;
+    const faltan = [], componentes = [];
+    combo.incluye.forEach(function (t) {
+      const ops = opcionesComponente(ctx, t, linea, opts.dia);
+      if (!ops.length) { faltan.push(t); return; }
+      const cc = ops.map(function (r) { return costoPlato(ctx, r.id); });
+      const d = promedio(cc, function (c) { return c.costoDirecto + c.overhead; });
+      directo += d;
+      ingred += promedio(cc, function (c) { return c.insumos + c.guarnicion + c.imprevistos; });
+      suelto += promedio(cc, function (c) { return c.pvp; });
+      if (t === 'bebestible') recargo = promedio(ops, function (r) { return Number(r.recargoCombo) || 0; });
+      componentes.push({ tipo: t, n: ops.length, costo: d });
+    });
+    const precio = precioLinea(ctx, linea, comboId);
+    const ingreso = (precio || 0) + recargo;
+    const neto = p.ivaOn ? ingreso / (1 + p.ivaPct / 100) : ingreso;
+    const comision = ingreso * p.comisionPct / 100;
+    const costo = directo + comision;
+    const margen = neto - costo;
+    const netoSug = ingred / (p.foodCostObjetivo / 100);
+    const sug = p.ivaOn ? netoSug * (1 + p.ivaPct / 100) : netoSug;
+    const rnd = p.redondeo > 0 ? p.redondeo : 1;
+    return { comboId: comboId, linea: linea, precio: precio, recargoBebestible: recargo, neto: neto, comision: comision, costo: costo, margen: margen,
+      margenPct: neto > 0 ? margen / neto * 100 : null, foodCostPct: neto > 0 ? ingred / neto * 100 : null,
+      pvpSugerido: ingred > 0 ? Math.max(0, Math.ceil((sug - recargo) / rnd) * rnd) : 0,
+      suelto: suelto, ahorro: precio != null && !faltan.length ? suelto - precio : null, faltan: faltan, componentes: componentes, nPlatos: platos.length };
+  }
+
+  // porciones del día: platos del plan + entradas/ensaladas/postres/bebestibles que piden los combos según la mezcla esperada
+  function itemsDelDia(ctx, dia) {
+    const plan = ctx.state.plan || {};
+    const acc = new Map();
+    const sumar = function (id, q, origen) {
+      const x = acc.get(id) || { recetaId: id, porciones: 0, manual: 0, combo: 0 };
+      x[origen] += q; acc.set(id, x);
+    };
+    const porLinea = new Map();
+    (plan[dia] || []).forEach(function (it) {
+      const r = ctx.recetas.get(it.recetaId), q = Number(it.porciones) || 0;
+      if (!r || q <= 0) return;
+      sumar(r.id, q, 'manual');
+      if (r.tipo === 'plato') porLinea.set(r.linea, (porLinea.get(r.linea) || 0) + q);
+    });
+    const combos = combosActivos(ctx);
+    const frac = function (t) { return combos.reduce(function (s, c) { return s + (c.incluye.indexOf(t) >= 0 ? (Number(c.mezclaPct) || 0) / 100 : 0); }, 0); };
+    let total = 0; porLinea.forEach(function (q) { total += q; });
+    const menu = (plan.menu && plan.menu[dia]) || {};
+    ['entrada', 'ensalada', 'postre'].forEach(function (t) {
+      const ids = (menu[t] || []).filter(function (id) { const r = ctx.recetas.get(id); return r && r.activo !== false; });
+      const n = total * frac(t);
+      if (!ids.length || n <= 0) return;
+      ids.forEach(function (id) { sumar(id, n / ids.length, 'combo'); });
+    });
+    const fb = frac('bebestible');
+    if (fb > 0) porLinea.forEach(function (q, linea) {
+      const bs = ctx.state.recetas.filter(function (r) { return r.tipo === 'bebestible' && r.activo !== false && bebestiblePermitido(r, linea); });
+      bs.forEach(function (r) { sumar(r.id, q * fb / bs.length, 'combo'); });
+    });
+    const out = [];
+    acc.forEach(function (x) {
+      x.combo = x.combo > 0 ? Math.ceil(x.combo - 1e-9) : 0;
+      x.porciones = x.manual + x.combo;
+      x.origen = x.combo && x.manual ? 'mixto' : x.combo ? 'combo' : 'plan';
+      if (x.porciones > 0) out.push(x);
+    });
+    return out;
+  }
+
+  // alternativas para la entrada/ensalada/postre del día: mismo tipo y costo parecido;
+  // primero las que comparten más insumos con lo que ya se produce ese día (menos compras y menos merma)
+  function sugerirAlternativas(ctx, recetaId, dia) {
+    const r = ctx.recetas.get(recetaId);
+    if (!r) return [];
+    const c0 = costoPlato(ctx, recetaId), tol = (Number(ctx.p.toleranciaAlternativasPct) || 0) / 100;
+    const menu = (ctx.state.plan && ctx.state.plan.menu && ctx.state.plan.menu[dia]) || {};
+    const enMenu = menu[r.tipo] || [];
+    const esEnvase = function (id) { const i = ctx.insumos.get(id); return !i || i.categoria === 'Envases'; };
+    const usados = new Set();
+    if (dia) itemsDelDia(ctx, dia).forEach(function (it) { explotarPlato(ctx, it.recetaId, 1).forEach(function (q, id) { if (!esEnvase(id)) usados.add(id); }); });
+    const out = [];
+    ctx.state.recetas.forEach(function (x) {
+      if (x.tipo !== r.tipo || x.id === r.id || x.activo === false || enMenu.indexOf(x.id) >= 0) return;
+      const c = costoPlato(ctx, x.id);
+      if (c.faltantes.length || Math.abs(c.costoTotal - c0.costoTotal) > tol * c0.costoTotal + 0.5) return;
+      const comp = [];
+      explotarPlato(ctx, x.id, 1).forEach(function (q, id) { if (usados.has(id)) comp.push(ctx.insumos.get(id).nombre); });
+      out.push({ id: x.id, nombre: x.nombre, costo: c.costoTotal, deltaCosto: c.costoTotal - c0.costoTotal, deltaMargen: c0.costoTotal - c.costoTotal,
+        compartidos: comp.length, insumosCompartidos: comp });
+    });
+    return out.sort(function (a, b) { return (b.compartidos - a.compartidos) || (Math.abs(a.deltaCosto) - Math.abs(b.deltaCosto)); });
+  }
+
   /* ---------- chequeos de calidad de receta ---------- */
   function chequeos(ctx, id) {
     const r = ctx.recetas.get(id);
@@ -1535,8 +1742,8 @@ window.CLOUD = {
     if (rc.faltantes.length) out.push({ nivel: 'error', msg: 'Insumos sin precio: ' + rc.faltantes.join(', ') });
     if (rc.ciclo) out.push({ nivel: 'error', msg: 'Referencia circular entre sub-recetas' });
     if (esVendible(r)) {
-      if (!r.pvp) out.push({ nivel: 'warn', msg: 'Sin PVP definido' });
-      if (!r.envaseId && r.envaseManual == null) out.push({ nivel: 'warn', msg: 'Sin envase asignado' });
+      if (!precioPlato(ctx, r)) out.push({ nivel: 'warn', msg: r.tipo === 'plato' ? 'Sin PVP ni precio de línea (Platos → Combos)' : 'Sin PVP definido' });
+      if (!r.envaseId && r.envaseManual == null && !r.envasado) out.push({ nivel: 'warn', msg: 'Sin envase asignado' });
       if (r.tipo === 'plato' && !r.pasos) out.push({ nivel: 'info', msg: 'Sin pasos de preparación para cocina' });
     }
     const dv = violacionesDieta(ctx, id);
@@ -1580,7 +1787,10 @@ window.CLOUD = {
     sobrestockVigente: sobrestockVigente, sugerenciaOportunidad: sugerenciaOportunidad, ofertasTemporales: ofertasTemporales,
     TIPOS_DOC: TIPOS_DOC, validarRut: validarRut, formatearRut: formatearRut, tipoDocCompra: tipoDocCompra, esFactura: esFactura,
     montosCompra: montosCompra, libroCompras: libroCompras, ivaCompras: ivaCompras, proyeccionIva: proyeccionIva, evaluarProveedores: evaluarProveedores,
-    necesidades: necesidades, compraConOferta: compraConOferta, logistica: logistica, armarPlan: armarPlan, optimizarCanasta: optimizarCanasta
+    necesidades: necesidades, compraConOferta: compraConOferta, logistica: logistica, armarPlan: armarPlan, optimizarCanasta: optimizarCanasta,
+    DIAS: DIAS, LINEAS: LINEAS, TIPOS_SUELTOS: TIPOS_SUELTOS, COMPONENTES: COMPONENTES, COMBO_SOLO: COMBO_SOLO, lineasPlatos: lineasPlatos, precioBaseLinea: precioBaseLinea,
+    asegurarCombos: asegurarCombos, comboPorId: comboPorId, combosActivos: combosActivos, precioLinea: precioLinea, precioPlato: precioPlato, precioEnCombo: precioEnCombo,
+    bebestiblePermitido: bebestiblePermitido, opcionesComponente: opcionesComponente, costoCombo: costoCombo, itemsDelDia: itemsDelDia, sugerirAlternativas: sugerirAlternativas
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;
@@ -1593,6 +1803,8 @@ window.CLOUD = {
  * El estado de la app (insumos, ofertas, recetas, plan, parámetros, escenarios, proveedores, compras) se reparte en tablas:
  *   insumos, recetas, plan, proveedores        → legibles por todos los roles
  *   ofertas, recetas_precios, ajustes, compras → solo admin/gerente (aquí está el dinero)
+ *   combos: la definición (nombre, qué incluye, mezcla) va en plan/'combos' para que cocina derive la producción;
+ *           sus precios por línea van en ajustes/'combos_precios'
  *   proveedores_privado                        → solo admin/gerente (correo, contacto y notas de cada proveedor)
  *   urgencias                                  → todos leen; cocina crea y edita los suyos abiertos; admin/gerente todo
  * Cada cambio local se compara con la última versión sincronizada y solo se envían las filas
@@ -1607,7 +1819,7 @@ window.CLOUD = {
   // tablas agregadas después (04_proveedores_compras.sql): si aún no existen, la app sigue funcionando sin guardarlas
   const OPCIONALES = ['proveedores', 'proveedores_privado', 'compras', 'urgencias'];
   const NO_EXISTE = /PGRST205|42P01|does not exist|Could not find the table|schema cache/i;
-  const CAMPOS_PRECIO = ['pvp', 'costoManual', 'envaseManual'];
+  const CAMPOS_PRECIO = ['pvp', 'costoManual', 'envaseManual', 'recargoCombo'];
   const CAMPOS_PROV_PRIVADOS = ['emailFacturacion', 'contacto', 'nota'];   // de un proveedor, solo para admin/gerente
   const LOTE = 200;
 
@@ -1647,6 +1859,12 @@ window.CLOUD = {
       f.recetas_precios.push({ id: r.id, data: p });
     });
     f.plan.push({ id: 'semana', data: state.plan || {} });
+    if (state.combos) {
+      f.plan.push({ id: 'combos', data: { lista: state.combos.map(function (c) { return sinCampos(c, ['precios']); }) } });
+      const precios = {};
+      state.combos.forEach(function (c) { precios[c.id] = c.precios || {}; });
+      f.ajustes.push({ id: 'combos_precios', data: precios });
+    }
     f.ajustes.push({ id: 'params', data: state.params || {} });
     f.ajustes.push({ id: 'escenarios', data: { lista: state.escenarios || [] } });
     f.ajustes.push({ id: 'sobrestock', data: { lista: state.sobrestock || [] } });
@@ -1660,6 +1878,8 @@ window.CLOUD = {
     const precios = new Map((f.recetas_precios || []).map(function (x) { return [x.id, x.data || {}]; }));
     const aj = new Map((f.ajustes || []).map(function (x) { return [x.id, x.data || {}]; }));
     const plan = (f.plan || []).find(function (x) { return x.id === 'semana'; });
+    const combos = (f.plan || []).find(function (x) { return x.id === 'combos'; });
+    const preciosCombos = aj.get('combos_precios') || {};
     const privados = new Map((f.proveedores_privado || []).map(function (x) { return [x.id, x.data || {}]; }));
     return {
       meta: { version: 1, origen: 'nube' },
@@ -1668,6 +1888,7 @@ window.CLOUD = {
       ofertas: (f.ofertas || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id, insumoId: x.insumo_id }, x.data); }),
       recetas: (f.recetas || []).slice().sort(porId).map(function (x) { return Object.assign({ id: x.id }, x.data, precios.get(x.id) || {}); }),
       plan: plan ? plan.data : { lun: [], mar: [], mie: [], jue: [], vie: [] },
+      combos: combos ? ((combos.data || {}).lista || []).map(function (c) { return Object.assign({}, c, { precios: preciosCombos[c.id] || {} }); }) : undefined,
       escenarios: (aj.get('escenarios') || {}).lista || [],
       sobrestock: (aj.get('sobrestock') || {}).lista || [],
       // urgencias: tabla propia (las primeras versiones las guardaban en ajustes: se traen una vez y al guardar pasan a la tabla)
@@ -1804,14 +2025,18 @@ window.CLOUD = {
   function ensure(s) {
     s.params = s.params || {};
     s.plan = s.plan || { lun: [], mar: [], mie: [], jue: [], vie: [] };
-    ['lun', 'mar', 'mie', 'jue', 'vie'].forEach(function (d) { s.plan[d] = s.plan[d] || []; });
+    s.plan.menu = s.plan.menu || {};   // opcionales del día: { lun: { entrada: [principal, ...alternativas], ensalada: [...], postre: [...] } }
+    ['lun', 'mar', 'mie', 'jue', 'vie'].forEach(function (d) { s.plan[d] = s.plan[d] || []; s.plan.menu[d] = s.plan.menu[d] || {}; });
     s.escenarios = s.escenarios || [];
     if (s.escenarioActivo === undefined) s.escenarioActivo = null;
     s.meta = s.meta || { version: 1 };
     s.compras = s.compras || [];
     s.sobrestock = s.sobrestock || [];
     s.urgencias = s.urgencias || [];
-    if (window.Engine) { window.Engine.asegurarProveedores(s); window.Engine.unificarTextos(s); }   // proveedores desde los "lugar"; familias/categorías sin variantes de mayúsculas
+    if (window.Engine) {
+      window.Engine.asegurarProveedores(s); window.Engine.unificarTextos(s);   // proveedores desde los "lugar"; familias/categorías sin variantes de mayúsculas
+      window.Engine.asegurarCombos(s);   // combos y precio por línea (la primera vez, desde el antiguo precio de la Trilogía)
+    }
     return s;
   }
 
@@ -2263,12 +2488,14 @@ window.CLOUD = {
     // recetas
     ['rec-q', 'Busca una receta por nombre.'],
     ['r-nombre', 'Nombre de la receta como aparece en la carta y en cocina.'],
-    ['r-tipo', 'Qué es: un plato de la carta, una base que se usa dentro de otras (sofrito, salsa) o un acompañamiento, entrada, ensalada o postre.'],
+    ['r-tipo', 'Qué es: un plato de la carta, una base que se usa dentro de otras (sofrito, salsa) o un acompañamiento, entrada, ensalada, postre o bebestible.'],
+    ['r-envasado', 'Márcalo si el bebestible se vende tal cual (bebida, jugo en caja, agua): no suma gas, mano de obra, imprevistos ni envase.'],
+    ['r-recargo', 'Cuánto se cobra de más si el cliente elige este bebestible dentro de un combo. Ej.: isotónica +$500. 0 = sin recargo.'],
     ['r-linea2', 'Línea o categoría de la receta (opcional).'],
     ['r-linea', 'Línea de menú. En Vegano y Vegetariano la app avisa si un ingrediente no corresponde.'],
     ['r-porc', 'Cuántas porciones rinde la receta con las cantidades escritas abajo. El costo por porción se calcula dividiendo entre este número.'],
     ['r-esc', 'Multiplica todas las cantidades por este número. Ej.: 2 para duplicar la receta.'],
-    ['r-pvp', 'Precio de venta al público, en pesos. El margen y el food cost se recalculan al instante.'],
+    ['r-pvp', 'Precio de venta al público, en pesos. En un plato, déjalo vacío para usar el precio de su línea (Platos y PVP → Combos); si le pones un precio propio, sus combos se corren en la misma diferencia. En entradas, ensaladas, postres y bebestibles es el precio suelto.'],
     ['r-envq', 'Cuántos envases usa cada porción.'],
     ['r-env', 'Envase en que se entrega el plato. Su costo se suma al plato.'],
     ['r-gdef', 'Acompañamiento que se incluye por defecto con el plato. Entra al costo y a la lista de compras.'],
@@ -2280,17 +2507,23 @@ window.CLOUD = {
     ['l-nt-', 'Nota de corte o de uso. Ej.: en cubos, para el sofrito. Sale en la ficha de cocina.'],
     ['l-alt-', 'Otro insumo que puede reemplazar a este (ej. pechuga ↔ trutro). Permite ver el rango de costo del plato.'],
     ['nr-tipo', 'Tipo de receta que vas a crear.'],
+    ['nr-beb', 'Producto que se vende tal cual (insumos de la categoría Bebestibles). Déjalo en "preparado aquí" para un jugo natural u otra receta propia.'],
     ['r-desc', 'Descripción breve del plato, para la carta y la ficha de cocina.'],
     ['r-pasos', 'Procedimiento paso a paso. Lo ve cocina en la ficha de la receta.'],
     ['r-mont', 'Cómo armar y empacar el plato (orden, porciones, envase). Lo ve cocina.'],
     ['alt-plato', 'Plato cuyas alternativas de ingredientes quieres revisar.'],
     // platos, plan y cocina
-    ['pvp-', 'Precio de venta del plato, en pesos. El margen y el food cost se recalculan al instante.'],
-    ['tri-p', 'Precio adicional del combo Entrada + Ensalada + Postre, en pesos.'],
+    ['pvp-', 'Precio de venta, en pesos. En un plato, vacío = precio de su línea (en gris); un precio propio es una excepción. En entradas, ensaladas, postres y bebestibles es el precio suelto.'],
+    ['cbn-', 'Nombre del combo tal como se ofrece al cliente.'],
+    ['cbm-', 'De cada 100 colaciones, cuántas se espera que pidan este combo. Calcula cuántas entradas, ensaladas, postres y bebestibles producir y comprar.'],
+    ['cba-', 'Desmárcalo para dejar de ofrecer este combo: deja de contar en la mezcla y en la producción.'],
+    ['cb-', 'Precio final que paga el cliente por la colación de esta línea con este combo. Vacío = sin precio. En gris, el sugerido por food cost.'],
+    ['menu-', 'Entrada, ensalada o postre del día que va en los combos. Las alternativas validadas aparecen debajo.'],
+    ['sug-', 'Muestra otras recetas del mismo tipo con costo parecido; "Ofrecer" la deja como alternativa que el cliente puede elegir.'],
     ['pl-q', 'Busca un plato por nombre.'],
     ['pl-linea', 'Muestra solo los platos de una línea de menú.'],
-    ['plan-add-', 'Agrega un plato a este día del plan semanal.'],
-    ['plan-', 'Porciones que esperas vender de este plato ese día. Alimenta la lista de compras y los ahorros estimados.'],
+    ['plan-add-', 'Agrega un plato a este día del plan semanal, o una entrada, ensalada, postre o bebestible que esperas vender suelto.'],
+    ['plan-', 'Porciones que esperas vender de este plato ese día. Alimenta la lista de compras, la producción y los opcionales de los combos.'],
     ['co-q', 'Busca una receta por nombre.'],
     ['co-porc', 'Cuántas porciones vas a preparar. Las cantidades de la ficha se escalan a este número.'],
     // proveedores
@@ -3134,7 +3367,7 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
-  const CATS = ['Carnes de Vacuno', 'Aves y Cerdo', 'Pescados y Mariscos', 'Legumbres y Granos', 'Abarrotes y Condimentos', 'Verduras y Frutas (Cardonal)', 'Lácteos y Huevos', 'Envases'];
+  const CATS = ['Carnes de Vacuno', 'Aves y Cerdo', 'Pescados y Mariscos', 'Legumbres y Granos', 'Abarrotes y Condimentos', 'Verduras y Frutas (Cardonal)', 'Lácteos y Huevos', 'Bebestibles', 'Envases'];
   const UNIDADES = [['g', 'gramos (g)'], ['ml', 'mililitros (ml)'], ['un', 'unidades (un)']];
   const DIETAS = [['vegano', 'Vegano'], ['vegetariano', 'Vegetariano'], ['omni', 'Con carne/pescado']];
   const FUENTES = [['estimado', 'Estimado'], ['comprado', 'Comprado'], ['cotizacion', 'Cotización'], ['ODEPA', 'ODEPA']];
@@ -3307,7 +3540,7 @@ window.CLOUD = {
             return otro ? h('small', { class: 'bad-t' }, 'Ya existe otro insumo con este nombre: las recetas no podrán distinguirlos.') : null;
           })()),
         h('label', null, 'Categoría', selConNuevo({ fk: 'ins-categoria', value: ins.categoria, valores: listaCats(s, ins.categoria), nuevo: '+ Nueva categoría…', titulo: 'Nueva categoría',
-          ph: 'Ej.: Congelados', onSet: function (v) { upd(function (x) { x.categoria = v; }); } })),
+          ph: 'Ej.: Congelados', onSet: function (v) { upd(function (x) { x.categoria = v; if (v === 'Bebestibles' && x.unidad === 'g') x.unidad = 'un'; }); } })),
         h('label', null, 'Unidad de receta', App.select({ fk: 'ins-unidad', value: ins.unidad, options: UNIDADES, onChange: function (v) { upd(function (x) { x.unidad = v; }); } })),
         h('label', null, 'Rendimiento (merma de limpieza) %', App.numInput({ fk: 'ins-rend', value: Math.round(ins.rendimiento * 1000) / 10, title: 'Parte utilizable tras pelar/limpiar. 100% = sin merma. No incluir merma de cocción.',
           onChange: function (n) { if (n > 0 && n <= 100) upd(function (x) { x.rendimiento = n / 100; }, 'rd' + ins.id); } })),
@@ -3475,11 +3708,12 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
-  const TIPOS = [['plato', 'Plato'], ['base', 'Base / sub-receta'], ['acompanamiento', 'Acompañamiento'], ['entrada', 'Entrada'], ['ensalada', 'Ensalada'], ['postre', 'Postre']];
+  const TIPOS = [['plato', 'Plato'], ['base', 'Base / sub-receta'], ['acompanamiento', 'Acompañamiento'], ['entrada', 'Entrada'], ['ensalada', 'Ensalada'], ['postre', 'Postre'], ['bebestible', 'Bebestible']];
   const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
-  const FILTROS = [['plato', 'Platos'], ['base', 'Bases'], ['acompanamiento', 'Guarniciones'], ['opc', 'Opcionales'], ['', 'Todas']];
+  const FILTROS = [['plato', 'Platos'], ['base', 'Bases'], ['acompanamiento', 'Guarniciones'], ['opc', 'Opcionales'], ['bebestible', 'Bebestibles'], ['', 'Todas']];
 
-  App.nuevaReceta = function (nombre, tipo) {
+  // envasadoId: insumo que se vende tal cual (bebida, jugo en caja); sin él, el bebestible es una receta propia (jugo natural)
+  App.nuevaReceta = function (nombre, tipo, envasadoId) {
     const id = Store.uid('R');
     const s = Store.get();
     const r = { id: id, tipo: tipo, linea: tipo === 'plato' ? 'Tradicional' : (TIPOS.find(function (t) { return t[0] === tipo; }) || ['', ''])[1], nombre: nombre, descripcion: '', porciones: tipo === 'base' ? 10 : 1,
@@ -3491,6 +3725,10 @@ window.CLOUD = {
     }
     if (tipo === 'acompanamiento') r.envaseManual = 80;
     if (tipo === 'entrada' || tipo === 'ensalada' || tipo === 'postre') r.envaseManual = 90;
+    if (tipo === 'bebestible') {
+      r.recargoCombo = 0; r.soloLineas = [];
+      if (envasadoId) { r.envasado = true; r.lineas.push({ tipo: 'insumo', ref: envasadoId, cantidad: 1 }); }
+    }
     Store.mutate(function (st) { st.recetas.push(r); });
     return id;
   };
@@ -3535,13 +3773,21 @@ window.CLOUD = {
     sel.dataset.v = 'plato';
     const inp = h('input', { type: 'text', class: 'wide', placeholder: 'Nombre de la receta' });
     App.autoInput(inp, Store.get().recetas.map(function (r) { return r.nombre; }));
-    App.modal('Nueva receta', h('div', { class: 'stack' }, h('label', null, 'Nombre', inp), h('label', null, 'Tipo', sel)), function (close) {
+    // bebestible: elegir el producto envasado (insumos de la categoría Bebestibles) o dejarlo como receta propia
+    const bebidas = Store.get().insumos.filter(function (i) { return i.categoria === 'Bebestibles'; });
+    const selBeb = App.select({ fk: 'nr-beb', value: '', options: [['', '(preparado aquí: receta propia, ej. jugo natural)']].concat(bebidas.map(function (i) { return [i.id, i.nombre]; })),
+      onChange: function (v) { const i = bebidas.find(function (x) { return x.id === v; }); if (i && !inp.value.trim()) inp.value = i.nombre; } });
+    const filaBeb = h('label', { style: { display: 'none' } }, 'Producto envasado', selBeb,
+      h('small', { class: 'mut' }, bebidas.length ? 'Se vende tal cual: sin gas, mano de obra ni envase.' : 'Primero crea el producto en Insumos con la categoría "Bebestibles".'));
+    sel.addEventListener('change', function () { filaBeb.style.display = sel.value === 'bebestible' ? '' : 'none'; });
+    App.modal('Nueva receta', h('div', { class: 'stack' }, h('label', null, 'Nombre', inp), h('label', null, 'Tipo', sel), filaBeb), function (close) {
       return [App.btn('Cancelar', close), App.btn('Crear', function () {
         const n = inp.value.trim(); if (!n) return;
         const ya = Store.get().recetas.find(function (r) { return E.normNombre(r.nombre) === E.normNombre(n); });
         if (ya) { close(); App.toast('Ya existe una receta llamada "' + ya.nombre + '": te llevé a ella'); App.go('recetas', ya.id); return; }
         close();
-        App.go('recetas', App.nuevaReceta(n, sel.dataset.v || sel.value));
+        const tipo = sel.dataset.v || sel.value;
+        App.go('recetas', App.nuevaReceta(n, tipo, tipo === 'bebestible' ? selBeb.value || null : null));
       }, 'primary')];
     });
     setTimeout(function () { inp.focus(); }, 30);
@@ -3570,7 +3816,11 @@ window.CLOUD = {
       return;
     }
     App.confirm('¿Eliminar la receta "' + r.nombre + '"?', function () {
-      Store.mutate(function (s) { s.recetas = s.recetas.filter(function (x) { return x.id !== r.id; }); s.plan && Object.keys(s.plan).forEach(function (d) { s.plan[d] = s.plan[d].filter(function (i) { return i.recetaId !== r.id; }); }); });
+      Store.mutate(function (s) { s.recetas = s.recetas.filter(function (x) { return x.id !== r.id; }); s.plan && E.DIAS.forEach(function (d) {
+        s.plan[d] = (s.plan[d] || []).filter(function (i) { return i.recetaId !== r.id; });
+        const m = s.plan.menu && s.plan.menu[d];
+        if (m) Object.keys(m).forEach(function (t) { m[t] = m[t].filter(function (id) { return id !== r.id; }); });
+      }); });
       App.go('recetas');
     }, 'Eliminar', true);
   }
@@ -3707,7 +3957,11 @@ window.CLOUD = {
             h('div', null, h('small', null, 'Food cost'), h('b', { class: pc.foodCostPct > ctx.p.foodCostAlerta ? 'bad-t' : '' }, App.pct(pc.foodCostPct)))),
           composicion(rc),
           h('div', { class: 'form-grid' },
-            h('label', null, 'PVP (CLP)', App.numInput({ fk: 'r-pvp', value: r.pvp, onChange: function (n) { upd(function (x) { x.pvp = n; }, 'pvp'); } }),
+            h('label', null, r.tipo === 'plato' ? 'PVP (vacío = precio de la línea)' : E.TIPOS_SUELTOS.indexOf(r.tipo) >= 0 ? 'PVP suelto (CLP)' : 'PVP (CLP)',
+              App.numInput({ fk: 'r-pvp', value: r.pvp, ph: pc.pvpLinea ? String(pc.pvpLinea) : '', onChange: function (n) { upd(function (x) { x.pvp = n; }, 'pvp'); },
+                onEmpty: r.tipo === 'plato' ? function () { upd(function (x) { x.pvp = null; }, 'pvp'); } : null }),
+              r.tipo === 'plato' ? h('small', null, pc.pvpDeLinea ? 'Usa el precio de la línea ' + (r.linea || '') + ': ' + App.clp(pc.pvpLinea) + ' · '
+                : pc.pvpLinea ? 'Excepción: ' + App.sg(pc.pvp - pc.pvpLinea) + ' vs. la línea (sus combos se corren igual) · ' : '') : null,
               h('small', null, 'Sugerido: ', h('a', { href: '#', onclick: function (ev) { ev.preventDefault(); upd(function (x) { x.pvp = pc.pvpSugerido; }); } }, App.clp(pc.pvpSugerido)), ' · mínimo ', App.clp(pc.pvpMinimo))),
             h('label', null, 'Envase', App.select({ fk: 'r-env', value: r.envaseId || '', options: [['', '(sin envase)']].concat(envases.map(function (i) { return [i.id, i.nombre]; })),
               onChange: function (v) { upd(function (x) { x.envaseId = v || null; }); } })),
@@ -3716,6 +3970,19 @@ window.CLOUD = {
               onChange: function (v) { upd(function (x) { x.guarnicionDefault = v || null; if (v) { x.guarnicionesPermitidas = Array.from(new Set((x.guarnicionesPermitidas || []).concat(v))); } }); } })) : null,
             (!r.lineas.length || r.costoManual != null) ? h('label', null, 'Costo manual de ingredientes (si no hay receta)', App.numInput({ fk: 'r-cm', value: r.costoManual, onChange: function (n) { upd(function (x) { x.costoManual = n; }, 'cm'); } })) : null,
             (r.envaseManual != null && !r.envaseId) ? h('label', null, 'Costo de envase manual', App.numInput({ fk: 'r-em', value: r.envaseManual, onChange: function (n) { upd(function (x) { x.envaseManual = n; }, 'em'); } })) : null),
+          r.tipo === 'bebestible' ? h('div', { class: 'stack' },
+            h('div', { class: 'form-grid' },
+              h('label', { class: 'chk' }, h('input', { type: 'checkbox', 'data-fk': 'r-envasado', checked: !!r.envasado, onchange: function (ev) { upd(function (x) { x.envasado = ev.target.checked; }); } }),
+                ' Envasado: se vende tal cual (sin gas, mano de obra ni envase)'),
+              h('label', null, 'Recargo si va en un combo (CLP)', App.numInput({ fk: 'r-recargo', value: r.recargoCombo || 0, onChange: function (n) { upd(function (x) { x.recargoCombo = n; }, 'rr'); },
+                onEmpty: function () { upd(function (x) { x.recargoCombo = 0; }, 'rr'); } }),
+                h('small', null, '0 = sin recargo. Ej.: isotónica +$500 sobre el precio del combo.'))),
+            h('div', null, h('small', { class: 'mut' }, 'Se ofrece en los combos de: '),
+              h('div', { class: 'chips' }, App.chip('Todas las líneas', !(r.soloLineas && r.soloLineas.length), function () { upd(function (x) { x.soloLineas = []; }); }),
+                E.lineasPlatos(s).map(function (l) {
+                  const on = (r.soloLineas || []).indexOf(l) >= 0;
+                  return App.chip(l, on, function () { upd(function (x) { const a = x.soloLineas || []; x.soloLineas = on ? a.filter(function (y) { return y !== l; }) : a.concat(l); }); });
+                })))) : null,
           r.tipo === 'plato' ? h('div', null, h('small', { class: 'mut' }, 'Guarniciones que el cliente puede elegir: '),
             h('div', { class: 'chips' }, guarns.map(function (g) {
               const on = (r.guarnicionesPermitidas || []).indexOf(g.id) >= 0;
@@ -3762,7 +4029,8 @@ window.CLOUD = {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
   const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
-  const TIPOS = [['plato', 'Platos'], ['opc', 'Opcionales'], ['acompanamiento', 'Guarniciones'], ['todo', 'Todo']];
+  const TIPOS = [['plato', 'Platos'], ['opc', 'Opcionales'], ['bebestible', 'Bebestibles'], ['acompanamiento', 'Guarniciones'], ['combos', 'Combos'], ['todo', 'Todo']];
+  const COMP_TXT = { entrada: 'Entrada', ensalada: 'Ensalada', postre: 'Postre', bebestible: 'Bebestible' };
 
   function filtrar(F) {
     const s = Store.get(), calc = App.calc(), q = (F.q || '').toLowerCase();
@@ -3771,6 +4039,7 @@ window.CLOUD = {
       if (F.tipo === 'plato' && r.tipo !== 'plato') return false;
       if (F.tipo === 'opc' && !/entrada|ensalada|postre/.test(r.tipo)) return false;
       if (F.tipo === 'acompanamiento' && r.tipo !== 'acompanamiento') return false;
+      if (F.tipo === 'bebestible' && r.tipo !== 'bebestible') return false;
       if (F.tipo === 'plato' && F.linea && r.linea !== F.linea) return false;
       if (F.soloActivos && r.activo === false) return false;
       return !q || r.nombre.toLowerCase().indexOf(q) >= 0;
@@ -3823,8 +4092,13 @@ window.CLOUD = {
           h('td', { class: 'r' }, App.clp(c.envase)),
           h('td', { class: 'r' }, App.clp(c.overhead + c.comision)),
           h('td', { class: 'r strong' }, App.clp(c.costoTotal), esc && b && Math.abs(c.costoTotal - b.costoTotal) > 0.5 ? h('div', { class: 'sim-t small' }, App.sg(c.costoTotal - b.costoTotal)) : null),
-          h('td', { class: 'r' }, App.numInput({ fk: 'pvp-' + r.id, cls: 'w80', value: r.pvp, onChange: function (n) {
-            Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = n; }, 'pvp' + r.id); } })),
+          h('td', { class: 'r' }, App.numInput({ fk: 'pvp-' + r.id, cls: 'w80', value: r.pvp, ph: c.pvpLinea ? String(c.pvpLinea) : '',
+            title: r.tipo === 'plato' ? 'Vacío = precio de la línea (Combos)' : '',
+            onChange: function (n) { Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = n; }, 'pvp' + r.id); },
+            onEmpty: r.tipo === 'plato' ? function () { Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = null; }, 'pvp' + r.id); } : null }),
+            r.tipo === 'plato' && c.pvpLinea ? h('div', null, c.pvpDeLinea ? h('small', { class: 'mut' }, 'precio de línea')
+              : h('small', { class: 'warn-t', title: 'Clic: usar el precio de la línea', style: { cursor: 'pointer' }, onclick: function () {
+                Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = null; }); } }, 'excepción ' + App.sg(c.pvp - c.pvpLinea))) : null),
           h('td', { class: 'r ' + (c.margen < 0 ? 'bad-t' : '') }, App.clp(c.margen)),
           h('td', { class: 'r' }, h('div', { class: 'cellbar' }, App.pct(c.margenPct), App.bar(c.margenPct, kind, 80))),
           h('td', { class: 'r ' + (alerta ? 'bad-t' : '') }, App.pct(c.foodCostPct)),
@@ -3890,22 +4164,96 @@ window.CLOUD = {
       })) : null);
   }
 
-  function trilogia(ctx) {
-    const s = Store.get(), calc = App.calc(), p = ctx.p;
-    const prom = function (t) {
-      const l = s.recetas.filter(function (r) { return r.tipo === t && r.activo !== false && calc.get(r.id); });
-      return { n: l.length, costo: l.length ? l.reduce(function (a, r) { return a + calc.get(r.id).costoTotal; }, 0) / l.length : 0, pvp: l.length ? l.reduce(function (a, r) { return a + calc.get(r.id).pvp; }, 0) / l.length : 0 };
+  function chips(F) {
+    return h('div', { class: 'chips' }, TIPOS.map(function (t) { return App.chip(t[1], F.tipo === t[0], function () { F.tipo = t[0]; F.sel = null; App.render(); }); }));
+  }
+
+  function updCombo(id, fn, key) { Store.mutate(function (st) { fn(st.combos.find(function (c) { return c.id === id; })); }, key); }
+
+  function incluyeTxt(c) { return c.incluye.length ? c.incluye.map(function (t) { return COMP_TXT[t]; }).join(' + ') : 'solo el plato'; }
+
+  // grilla de precios finales (línea × combo), mezcla esperada y qué incluye cada combo
+  function vistaCombos(ctx) {
+    const s = Store.get(), p = ctx.p, lineas = E.lineasPlatos(s), combos = ctx.combos;
+    const otros = combos.filter(function (c) { return c.id !== E.COMBO_SOLO && c.activo !== false; });
+    const sumaMezcla = otros.reduce(function (t, c) { return t + (Number(c.mezclaPct) || 0); }, 0);
+    const res = {};
+    lineas.forEach(function (l) { res[l] = {}; combos.forEach(function (c) { res[l][c.id] = E.costoCombo(ctx, c.id, l); }); });
+
+    // ticket y margen esperados por colación (mezcla esperada; líneas con el mismo peso)
+    let ticket = 0, margen = 0, nl = 0, noConviene = 0;
+    lineas.forEach(function (l) {
+      let t = 0, m = 0, ok = false;
+      combos.forEach(function (c) {
+        const r = res[l][c.id]; if (!r || r.precio == null || c.activo === false) return;
+        const w = c.id === E.COMBO_SOLO ? Math.max(0, 100 - sumaMezcla) / 100 : (Number(c.mezclaPct) || 0) / 100;
+        t += w * (r.precio + r.recargoBebestible); m += w * r.margen; ok = true;
+        if (c.id !== E.COMBO_SOLO && r.ahorro != null && r.ahorro <= 0) noConviene++;
+      });
+      if (ok) { ticket += t; margen += m; nl++; }
+    });
+    const faltan = {};
+    combos.forEach(function (c) { lineas.forEach(function (l) { const r = res[l][c.id]; if (r) r.faltan.forEach(function (t) { faltan[t] = true; }); }); });
+
+    const celda = function (l, c) {
+      const r = res[l][c.id];
+      const kind = !r || r.precio == null ? '' : r.margen < 0 ? 'bad-t' : r.foodCostPct > p.foodCostAlerta ? 'warn-t' : 'good-t';
+      return h('td', { class: 'r' + (c.activo === false ? ' mut' : '') },
+        App.numInput({ fk: 'cb-' + c.id + '-' + lineas.indexOf(l), cls: 'w80', value: c.precios[l], ph: r && r.pvpSugerido ? String(r.pvpSugerido) : '',
+          onChange: function (n) { updCombo(c.id, function (x) { x.precios[l] = n; }, 'cb' + c.id + l); },
+          onEmpty: function () { updCombo(c.id, function (x) { delete x.precios[l]; }, 'cb' + c.id + l); } }),
+        r && r.precio != null ? h('div', null, h('small', { class: kind, title: 'Margen sobre el precio' + (p.ivaOn ? ' neto' : '') + (r.recargoBebestible ? ' (incluye recargo promedio de bebestibles ' + App.clp(r.recargoBebestible) + ')' : '') }, App.pct(r.margenPct)),
+          h('small', { class: 'mut' }, ' · sug. ' + App.clp(r.pvpSugerido))) : r ? h('div', null, h('small', { class: 'mut' }, 'sug. ' + App.clp(r.pvpSugerido))) : null,
+        r && r.faltan.length ? h('div', null, h('small', { class: 'bad-t', title: 'El margen no incluye lo que falta' }, 'sin ' + r.faltan.map(function (t) { return COMP_TXT[t].toLowerCase(); }).join(', '))) : null,
+        r && c.id !== E.COMBO_SOLO && r.ahorro != null ? h('div', null, h('small', { class: r.ahorro > 0 ? 'mut' : 'bad-t', title: 'Precio de pedir todo suelto: ' + App.clp(r.suelto) },
+          r.ahorro > 0 ? 'ahorra ' + App.clp(r.ahorro) : 'no conviene vs. suelto')) : null);
     };
-    const e = prom('entrada'), en = prom('ensalada'), po = prom('postre');
-    const costo = e.costo + en.costo + po.costo, suelto = e.pvp + en.pvp + po.pvp;
-    const neto = p.ivaOn ? p.trilogiaPrecio / (1 + p.ivaPct / 100) : p.trilogiaPrecio;
-    return App.card('Combo Trilogía (Entrada + Ensalada + Postre)', h('div', { class: 'kpis' },
-      App.kpi('Costo promedio del trío', App.clp(costo), e.n + ' entradas · ' + en.n + ' ensaladas · ' + po.n + ' postres'),
-      App.kpi('Suelto promedio', App.clp(suelto), 'si se vendieran por separado'),
-      h('div', { class: 'kpi' }, h('div', { class: 'kpi-l' }, 'Precio del combo'), h('div', { class: 'kpi-v' },
-        App.numInput({ fk: 'tri-p', cls: 'w80', value: p.trilogiaPrecio, onChange: function (n) { Store.mutate(function (st) { st.params.trilogiaPrecio = n; }, 'tri'); } })),
-        h('div', { class: 'kpi-s' }, 'adicional sobre la colación')),
-      App.kpi('Margen del combo', App.clp(neto - costo) + ' · ' + App.pct(neto > 0 ? (neto - costo) / neto * 100 : null), 'sin gas/MO por ítem', neto - costo < 0 ? 'bad' : 'good')));
+
+    const grilla = App.card('Precio final por línea y combo', h('div', null,
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, h('th', null, 'Línea'), combos.map(function (c) {
+          return h('th', { class: 'r' + (c.activo === false ? ' mut' : '') }, c.nombre, h('div', null, h('small', { class: 'mut' }, incluyeTxt(c))));
+        }))),
+        h('tbody', null, lineas.map(function (l) {
+          const platos = s.recetas.filter(function (r) { return r.tipo === 'plato' && r.linea === l && r.activo !== false; });
+          const exc = platos.filter(function (r) { return r.pvp != null && r.pvp !== ''; }).length;
+          return h('tr', null, h('td', null, h('div', { class: 'nm' }, l), h('small', { class: 'mut' }, platos.length + ' platos' + (exc ? ' · ' + exc + ' con precio propio' : ''))),
+            combos.map(function (c) { return celda(l, c); }));
+        })))),
+      h('p', { class: 'help' }, 'Precio que paga el cliente por la colación de esa línea con el combo. Un plato con precio propio (excepción) corre todos sus combos en la misma diferencia. ',
+        'El margen usa el costo promedio de los platos activos de la línea y de las entradas, ensaladas, postres y bebestibles activos; "sug." cumple el food cost objetivo (' + p.foodCostObjetivo + '%). ',
+        '"Ahorra" es lo que el cliente se ahorra frente a pedir todo suelto (los sueltos llevan un recargo de ' + (p.recargoSueltoPct || 0) + '% en su precio sugerido).')));
+
+    const config = App.card('Combos: qué incluyen y cuántos se piden', h('div', null,
+      h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, h('th', null, 'Combo'), h('th', null, 'Incluye (además del plato)'), h('th', { class: 'r', title: 'De cada 100 colaciones, cuántas se espera que pidan este combo' }, 'Mezcla esperada'), h('th', null, 'Activo'))),
+        h('tbody', null, combos.map(function (c) {
+          const solo = c.id === E.COMBO_SOLO;
+          return h('tr', { class: c.activo === false ? 'off' : '' },
+            h('td', null, App.textInput({ fk: 'cbn-' + c.id, value: c.nombre, onChange: function (v) { updCombo(c.id, function (x) { x.nombre = v; }, 'cbn' + c.id); } })),
+            h('td', null, solo ? h('small', { class: 'mut' }, 'solo el plato: fija el precio de cada línea') : h('div', { class: 'chips' }, E.COMPONENTES.map(function (t) {
+              const on = c.incluye.indexOf(t) >= 0;
+              return App.chip(COMP_TXT[t], on, function () { updCombo(c.id, function (x) { x.incluye = on ? x.incluye.filter(function (y) { return y !== t; }) : E.COMPONENTES.filter(function (y) { return y === t || x.incluye.indexOf(y) >= 0; }); }); });
+            }))),
+            h('td', { class: 'r' }, solo ? h('b', { class: sumaMezcla > 100 ? 'bad-t' : '' }, App.pct(Math.max(0, 100 - sumaMezcla)))
+              : App.numInput({ fk: 'cbm-' + c.id, cls: 'w60', value: c.mezclaPct || 0, onChange: function (n) { updCombo(c.id, function (x) { x.mezclaPct = n; }, 'cbm' + c.id); },
+                onEmpty: function () { updCombo(c.id, function (x) { x.mezclaPct = 0; }, 'cbm' + c.id); } }), solo ? null : ' %'),
+            h('td', null, solo ? null : h('input', { type: 'checkbox', 'data-fk': 'cba-' + c.id, checked: c.activo !== false, onchange: function (ev) { updCombo(c.id, function (x) { x.activo = ev.target.checked; }); } })));
+        }))),
+      sumaMezcla > 100 ? h('div', { class: 'alert bad' }, 'La mezcla de los combos suma ' + App.pct(sumaMezcla) + ': debe ser 100% o menos (el resto es "Solo colación").') : null,
+      h('p', { class: 'help' }, 'La mezcla esperada calcula cuántas entradas, ensaladas, postres y bebestibles hay que producir y comprar según las colaciones del plan semanal. Cuando haya pedidos reales, reemplazarán esta estimación.')));
+
+    const bebs = s.recetas.filter(function (r) { return r.tipo === 'bebestible' && r.activo !== false; });
+    const avisos = Object.keys(faltan).map(function (t) {
+      return h('div', { class: 'alert warn' }, t === 'bebestible' ? 'No hay bebestibles activos para algunas líneas: créalos en Recetas → + Nueva → tipo Bebestible.' : 'No hay ' + COMP_TXT[t].toLowerCase() + 's activas.');
+    });
+    return h('div', { class: 'stack' },
+      h('div', { class: 'kpis' },
+        App.kpi('Ticket promedio esperado', nl ? App.clp(ticket / nl) : '—', 'por colación, según la mezcla'),
+        App.kpi('Margen esperado', nl ? App.clp(margen / nl) : '—', 'por colación, según la mezcla', margen < 0 ? 'bad' : 'good'),
+        App.kpi('Bebestibles activos', bebs.length, bebs.filter(function (r) { return r.recargoCombo > 0; }).length + ' con recargo en combo'),
+        App.kpi('Combos que no convienen', noConviene, 'más caros o iguales que pedir suelto', noConviene ? 'bad' : 'good')),
+      avisos, grilla, config);
   }
 
   App.views.platos = function (arg) {
@@ -3913,16 +4261,18 @@ window.CLOUD = {
     const F = App.ui.filtros.platos = App.ui.filtros.platos || { q: '', tipo: 'plato', linea: '', orden: 'nombre', dir: 'asc', soloActivos: false, sel: null };
     if (arg && s.recetas.some(function (r) { return r.id === arg; })) {
       const r = s.recetas.find(function (x) { return x.id === arg; });
-      F.sel = arg; F.tipo = r.tipo === 'plato' ? 'plato' : (r.tipo === 'acompanamiento' ? 'acompanamiento' : 'opc'); F.linea = '';
+      F.sel = arg; F.tipo = r.tipo === 'plato' || r.tipo === 'acompanamiento' || r.tipo === 'bebestible' ? r.tipo : 'opc'; F.linea = '';
       history.replaceState(null, '', '#/platos');
     }
+    if (arg === 'combos') { F.tipo = 'combos'; history.replaceState(null, '', '#/platos'); }
+    if (F.tipo === 'combos') return h('div', { class: 'stack' }, h('div', { class: 'filters row gap wrap' }, chips(F)), vistaCombos(ctx));
     const filas = filtrar(F);
     const sel = F.sel && s.recetas.find(function (r) { return r.id === F.sel; });
 
     const bajoAlerta = filas.filter(function (r) { const c = calc.get(r.id); return r.activo !== false && c.foodCostPct > p.foodCostAlerta && c.pvpSugerido > c.pvp; });
     const barra = h('div', { class: 'filters row gap wrap' },
       App.textInput({ fk: 'pl-q', value: F.q, ph: 'Buscar plato…', cls: 'search', onChange: function (v) { F.q = v; App.render(); } }),
-      h('div', { class: 'chips' }, TIPOS.map(function (t) { return App.chip(t[1], F.tipo === t[0], function () { F.tipo = t[0]; F.sel = null; App.render(); }); })),
+      chips(F),
       F.tipo === 'plato' ? App.select({ fk: 'pl-linea', value: F.linea, options: [['', 'Todas las líneas']].concat(LINEAS.map(function (l) { return [l, l]; })), onChange: function (v) { F.linea = v; App.render(); } }) : null,
       h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: F.soloActivos, onchange: function (ev) { F.soloActivos = ev.target.checked; App.render(); } }), ' Solo activos'),
       h('span', { class: 'spacer' }),
@@ -3933,7 +4283,7 @@ window.CLOUD = {
       }, 'small') : null,
       App.btn('Exportar CSV', function () { exportarCSV(filas, calc); }, 'small'));
 
-    return h('div', { class: 'stack' }, resumen(filas, calc, p), F.tipo === 'opc' ? trilogia(ctx) : null, barra,
+    return h('div', { class: 'stack' }, resumen(filas, calc, p), barra,
       h('div', { class: 'split wide' }, h('div', { class: 'pane-wide' }, tabla(filas, F, ctx), h('p', { class: 'help' },
         'Costo total = ingredientes (con ' + p.imprevistosPct + '% de imprevistos) + guarnición + envase + gas/MO ' + App.clp(p.gasPorPorcion + p.manoObraPorPorcion) + (p.ivaOn ? ' · margen sobre precio neto de IVA' : '') + '. Cambia estos parámetros en Ajustes. Haz clic en el nombre de un plato para ver el detalle.')),
         sel ? drawer(sel, F, ctx) : null));
@@ -4225,6 +4575,7 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
+  const TIPO_TXT = { entrada: 'entrada', ensalada: 'ensalada', postre: 'postre', bebestible: 'bebestible', acompanamiento: 'guarnición' };
   const DIAS = [['lun', 'Lunes'], ['mar', 'Martes'], ['mie', 'Miércoles'], ['jue', 'Jueves'], ['vie', 'Viernes']];
   const TIPOS_AVISO = [['acabado', '🚨 Se acabó'], ['poco', '📉 Queda poco'], ['no_alcanza', '🍳 No alcanzó para la preparación'], ['calidad', '⭐ Opinión sobre un insumo']];
   App.TIPO_AVISO = { acabado: '🚨 Se acabó', poco: '📉 Queda poco', no_alcanza: '🍳 No alcanzó', compra: '🛒 Compra urgente', calidad: '⭐ Opinión' };
@@ -4355,13 +4706,13 @@ window.CLOUD = {
 
   function modoReceta(s) {
     const F = App.ui.filtros.cocina = App.ui.filtros.cocina || { q: '', id: null, porc: 1 };
-    const platos = s.recetas.filter(function (r) { return (r.tipo === 'plato' || r.tipo === 'base' || r.tipo === 'acompanamiento' || /entrada|ensalada|postre/.test(r.tipo)) && r.activo !== false; });
+    const platos = s.recetas.filter(function (r) { return (r.tipo === 'plato' || r.tipo === 'base' || r.tipo === 'acompanamiento' || /entrada|ensalada|postre/.test(r.tipo) || (r.tipo === 'bebestible' && !r.envasado)) && r.activo !== false; });
     const q = (F.q || '').toLowerCase();
     const filtrados = platos.filter(function (r) { return !q || r.nombre.toLowerCase().indexOf(q) >= 0; });
     const grupos = {};
-    filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? 'Bases y sub-recetas' : r.tipo === 'acompanamiento' ? 'Guarniciones' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
+    filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? 'Bases y sub-recetas' : r.tipo === 'acompanamiento' ? 'Guarniciones' : r.tipo === 'bebestible' ? 'Bebestibles' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
     const sel = platos.find(function (r) { return r.id === F.id; }) || filtrados.find(function (r) { return r.tipo === 'plato'; }) || filtrados[0];
-    const ORDEN = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína', 'Guarniciones', 'Opcionales', 'Bases y sub-recetas'];
+    const ORDEN = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína', 'Guarniciones', 'Opcionales', 'Bebestibles', 'Bases y sub-recetas'];
     return h('div', { class: 'split cocina' },
       h('div', { class: 'pane-list noprint' },
         h('div', { class: 'filters' }, App.textInput({ fk: 'co-q', value: F.q, ph: 'Buscar receta…', cls: 'search', onChange: function (v) { F.q = v; App.render(); } })),
@@ -4380,23 +4731,34 @@ window.CLOUD = {
   function modoDia(s) {
     const F = App.ui.filtros.cocina = App.ui.filtros.cocina || {};
     F.dia = F.dia || 'lun';
-    const items = (s.plan[F.dia] || []).filter(function (it) { return s.recetas.some(function (r) { return r.id === it.recetaId; }); });
     const ctx = E.makeCtx(s, {});
+    // platos del plan + entradas, ensaladas, postres y bebestibles que piden los combos; los envasados solo se despachan
+    const ORDEN_T = ['plato', 'entrada', 'ensalada', 'postre', 'bebestible', 'acompanamiento'];
+    const todos = E.itemsDelDia(ctx, F.dia).map(function (it) { return Object.assign({ r: ctx.recetas.get(it.recetaId) }, it); }).filter(function (x) { return x.r; })
+      .sort(function (a, b) { return ORDEN_T.indexOf(a.r.tipo) - ORDEN_T.indexOf(b.r.tipo) || a.r.nombre.localeCompare(b.r.nombre); });
+    const items = todos.filter(function (x) { return !x.r.envasado; });
+    const envasados = todos.filter(function (x) { return x.r.envasado; });
     const total = new Map();
-    items.forEach(function (it) { E.explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0).forEach(function (q, id) { total.set(id, (total.get(id) || 0) + q); }); });
+    items.forEach(function (it) { E.explotarPlato(ctx, it.recetaId, it.porciones).forEach(function (q, id) { total.set(id, (total.get(id) || 0) + q); }); });
     const filasTotal = Array.from(total.entries()).map(function (e) { return { ins: s.insumos.find(function (i) { return i.id === e[0]; }), q: e[1] }; }).filter(function (x) { return x.ins; })
       .sort(function (a, b) { return a.ins.categoria.localeCompare(b.ins.categoria) || a.ins.nombre.localeCompare(b.ins.nombre); });
     return h('div', { class: 'stack' },
-      h('div', { class: 'row gap noprint' }, h('div', { class: 'chips' }, DIAS.map(function (d) { return App.chip(d[1] + ' (' + (s.plan[d[0]] || []).length + ')', F.dia === d[0], function () { F.dia = d[0]; App.render(); }); })),
+      h('div', { class: 'row gap noprint' }, h('div', { class: 'chips' }, DIAS.map(function (d) { return App.chip(d[1] + ' (' + E.itemsDelDia(ctx, d[0]).length + ')', F.dia === d[0], function () { F.dia = d[0]; App.render(); }); })),
         h('span', { class: 'spacer' }), App.btn('🖨 Imprimir producción del día', function () { window.print(); }, 'primary')),
-      items.length ? h('div', { class: 'stack' },
+      todos.length ? h('div', { class: 'stack' },
         App.card('Producción del ' + DIAS.find(function (d) { return d[0] === F.dia; })[1], h('div', null,
-          h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Plato'), h('th', { class: 'r' }, 'Porciones'))),
-            h('tbody', null, items.map(function (it) { const r = s.recetas.find(function (x) { return x.id === it.recetaId; }); return h('tr', null, h('td', null, r.nombre), h('td', { class: 'r strong' }, it.porciones)); }))),
-          h('h4', null, 'Insumos totales a preparar (peso utilizable)'),
+          items.length ? h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Preparación'), h('th', { class: 'r' }, 'Porciones'))),
+            h('tbody', null, items.map(function (it) {
+              return h('tr', null, h('td', null, it.r.nombre, it.r.tipo !== 'plato' ? h('small', { class: 'mut' }, ' · ' + (TIPO_TXT[it.r.tipo] || it.r.tipo)) : null),
+                h('td', { class: 'r strong' }, it.porciones, it.combo ? h('div', null, h('small', { class: 'mut' }, it.manual ? it.combo + ' para combos + ' + it.manual + ' sueltos' : 'estimado para combos')) : null));
+            }))) : null,
+          envasados.length ? h('div', null, h('h4', null, 'Bebestibles a despachar (envasados)'),
+            h('table', { class: 'tbl compact' }, h('tbody', null, envasados.map(function (it) { return h('tr', null, h('td', null, it.r.nombre), h('td', { class: 'r strong' }, it.porciones + ' un')); })))) : null,
+          filasTotal.length ? h('h4', null, 'Insumos totales a preparar (peso utilizable)') : null,
           h('table', { class: 'tbl compact' }, h('tbody', null, filasTotal.map(function (x) { return h('tr', null, h('td', null, x.ins.nombre), h('td', { class: 'r' }, App.cantidad(x.q, x.ins.unidad))); }))))),
-        items.map(function (it) { const r = s.recetas.find(function (x) { return x.id === it.recetaId; }); return ficha(s, r, Number(it.porciones) || 1); }))
-        : App.empty('No hay platos planificados para este día. Arma el plan en “Lista de compras”.'));
+        items.map(function (it) { return ficha(s, it.r, it.porciones || 1); }))
+        : App.empty('No hay platos planificados para este día. Arma el plan en “Lista de compras”.'),
+      todos.some(function (x) { return x.combo; }) ? h('p', { class: 'help' }, 'Las entradas, ensaladas, postres y bebestibles "para combos" son una estimación según los combos que se suelen pedir.') : null);
   }
 
   App.views.cocina = function (arg) {
@@ -4599,6 +4961,63 @@ window.CLOUD = {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
   const DIAS = [['lun', 'Lunes'], ['mar', 'Martes'], ['mie', 'Miércoles'], ['jue', 'Jueves'], ['vie', 'Viernes']];
+  const OPC = [['entrada', 'Entrada'], ['ensalada', 'Ensalada'], ['postre', 'Postre']];
+  const CON_ALTERNATIVAS = ['entrada', 'ensalada'];   // el cliente puede elegir entre la del día y sus alternativas
+
+  // opcionales del día: principal + alternativas validadas; sugiere alternativas de costo parecido
+  function opcionalesDia(s, ctx, F, d, derivadas) {
+    const menu = s.plan.menu[d[0]] || {};
+    const upd = function (fn) { Store.mutate(function (st) { const m = st.plan.menu[d[0]] = st.plan.menu[d[0]] || {}; fn(m); }); };
+    return h('div', { class: 'opc-dia' }, h('small', { class: 'mut' }, 'Opcionales del día (para los combos)'),
+      OPC.map(function (o) {
+        const t = o[0], ids = (menu[t] || []).filter(function (id) { return s.recetas.some(function (r) { return r.id === id; }); });
+        const disponibles = s.recetas.filter(function (r) { return r.tipo === t && r.activo !== false; });
+        const nombre = function (id) { const r = s.recetas.find(function (x) { return x.id === id; }); return r ? r.nombre : id; };
+        const q = function (id) { const x = derivadas.get(id); return x && x.combo ? ' ≈ ' + x.combo : ''; };
+        const clave = d[0] + t, abierto = F.sug === clave;
+        const sug = abierto && ids[0] ? E.sugerirAlternativas(ctx, ids[0], d[0]).slice(0, 4) : [];
+        return h('div', { class: 'opc-t' },
+          h('div', { class: 'row gap' }, App.select({ fk: 'menu-' + clave, cls: 'grow', value: ids[0] || '',
+            options: [['', '— ' + o[1] + ' —']].concat(disponibles.map(function (r) { return [r.id, r.nombre]; })),
+            onChange: function (v) { upd(function (m) { const resto = (m[t] || []).slice(1).filter(function (x) { return x !== v; }); m[t] = v ? [v].concat(resto) : []; }); } }),
+            ids[0] ? h('small', { class: 'mut nowrap' }, q(ids[0])) : null),
+          ids.slice(1).map(function (id) {
+            return h('div', { class: 'plan-it alt' }, h('span', { class: 'nm' }, '↳ ' + nombre(id), h('small', { class: 'mut' }, q(id))),
+              App.btn('✕', function () { upd(function (m) { m[t] = (m[t] || []).filter(function (x) { return x !== id; }); }); }, 'small ghost', 'Dejar de ofrecer esta alternativa'));
+          }),
+          ids[0] && CON_ALTERNATIVAS.indexOf(t) >= 0 ? h('a', { href: '#', class: 'small noprint', 'data-fk': 'sug-' + clave, onclick: function (ev) { ev.preventDefault(); F.sug = abierto ? null : clave; App.render(); } },
+            abierto ? 'Ocultar sugerencias' : '+ Sugerir alternativa') : null,
+          abierto ? (sug.length ? h('div', { class: 'sug-alt' }, sug.map(function (a) {
+            return h('div', { class: 'plan-it' }, h('span', { class: 'nm' }, a.nombre,
+              h('div', null, h('small', { class: Math.abs(a.deltaCosto) < 1 ? 'mut' : a.deltaCosto > 0 ? 'warn-t' : 'good-t' }, (Math.abs(a.deltaCosto) < 1 ? 'mismo costo' : App.sg(a.deltaCosto) + ' de costo')),
+                a.compartidos ? h('small', { class: 'mut', title: a.insumosCompartidos.join(', ') }, ' · comparte ' + a.compartidos + ' insumo' + (a.compartidos > 1 ? 's' : '')) : null)),
+              App.btn('Ofrecer', function () { upd(function (m) { m[t] = (m[t] || []).concat(a.id); }); }, 'small', 'Validar: el cliente podrá elegirla en vez de ' + nombre(ids[0])));
+          })) : h('small', { class: 'mut' }, 'No hay otras con costo parecido (±' + (ctx.p.toleranciaAlternativasPct || 0) + '%, se cambia en Ajustes).')) : null);
+      }));
+  }
+
+  // ventas y margen esperados: cada colación se reparte entre los combos según la mezcla esperada
+  function esperado(ctx, calc, itemsPorDia) {
+    const combos = E.combosActivos(ctx);
+    const suma = combos.filter(function (c) { return c.id !== E.COMBO_SOLO; }).reduce(function (t, c) { return t + (Number(c.mezclaPct) || 0); }, 0);
+    let ingreso = 0, costo = 0, colaciones = 0;
+    itemsPorDia.forEach(function (items) {
+      items.forEach(function (it) {
+        const r = ctx.recetas.get(it.recetaId), c = calc.get(it.recetaId);
+        if (!r || !c) return;
+        costo += (c.costoDirecto + c.overhead) * it.porciones;
+        if (r.tipo !== 'plato') { ingreso += c.pvp * it.manual; return; }   // sueltos; lo de los combos va en el precio del combo
+        colaciones += it.porciones;
+        combos.forEach(function (k) {
+          const w = k.id === E.COMBO_SOLO ? Math.max(0, 100 - suma) / 100 : (Number(k.mezclaPct) || 0) / 100;
+          const pr = E.precioEnCombo(ctx, r, k.id);
+          ingreso += w * it.porciones * (pr != null ? pr : c.pvp);
+        });
+      });
+    });
+    const neto = ctx.p.ivaOn ? ingreso / (1 + ctx.p.ivaPct / 100) : ingreso;
+    return { ingreso: ingreso, margen: neto - costo - ingreso * ctx.p.comisionPct / 100, colaciones: colaciones };
+  }
 
   function textoLista(grupos, total) {
     const out = [];
@@ -4619,24 +5038,30 @@ window.CLOUD = {
     const F = App.ui.filtros.compras = App.ui.filtros.compras || { dia: 'todos', envases: true };
     const vendibles = s.recetas.filter(function (r) { return E.esVendible(r) && r.activo !== false; });
     const dias = F.dia === 'todos' ? DIAS.map(function (d) { return d[0]; }) : [F.dia];
+    const porDia = {};
+    DIAS.forEach(function (d) { porDia[d[0]] = E.itemsDelDia(ctx, d[0]); });
     const items = [];
-    dias.forEach(function (d) { (s.plan[d] || []).forEach(function (it) { items.push(it); }); });
+    dias.forEach(function (d) { porDia[d].forEach(function (it) { items.push(it); }); });
 
     const addInputs = {};
     const colDia = function (d) {
       const lista = s.plan[d[0]] || [];
-      const sel = App.select({ fk: 'plan-add-' + d[0], value: '', options: [['', '+ Agregar plato…']].concat(vendibles.map(function (r) { return [r.id, r.nombre]; })),
+      const derivadas = new Map(porDia[d[0]].map(function (x) { return [x.recetaId, x]; }));
+      const sel = App.select({ fk: 'plan-add-' + d[0], value: '', options: [['', '+ Agregar plato o venta suelta…']].concat(vendibles.map(function (r) { return [r.id, r.nombre + (r.tipo !== 'plato' ? ' (suelto)' : '')]; })),
         onChange: function (v) { if (!v) return; Store.mutate(function (st) { st.plan[d[0]].push({ recetaId: v, porciones: 10 }); }); } });
       let totalPorc = 0;
-      lista.forEach(function (it) { totalPorc += Number(it.porciones) || 0; });
-      return h('div', { class: 'dia' }, h('div', { class: 'dia-h' }, h('b', null, d[1]), h('small', null, totalPorc + ' porc.')),
+      lista.forEach(function (it) { const r = s.recetas.find(function (x) { return x.id === it.recetaId; }); if (r && r.tipo === 'plato') totalPorc += Number(it.porciones) || 0; });
+      const bebs = porDia[d[0]].filter(function (x) { const r = s.recetas.find(function (y) { return y.id === x.recetaId; }); return r && r.tipo === 'bebestible' && x.combo; })
+        .reduce(function (t, x) { return t + x.combo; }, 0);
+      return h('div', { class: 'dia' }, h('div', { class: 'dia-h' }, h('b', null, d[1]), h('small', null, totalPorc + ' colaciones')),
         lista.map(function (it, i) {
           const r = s.recetas.find(function (x) { return x.id === it.recetaId; });
           if (!r) return null;
           return h('div', { class: 'plan-it' }, h('span', { class: 'nm' }, r.nombre),
             App.numInput({ fk: 'plan-' + d[0] + '-' + i, cls: 'w60', value: it.porciones, onChange: function (n) { Store.mutate(function (st) { st.plan[d[0]][i].porciones = n; }, 'pl' + d[0] + i); } }),
             App.btn('✕', function () { Store.mutate(function (st) { st.plan[d[0]].splice(i, 1); }); }, 'small ghost'));
-        }), sel);
+        }), sel, opcionalesDia(s, ctx, F, d, derivadas),
+        bebs ? h('small', { class: 'mut' }, '≈ ' + bebs + ' bebestibles para los combos') : null);
     };
 
     // lista de compras
@@ -4656,18 +5081,19 @@ window.CLOUD = {
       if (g.log) totalLog += g.log.costo;
     });
     const teorico = filas.reduce(function (t, f) { return t + f.costoTeorico; }, 0);
-    // ingresos y margen esperados del plan
-    let ingreso = 0, costoPlan = 0, porcTot = 0;
-    items.forEach(function (it) { const c = calc.get(it.recetaId); const n = Number(it.porciones) || 0; if (c) { ingreso += c.pvp * n; costoPlan += c.costoTotal * n; porcTot += n; } });
+    // ingresos y margen esperados del plan (con la mezcla de combos)
+    const esp = esperado(ctx, calc, dias.map(function (d) { return porDia[d]; }));
+    const ingreso = esp.ingreso, porcTot = esp.colaciones;
 
     return h('div', { class: 'stack' },
       App.card('Plan semanal', h('div', null, h('div', { class: 'plan-grid' }, DIAS.map(colDia)),
-        h('p', { class: 'help' }, 'Indica cuántas porciones de cada plato esperas vender. La lista de compras y los ahorros estimados usan este plan; si está vacío, se reparte el volumen supuesto en Ajustes.'))),
+        h('p', { class: 'help' }, 'Indica cuántas porciones de cada plato esperas vender y elige la entrada, ensalada y postre del día. Las porciones de opcionales y bebestibles (≈) salen de la mezcla esperada de combos (Platos y PVP → Combos). ',
+          'La lista de compras y los ahorros estimados usan este plan; si está vacío, se reparte el volumen supuesto en Ajustes.'))),
       h('div', { class: 'kpis' },
-        App.kpi('Porciones planificadas', porcTot, F.dia === 'todos' ? 'semana completa' : DIAS.find(function (d) { return d[0] === F.dia; })[1]),
-        App.kpi('Ventas esperadas', App.clp(ingreso), 'a los PVP actuales'),
+        App.kpi('Colaciones planificadas', porcTot, F.dia === 'todos' ? 'semana completa' : DIAS.find(function (d) { return d[0] === F.dia; })[1]),
+        App.kpi('Ventas esperadas', App.clp(ingreso), h('a', { href: '#/platos/combos' }, 'con la mezcla de combos')),
         App.kpi('Costo de compra', App.clp(total), 'en formatos de compra · uso teórico ' + App.clp(teorico)),
-        App.kpi('Margen esperado', App.clp(ingreso - costoPlan), ingreso ? App.pct((ingreso - costoPlan) / ingreso * 100) + ' del bruto' : '', ingreso - costoPlan < 0 ? 'bad' : 'good')),
+        App.kpi('Margen esperado', App.clp(esp.margen), ingreso ? App.pct(esp.margen / ingreso * 100) + ' del bruto' : '', esp.margen < 0 ? 'bad' : 'good')),
       h('div', { class: 'row gap wrap' },
         h('div', { class: 'chips' }, [['todos', 'Semana'] ].concat(DIAS).map(function (d) { return App.chip(d[1], F.dia === d[0], function () { F.dia = d[0]; App.render(); }); })),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: F.envases, onchange: function (ev) { F.envases = ev.target.checked; App.render(); } }), ' Incluir envases'),
@@ -4787,8 +5213,8 @@ window.CLOUD = {
       ': lo que hagas aquí no se guardará para los demás. Ejecuta supabase/04_proveedores_compras.sql en Supabase → SQL Editor.')) : null;
   }
   function itemsPlan() {
-    const s = Store.get(), out = [];
-    ['lun', 'mar', 'mie', 'jue', 'vie'].forEach(function (d) { (s.plan[d] || []).forEach(function (it) { out.push(it); }); });
+    const ctx = App.ctx(), out = [];
+    E.DIAS.forEach(function (d) { E.itemsDelDia(ctx, d).forEach(function (it) { out.push(it); }); });   // incluye lo que piden los combos
     return out;
   }
 
@@ -5793,6 +6219,7 @@ window.CLOUD = {
         paso('🏷️', 'Cotizaciones', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha.', function () { App.go('cotizaciones'); }),
         h('h4', null, 'Ver recetas'),
         paso('📖', 'Cocina', 'Ingredientes y pasos. Elige las porciones y las cantidades se ajustan.', function () { App.go('cocina'); }),
+        paso('🥗', 'Producción del día', 'Platos, más las entradas, ensaladas y postres de los combos (estimados) y los bebestibles envasados a despachar.', function () { App.go('cocina', 'dia'); }),
         h('p', { class: 'help noprint' }, 'Lo que envías llega al gerente, que decide. Tú no cambias costos ni precios.'),
         h('div', { class: 'noprint' }, App.btn('🖨 Imprimir esta guía', function () { window.print(); }, 'small'))))
     );
@@ -5819,7 +6246,8 @@ window.CLOUD = {
       ['foodCostObjetivo', 'Food cost objetivo', '%', 'Parte del precio neto que quieres gastar en ingredientes. Define el PVP sugerido.'],
       ['foodCostAlerta', 'Alerta de food cost sobre', '%', 'Los platos sobre este valor aparecen como alerta.'],
       ['redondeo', 'Redondeo del PVP sugerido', 'CLP', 'Se redondea hacia arriba (ej. 100 → $4.900).'],
-      ['trilogiaPrecio', 'Precio del combo Entrada + Ensalada + Postre', 'CLP', 'Adicional sobre la colación.']]],
+      ['recargoSueltoPct', 'Recargo de entradas, ensaladas, postres y bebestibles sueltos', '%', 'Se suma al PVP sugerido de lo que se vende suelto, para que el combo se vea más conveniente. Los precios de los combos están en Platos y PVP → Combos.'],
+      ['toleranciaAlternativasPct', 'Alternativas del día: diferencia de costo aceptada', '±%', 'Al sugerir otra entrada o ensalada para el día, solo propone las que cuestan más o menos lo mismo.']]],
     ['Compras y volumen', [
       ['modoOferta', 'Qué oferta usan los costos', 'modo', 'Preferida (la que marcas), la más barata de cada insumo, o el promedio.'],
       ['precioViejoDias', 'Precio desactualizado después de', 'días', ''],
