@@ -55,6 +55,7 @@ input.wide { width: 100%; } input.ing { width: 100%; min-width: 180px; } input.a
 .tab .count { display: inline-block; margin-left: 6px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--warn); color: #fff; font-size: 11px; text-align: center; }
 .tools { display: flex; align-items: center; gap: 8px; }
 .saved { white-space: nowrap; } .saved.bad { color: var(--bad); }
+.demo-banner { flex-basis: 100%; background: var(--info-soft); color: var(--ink); border: 1px solid var(--info); border-radius: 8px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .esc-banner { flex-basis: 100%; background: var(--sim-soft); color: var(--ink); border: 1px solid var(--sim); border-radius: 8px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .main { max-width: 1500px; margin: 0 auto; padding: 16px; }
 
@@ -1797,7 +1798,8 @@ window.CLOUD = {
       esc ? h('div', { class: 'esc-banner' }, h('b', null, '🧪 Simulación: ' + esc.nombre), ' — los números de toda la app incluyen este escenario; tus datos reales no cambian.',
         App.btn('Aplicar a datos reales', function () { App.confirm('¿Aplicar los cambios de "' + esc.nombre + '" a tus precios y recetas reales?', function () { App.aplicarEscenario(esc.id); }, 'Aplicar'); }, 'small primary'),
         App.btn('Salir', function () { Store.mutate(function (st) { st.escenarioActivo = null; }); }, 'small'),
-        App.btn('Descartar', function () { Store.mutate(function (st) { st.escenarios = st.escenarios.filter(function (x) { return x.id !== esc.id; }); st.escenarioActivo = null; }); }, 'small danger')) : null);
+        App.btn('Descartar', function () { Store.mutate(function (st) { st.escenarios = st.escenarios.filter(function (x) { return x.id !== esc.id; }); st.escenarioActivo = null; }); }, 'small danger')) : null,
+      App.bannerDemo ? App.bannerDemo() : null);
   }
 
   App.render = function () {
@@ -1853,12 +1855,16 @@ window.CLOUD = {
   'use strict';
   const App = window.App, h = App.h, Store = window.Store;
   const N = App.nube = { activo: !!window.CLOUD, fase: 'iniciando', sb: null, user: null, perfil: null, sync: null,
-    guardado: { estado: 'ok', msg: '', hora: null }, error: null, reintento: null };
-  const ROLES = [['', 'Sin acceso'], ['cocina', 'Cocina'], ['gerente', 'Gerente'], ['admin', 'Admin']];
-  const ROL_TXT = { admin: 'Admin', gerente: 'Gerente', cocina: 'Cocina' };
+    guardado: { estado: 'ok', msg: '', hora: null }, error: null, reintento: null,
+    demo: { inicio: null, novedades: false }, demoHoras: 2, baseReal: null };
+  const ROLES = [['', 'Sin acceso'], ['visita', 'Visita (demo)'], ['cocina', 'Cocina'], ['gerente', 'Gerente'], ['admin', 'Admin']];
+  const ROL_TXT = { admin: 'Admin', gerente: 'Gerente', cocina: 'Cocina', visita: 'Visita' };
 
   App.rol = function () { return N.activo ? (N.perfil && N.perfil.rol) || null : 'admin'; };
-  App.esStaff = function () { const r = App.rol(); return r === 'admin' || r === 'gerente'; };
+  App.esVisita = function () { return App.rol() === 'visita'; };
+  // ve y opera toda la app. La visita también, pero en modo demo: sus cambios nunca salen de su navegador
+  // (y la base de datos le niega cualquier escritura).
+  App.esStaff = function () { const r = App.rol(); return r === 'admin' || r === 'gerente' || r === 'visita'; };
   App.puedeVer = function (vista) {
     const r = App.rol();
     if (vista === 'usuarios') return N.activo && r === 'admin';
@@ -1869,6 +1875,53 @@ window.CLOUD = {
 
   function vacio() { return { meta: { version: 1 }, params: {}, insumos: [], ofertas: [], recetas: [], plan: { lun: [], mar: [], mie: [], jue: [], vie: [] }, escenarios: [], escenarioActivo: null }; }
   const claveEsc = function () { return 'colaciones.esc.' + (N.user ? N.user.id : ''); };
+  const claveDemo = function () { return 'colaciones.demo.' + (N.user ? N.user.id : ''); };
+  // el plazo sale de los datos reales del servidor, no del estado demo (la visita podría cambiarlo en su copia)
+  function fijarBaseReal(st) {
+    N.baseReal = JSON.stringify(st);
+    const hh = Number(st.params && st.params.demoHoras);
+    N.demoHoras = hh > 0 ? hh : 2;
+  }
+
+  /* ---------- modo demo (rol visita) ---------- */
+  function guardarDemo(state) {
+    const primero = !N.demo.inicio;
+    if (primero) N.demo.inicio = Date.now();
+    try { localStorage.setItem(claveDemo(), JSON.stringify({ inicio: N.demo.inicio, state: state })); } catch (e) { /* sin almacenamiento: el demo dura hasta recargar */ }
+    if (primero) App.render();
+  }
+  function demoGuardado() {
+    try { const d = JSON.parse(localStorage.getItem(claveDemo()) || 'null'); return d && d.inicio && d.state ? d : null; } catch (e) { return null; }
+  }
+  function demoVencido(inicio) { return Date.now() - inicio >= N.demoHoras * 3600000; }
+  App.deshacerDemo = function (motivo) {
+    try { localStorage.removeItem(claveDemo()); } catch (e) { /* sin almacenamiento */ }
+    N.demo = { inicio: null, novedades: false };
+    if (N.baseReal) { const st = JSON.parse(N.baseReal); st.escenarioActivo = null; Store.establecer(st); }
+    App.toast(motivo || 'Cambios demo deshechos: estás viendo los datos reales');
+    refrescar();
+  };
+  function restanteTxt() {
+    const ms = Math.max(0, N.demo.inicio + N.demoHoras * 3600000 - Date.now());
+    const min = Math.ceil(ms / 60000), hh = Math.floor(min / 60), mm = min % 60;
+    return hh ? hh + ' h ' + mm + ' min' : mm + ' min';
+  }
+  function horasTxt(n) { return n === 1 ? '1 hora' : (String(n).replace('.', ',') + ' horas'); }
+  function revisarDemo() {
+    if (!N.activo || N.fase !== 'listo' || !App.esVisita() || !N.demo.inicio) return;
+    if (demoVencido(N.demo.inicio)) { App.deshacerDemo('Pasaron ' + horasTxt(N.demoHoras) + ': los cambios demo se deshicieron solos'); return; }
+    const el = document.querySelector('.demo-restante');
+    if (el) el.textContent = restanteTxt();
+  }
+  App.bannerDemo = function () {
+    if (!N.activo || N.fase !== 'listo' || !App.esVisita()) return null;
+    return h('div', { class: 'demo-banner' }, h('b', null, '👁 Modo visita (demo)'),
+      N.demo.inicio
+        ? h('span', null, 'Tus cambios son de prueba y no se guardan. Se deshacen solos en ', h('b', { class: 'demo-restante' }, restanteTxt()), '.')
+        : h('span', null, 'Puedes cambiar lo que quieras para probar: nada se guarda en el sistema. Los cambios se deshacen solos ' + horasTxt(N.demoHoras) + ' después del primero, o con el botón.'),
+      N.demo.novedades ? h('span', { class: 'warn-t' }, 'El administrador hizo cambios nuevos: deshaz tus cambios demo para verlos.') : null,
+      N.demo.inicio ? App.btn('Deshacer cambios demo', function () { App.deshacerDemo(); }, 'small primary') : null);
+  };
 
   /* ---------- estado de guardado ---------- */
   function onEstado(estado, msg) {
@@ -1877,6 +1930,7 @@ window.CLOUD = {
     if (el) { el.textContent = App.textoGuardado(); el.className = 'saved' + (estado === 'error' ? ' bad' : ''); }
   }
   App.textoGuardado = function () {
+    if (App.esVisita()) return '👁 Demo: no se guarda';
     const g = N.guardado;
     if (g.estado === 'guardando') return '☁ Guardando…';
     if (g.estado === 'error') return '⚠ Sin guardar: reintentando (' + (g.msg || 'error') + ')';
@@ -1885,6 +1939,7 @@ window.CLOUD = {
   // staff guarda todo; el resto solo sus cotizaciones (la base rechaza cualquier otra cosa)
   function guardar(state) {
     if (!App.rol()) return;
+    if (App.esVisita()) { guardarDemo(state); return; }
     N.sync.guardar(state, App.esStaff() ? undefined : ['ofertas']).catch(function (e) {
       const m = (e && (e.message || e.details)) || '';
       if (/row-level security|permission denied|violates/i.test(m)) {
@@ -1900,6 +1955,7 @@ window.CLOUD = {
       const r = await N.sync.traer(App.esStaff());
       r.state.escenarioActivo = Store.get().escenarioActivo;
       N.sync.aceptar(r.base);
+      fijarBaseReal(r.state);
       N.guardado = { estado: 'ok', msg: '', hora: N.guardado.hora };
       Store.establecer(r.state);
     } catch (e) { /* sin conexión: el próximo refresco lo intenta */ }
@@ -1922,12 +1978,21 @@ window.CLOUD = {
       if (!vigente()) return;
       N.perfil = perfil;
       if (!N.perfil || !N.perfil.rol) { N.fase = 'sinrol'; App.render(); return; }
-      const st = await N.sync.cargar(App.esStaff());
+      let st = await N.sync.cargar(App.esStaff());
       if (!vigente()) return;
       let esc = null; try { esc = localStorage.getItem(claveEsc()) || null; } catch (e) { /* sin almacenamiento */ }
       st.escenarioActivo = st.escenarios.some(function (e) { return e.id === esc; }) ? esc : null;
+      fijarBaseReal(st);
+      N.demo = { inicio: null, novedades: false };
+      let vencido = false;
+      if (App.esVisita()) {
+        const d = demoGuardado();
+        if (d && !demoVencido(d.inicio)) { st = d.state; N.demo.inicio = d.inicio; }
+        else if (d) { vencido = true; try { localStorage.removeItem(claveDemo()); } catch (e) { /* sin almacenamiento */ } }
+      }
       N.fase = 'listo';
       Store.establecer(st);
+      if (vencido) App.toast('Tus cambios demo anteriores ya se deshicieron (pasaron ' + horasTxt(N.demoHoras) + ')');
       if (!App.puedeVer(App.route.name)) App.go(App.vistaInicial()); else App.render();
     } catch (e) {
       if (!vigente()) return;
@@ -1961,6 +2026,9 @@ window.CLOUD = {
       if (!r.cambio || Store.version() !== v || ocupado()) return;
       r.state.escenarioActivo = Store.get().escenarioActivo;
       N.sync.aceptar(r.base);
+      fijarBaseReal(r.state);
+      // la visita con cambios demo no los pierde: solo se le avisa que hay novedades
+      if (App.esVisita() && N.demo.inicio) { N.demo.novedades = true; App.render(); return; }
       Store.establecer(r.state);
       App.toast('Se cargaron cambios hechos por otro usuario');
     } catch (e) { /* sin conexión: se reintenta en el próximo ciclo */ }
@@ -1980,6 +2048,7 @@ window.CLOUD = {
     // no llamar a Supabase dentro del callback (puede bloquear): diferir
     N.sb.auth.onAuthStateChange(function (ev, session) { setTimeout(function () { manejarSesion(ev, session); }, 0); });
     setInterval(refrescar, 45000);
+    setInterval(revisarDemo, 30000);
     window.addEventListener('focus', refrescar);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) refrescar(); });
     window.addEventListener('beforeunload', function (ev) { if (N.sync && (N.sync.pendiente() || Store.guardadoProgramado())) { ev.preventDefault(); ev.returnValue = ''; } });
@@ -2105,8 +2174,14 @@ window.CLOUD = {
             } })),
             h('td', null, p.creado ? new Date(p.creado).toLocaleDateString('es-CL') : ''));
         })));
+    const hDemo = Number(Store.get().params.demoHoras) > 0 ? Number(Store.get().params.demoHoras) : 2;
     return h('div', { class: 'stack' },
       App.card('Usuarios y roles', h('div', { class: 'stack' }, tabla, h('div', { class: 'row gap' }, App.btn('Actualizar lista', function () { U.lista = null; U.error = null; cargar(); }, 'small')))),
+      App.card('Cuentas de visita (modo demo)', h('div', { class: 'stack' },
+        h('p', { class: 'help' }, 'Una visita ve toda la app con los datos reales y puede probar cambios (precios, recetas, PVP…). Sus cambios quedan solo en su navegador y nunca llegan a la base de datos. Se deshacen con su botón “Deshacer cambios demo” o solos después de este plazo, contado desde su primer cambio.'),
+        h('div', { class: 'row gap' }, h('span', null, 'Deshacer cambios demo después de'),
+          App.numInput({ fk: 'demo-horas', cls: 'w60', value: hDemo, onChange: function (n) { if (n > 0 && n <= 720) Store.mutate(function (st) { st.params.demoHoras = n; }, 'demoHoras'); } }),
+          h('span', null, 'horas')))),
       App.card('Cómo agregar a alguien', h('ol', { class: 'help' },
         h('li', null, 'Envíale el enlace de la app.'),
         h('li', null, 'Que toque “Crear cuenta” con su correo.'),
@@ -2115,6 +2190,7 @@ window.CLOUD = {
         h('tr', null, h('td', null, h('b', null, 'Admin')), h('td', null, 'Todo, más esta sección de usuarios.')),
         h('tr', null, h('td', null, h('b', null, 'Gerente')), h('td', null, 'Todo: precios, PVP, recetas, compras, ajustes y escenarios.')),
         h('tr', null, h('td', null, h('b', null, 'Cocina')), h('td', null, 'Solo recetas, pasos y producción del día. No ve costos ni precios (lo bloquea la base de datos).')),
+        h('tr', null, h('td', null, h('b', null, 'Visita')), h('td', null, 'Ve todo como un gerente (menos Usuarios) y puede probar cambios en modo demo. No puede guardar nada: lo bloquea la base de datos.')),
         h('tr', null, h('td', null, h('b', null, 'Sin acceso')), h('td', null, 'Cuenta creada sin datos visibles.'))))));
   };
 })();
@@ -4133,7 +4209,7 @@ window.CLOUD = {
           : 'Tus datos se guardan automáticamente en este navegador. Descarga un respaldo cada cierto tiempo, o para pasarlos a otro computador.'),
         h('div', { class: 'row gap wrap' },
           App.btn('⬇ Descargar respaldo (.json)', function () { App.descargar('colaciones-respaldo-' + App.hoy() + '.json', Store.exportJSON()); }, 'primary'),
-          App.btn(nube ? '⬆ Importar respaldo (reemplaza la nube)…' : '⬆ Importar respaldo…', App.importarRespaldo),
+          nube && App.esVisita() ? null : App.btn(nube ? '⬆ Importar respaldo (reemplaza la nube)…' : '⬆ Importar respaldo…', App.importarRespaldo),
           window.INFORME ? App.btn('Informe de migración desde Sheets', function () { App.go('ajustes', 'informe'); }) : null,
           nube ? null : App.btn('Restablecer a los datos migrados', function () { App.confirm('Se reemplazarán todos tus datos por los datos iniciales migrados desde el Sheet. Puedes deshacerlo con “Deshacer” mientras no cierres la página.', function () { Store.reset(); App.toast('Datos restablecidos'); }, 'Restablecer', true); }, 'danger')),
         h('small', { class: 'mut' }, nube ? App.textoGuardado() : (Store.storageOk() ? 'Autoguardado funcionando.' : '⚠ El navegador no permite guardar automáticamente; descarga respaldos manualmente.')))),
