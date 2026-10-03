@@ -58,6 +58,7 @@ input.wide { width: 100%; } input.ing { width: 100%; min-width: 180px; } input.a
 .demo-banner { flex-basis: 100%; background: var(--info-soft); color: var(--ink); border: 1px solid var(--info); border-radius: 8px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .mini label.chk { font-size: 12px; color: var(--mut); } input.w-fecha { width: 140px; } input.w-hora { width: 110px; }
 .sub-row h4 { margin: 10px 0 2px; }
+.guia-paso { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); } .guia-ico { font-size: 24px; width: 34px; text-align: center; } .guia-paso > div:nth-child(2) { flex: 1; }
 .oport { display: flex; flex-direction: column; gap: 8px; } .oport .sug { background: var(--surface2); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
 .ac-lista { position: fixed; z-index: 310; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 22px rgba(0,0,0,.28); max-height: 260px; overflow: auto; font-size: 13.5px; padding: 3px; }
 .ac-item { padding: 6px 10px; border-radius: 6px; cursor: pointer; } .ac-item.on, .ac-item:hover { background: var(--accent-soft); } .ac-item b { color: var(--accent); }
@@ -220,9 +221,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T19:00:40Z">
+<meta name="build" content="2026-10-03T19:32:42Z">
 <script>
-window.BUILD = "2026-10-03T19:00:40Z";
+window.BUILD = "2026-10-03T19:32:42Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2147,7 +2148,7 @@ window.CLOUD = {
   }
 
   const NAV = [['panel', 'Panel'], ['platos', 'Platos y PVP'], ['recetas', 'Recetas'], ['insumos', 'Insumos y compras'], ['alternativas', 'Alternativas'],
-    ['cocina', 'Cocina'], ['cotizaciones', 'Cotizaciones'], ['compras', 'Lista de compras'], ['proveedores', 'Proveedores'], ['ajustes', 'Ajustes'], ['usuarios', 'Usuarios']];
+    ['cocina', 'Cocina'], ['cotizaciones', 'Cotizaciones'], ['compras', 'Lista de compras'], ['proveedores', 'Proveedores'], ['ajustes', 'Ajustes'], ['guia', '❓ Guía'], ['usuarios', 'Usuarios']];
 
   function headerNode() {
     const s = Store.get(), esc = App.escenario(), staff = App.esStaff();
@@ -2776,7 +2777,7 @@ window.CLOUD = {
     const r = App.rol();
     if (r && !ROL_TXT[r]) return false;   // rol que esta versión no conoce: mejor no mostrar datos incompletos
     if (vista === 'usuarios') return N.activo && r === 'admin';
-    if (r === 'cocina') return vista === 'cocina' || vista === 'cotizaciones';
+    if (r === 'cocina') return vista === 'cocina' || vista === 'cotizaciones' || vista === 'guia';
     return !!r;
   };
   App.vistaInicial = function () { return App.rol() === 'cocina' ? 'cocina' : 'panel'; };
@@ -5765,6 +5766,36 @@ window.CLOUD = {
     const cuerpo = tab === 'directorio' ? directorio() : tab === 'compras' ? compras() : tab === 'oportunidades' ? oportunidades() : tab === 'urgencias' ? urgencias() : tab === 'calidad' ? calidad() : tab === 'evolucion' ? evolucion() : tab === 'iva' ? iva() : canasta();
     return h('div', { class: 'stack' }, avisoNube(),
       h('div', { class: 'chips big' }, TABS.map(function (t) { return App.chip(t[1], tab === t[0], function () { App.go('proveedores', t[0]); }); })), cuerpo);
+  };
+})();
+
+/* src/ui/guia.js */
+/* Guía rápida para cocina: lo mínimo para avisar a compras y anotar precios. Se puede imprimir. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h;
+
+  App.views.guia = function () {
+    const paso = function (icono, titulo, texto, ir) {
+      return h('div', { class: 'guia-paso' }, h('div', { class: 'guia-ico' }, icono),
+        h('div', null, h('b', null, titulo), h('div', { class: 'mut' }, texto)),
+        ir ? App.btn('Ir', ir, 'small noprint') : null);
+    };
+    const avisos = function () { App.go('cocina', 'avisos'); };
+    return h('div', { class: 'stack guia' },
+      App.card('Guía rápida', h('div', { class: 'stack' },
+        h('h4', null, 'Avisar a compras'),
+        paso('🚨', 'Se acabó', 'Ya no queda y se necesita hoy.', avisos),
+        paso('📉', 'Queda poco', 'Hay que comprar pronto.', avisos),
+        paso('🍳', 'No alcanzó', 'La receta rindió menos de lo planificado. Anota para cuántas porciones preparaste y cuántas salieron.', avisos),
+        paso('⭐', 'Opinión', 'Un insumo sirve (o no) para algo. Anota marca y dónde se compró.', avisos),
+        h('h4', null, 'Anotar un precio que viste'),
+        paso('🏷️', 'Cotizaciones', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha.', function () { App.go('cotizaciones'); }),
+        h('h4', null, 'Ver recetas'),
+        paso('📖', 'Cocina', 'Ingredientes y pasos. Elige las porciones y las cantidades se ajustan.', function () { App.go('cocina'); }),
+        h('p', { class: 'help noprint' }, 'Lo que envías llega al gerente, que decide. Tú no cambias costos ni precios.'),
+        h('div', { class: 'noprint' }, App.btn('🖨 Imprimir esta guía', function () { window.print(); }, 'small'))))
+    );
   };
 })();
 
