@@ -56,6 +56,10 @@ input.wide { width: 100%; } input.ing { width: 100%; min-width: 180px; } input.a
 .tools { display: flex; align-items: center; gap: 8px; }
 .saved { white-space: nowrap; } .saved.bad { color: var(--bad); }
 .demo-banner { flex-basis: 100%; background: var(--info-soft); color: var(--ink); border: 1px solid var(--info); border-radius: 8px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ayuda-tip { position: fixed; z-index: 300; max-width: 280px; background: var(--ink); color: var(--bg); font-size: 12.5px; line-height: 1.4; padding: 7px 10px; border-radius: 8px; box-shadow: 0 4px 18px rgba(0,0,0,.3); pointer-events: none; }
+th[data-ayuda]:not(.sortable) { cursor: help; }
+.pie { text-align: center; padding: 14px 16px 22px; font-size: 12.5px; color: var(--mut); }
+.pie label.chk { justify-content: center; color: var(--mut); }
 .esc-banner { flex-basis: 100%; background: var(--sim-soft); color: var(--ink); border: 1px solid var(--sim); border-radius: 8px; padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .main { max-width: 1500px; margin: 0 auto; padding: 16px; }
 
@@ -197,7 +201,7 @@ select.w-prov { width: 160px; }
   .ficha { padding: 14px; } .param { flex-direction: column; align-items: flex-start; }
 }
 @media print {
-  body { background: #fff; color: #000; } .top, .noprint, .pane-list, .btn, .toast, .esc-banner { display: none !important; }
+  body { background: #fff; color: #000; } .ayuda-tip, .pie, .top, .noprint, .pane-list, .btn, .toast, .esc-banner { display: none !important; }
   .main { padding: 0; max-width: none; } .split, .split.cocina { display: block; } .card, .ficha { box-shadow: none; border: 0; break-inside: avoid; }
   .ficha { page-break-after: always; padding: 0; } .tbl td, .tbl th { color: #000; }
 }
@@ -208,7 +212,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<meta name="build" content="2026-10-03T02:25:37Z">
 <script>
+window.BUILD = "2026-10-03T02:25:37Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -1799,7 +1805,7 @@ window.CLOUD = {
         App.btn('Aplicar a datos reales', function () { App.confirm('¿Aplicar los cambios de "' + esc.nombre + '" a tus precios y recetas reales?', function () { App.aplicarEscenario(esc.id); }, 'Aplicar'); }, 'small primary'),
         App.btn('Salir', function () { Store.mutate(function (st) { st.escenarioActivo = null; }); }, 'small'),
         App.btn('Descartar', function () { Store.mutate(function (st) { st.escenarios = st.escenarios.filter(function (x) { return x.id !== esc.id; }); st.escenarioActivo = null; }); }, 'small danger')) : null,
-      App.bannerDemo ? App.bannerDemo() : null);
+      App.bannerDemo ? App.bannerDemo() : null, App.bannerVersion ? App.bannerVersion() : null);
   }
 
   App.render = function () {
@@ -1813,7 +1819,8 @@ window.CLOUD = {
     let body;
     try { body = view(App.route.arg); }
     catch (err) { console.error(err); body = h('div', { class: 'card' }, h('h3', null, 'Error al mostrar la vista'), h('pre', null, String(err && err.stack || err))); }
-    root.replaceChildren(headerNode(), h('main', { class: 'main view-' + App.route.name }, body));
+    root.replaceChildren(headerNode(), h('main', { class: 'main view-' + App.route.name }, body), App.pieAyudas ? App.pieAyudas() : null);
+    if (App.aplicarAyudas) App.aplicarAyudas(root);   // antes de restaurar el foco: la ayuda del campo en edición reaparece sola
     document.querySelectorAll('[data-sk]').forEach(function (el) { if (scrolls[el.dataset.sk] != null) el.scrollTop = scrolls[el.dataset.sk]; });
     window.scrollTo(0, y);
     restoreFocus(f);
@@ -1849,6 +1856,311 @@ window.CLOUD = {
   };
 })();
 
+/* src/ui/ayuda.js */
+/* Ayudas contextuales: una burbuja breve al pasar el mouse (o tocar / enfocar) un campo, encabezado o indicador.
+ * Los textos viven aquí, por nombre de campo (data-fk), por texto de columna o de etiqueta, para no ensuciar las vistas.
+ * Los elementos con atributo `title` también se muestran en la burbuja. Se pueden apagar desde el pie de página. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h;
+  const CLAVE = 'colaciones.ayudas';
+
+  // [prefijo de data-fk, texto]. Gana el primero que coincida: los prefijos más largos van antes.
+  const CAMPOS = [
+    // insumos y ofertas
+    ['ins-nombre', 'Nombre del insumo tal como lo buscarás en las recetas. Ej.: Pechuga de pollo deshuesada.'],
+    ['ins-categoria', 'Agrupa los insumos en listas y reportes. Elige una existente o escribe una nueva.'],
+    ['ins-unidad', 'Unidad en que se usa en las recetas: g (gramos), ml (mililitros) o un (unidades). Todas las cantidades de receta van en esta unidad.'],
+    ['ins-rend', 'Parte utilizable tras pelar o limpiar, en %. 100 = sin merma; 90 = pierdes un 10%. No incluyas la merma de cocción.'],
+    ['ins-fam', 'Agrupa insumos equivalentes (ej. ave, pescado-blanco) para sugerir sustitutos. Vacío = sin sustitutos.'],
+    ['ins-dieta', 'Tipo de dieta del insumo. Evita que un plato vegano o vegetariano sugiera carnes.'],
+    ['ins-q', 'Busca por parte del nombre o de la categoría.'],
+    ['ins-cat', 'Muestra solo los insumos de una categoría.'],
+    ['o-prov-', 'Proveedor donde se compra esta oferta. Define si da factura y cómo llega la compra. Los proveedores se administran en la pestaña Proveedores.'],
+    ['o-marca-', 'Marca o detalle del producto (opcional). Ej.: Super Pollo, granel.'],
+    ['o-fl-', 'Nombre del formato en que se vende; es solo una etiqueta. Ej.: kg, saco 25 kg, bandeja 30.'],
+    ['o-fq-', 'Cuánto trae el formato, en la unidad del insumo (g, ml o un). Ej.: 1 kg = 1000; bandeja de 30 huevos = 30.'],
+    ['o-pr-', 'Precio del formato completo en pesos, tal como lo pagas (con IVA si lo trae). Con un escenario activo, esto edita el escenario y no tus datos reales.'],
+    ['o-rd-', 'Opcional: rendimiento propio de este producto, en %. Vacío = usa el rendimiento del insumo.'],
+    ['o-fu-', 'De dónde viene el precio: estimado, comprado, cotización u ODEPA. Al editar un precio estimado pasa a "comprado".'],
+    ['imp-pct', 'Variación de precio a simular, en %. Abajo ves qué platos suben o bajan de costo.'],
+    // cotizaciones
+    ['cot-ins', 'Escribe y elige el insumo de la lista.'],
+    ['cot-lugar', 'Dónde viste el precio. Elige un lugar de la lista o escribe uno nuevo.'],
+    ['cot-marca', 'Marca o detalle (opcional). Ej.: Super Pollo, granel.'],
+    ['cot-precio', 'Precio del formato completo, en pesos, tal como lo viste.'],
+    ['cot-fl', 'Nombre del formato (solo etiqueta). Ej.: saco 25 kg.'],
+    ['cot-fq', 'Cuánto trae el formato, en la unidad del insumo (g, ml o un). Ej.: saco de 25 kg = 25000.'],
+    ['cot-nota', 'Dato útil para quien revise: oferta temporal, calidad, solo los sábados…'],
+    // recetas
+    ['rec-q', 'Busca una receta por nombre.'],
+    ['r-nombre', 'Nombre de la receta como aparece en la carta y en cocina.'],
+    ['r-tipo', 'Qué es: un plato de la carta, una base que se usa dentro de otras (sofrito, salsa) o un acompañamiento, entrada, ensalada o postre.'],
+    ['r-linea2', 'Línea o categoría de la receta (opcional).'],
+    ['r-linea', 'Línea de menú. En Vegano y Vegetariano la app avisa si un ingrediente no corresponde.'],
+    ['r-porc', 'Cuántas porciones rinde la receta con las cantidades escritas abajo. El costo por porción se calcula dividiendo entre este número.'],
+    ['r-esc', 'Multiplica todas las cantidades por este número. Ej.: 2 para duplicar la receta.'],
+    ['r-pvp', 'Precio de venta al público, en pesos. El margen y el food cost se recalculan al instante.'],
+    ['r-envq', 'Cuántos envases usa cada porción.'],
+    ['r-env', 'Envase en que se entrega el plato. Su costo se suma al plato.'],
+    ['r-gdef', 'Acompañamiento que se incluye por defecto con el plato. Entra al costo y a la lista de compras.'],
+    ['r-cm', 'Costo de ingredientes por porción, en pesos, solo si no hay receta. Conviene armar la receta para que reaccione a los precios.'],
+    ['r-em', 'Costo del envase por porción, en pesos, cuando no hay un insumo de envase asignado.'],
+    ['l-t-', 'Insumo (algo que se compra) o sub-receta (una base preparada, como el sofrito).'],
+    ['l-n-', 'Escribe para buscar y elige de la lista.'],
+    ['l-q-', 'Cantidad de esta línea para TODA la receta (no por porción), en peso crudo o seco utilizable, en la unidad del insumo (g, ml o un). Ej.: lentejas secas, arroz crudo, carne cruda.'],
+    ['l-nt-', 'Nota de corte o de uso. Ej.: en cubos, para el sofrito. Sale en la ficha de cocina.'],
+    ['l-alt-', 'Otro insumo que puede reemplazar a este (ej. pechuga ↔ trutro). Permite ver el rango de costo del plato.'],
+    ['nr-tipo', 'Tipo de receta que vas a crear.'],
+    ['r-desc', 'Descripción breve del plato, para la carta y la ficha de cocina.'],
+    ['r-pasos', 'Procedimiento paso a paso. Lo ve cocina en la ficha de la receta.'],
+    ['r-mont', 'Cómo armar y empacar el plato (orden, porciones, envase). Lo ve cocina.'],
+    ['alt-plato', 'Plato cuyas alternativas de ingredientes quieres revisar.'],
+    // platos, plan y cocina
+    ['pvp-', 'Precio de venta del plato, en pesos. El margen y el food cost se recalculan al instante.'],
+    ['tri-p', 'Precio adicional del combo Entrada + Ensalada + Postre, en pesos.'],
+    ['pl-q', 'Busca un plato por nombre.'],
+    ['pl-linea', 'Muestra solo los platos de una línea de menú.'],
+    ['plan-add-', 'Agrega un plato a este día del plan semanal.'],
+    ['plan-', 'Porciones que esperas vender de este plato ese día. Alimenta la lista de compras y los ahorros estimados.'],
+    ['co-q', 'Busca una receta por nombre.'],
+    ['co-porc', 'Cuántas porciones vas a preparar. Las cantidades de la ficha se escalan a este número.'],
+    // proveedores
+    ['pv-n-', 'Nombre con que reconoces al proveedor. Si lo renombras se actualizan sus ofertas y el nombre anterior queda como alias.'],
+    ['pv-t-', 'Tipo de proveedor (solo informativo).'],
+    ['pv-f-', '¿Entrega factura? "A pedido" = no siempre, pero se puede pedir. Con factura, el IVA se puede recuperar como crédito fiscal.'],
+    ['pv-dc-', 'Lo que te cobra por despachar una compra, en pesos. 0 si el despacho siempre es gratis.'],
+    ['pv-dg-', 'Monto de compra (con IVA, tal como lo pagas) desde el cual el despacho es gratis. Vacío = nunca es gratis.'],
+    ['pv-dm-', 'Monto mínimo de compra (con IVA) para que acepten despachar. Vacío = no exigen mínimo.'],
+    ['pv-cv-', 'Lo que te cuesta ir a buscar la compra: bencina, estacionamiento, tu tiempo. Con 0, la app siempre preferirá ir a buscar.'],
+    ['pv-rut-', 'RUT con dígito verificador. Ej.: 76.123.456-7. Se valida y se formatea solo.'],
+    ['pv-razonSocial-', 'Nombre legal de la empresa, tal como sale en sus facturas.'],
+    ['pv-giro-', 'Actividad económica que declara el proveedor. Ej.: Venta al por mayor de alimentos.'],
+    ['pv-direccion-', 'Dirección comercial del proveedor, como aparece en la factura.'],
+    ['pv-comuna-', 'Comuna de la dirección del proveedor.'],
+    ['pv-emailFacturacion-', 'Correo donde pedir o recibir facturas. Solo lo ven admin y gerente.'],
+    ['pv-contacto-', 'Teléfono o persona de contacto. Solo lo ven admin y gerente.'],
+    ['pv-nota-', 'Cualquier dato útil: horarios, cómo pedir la factura, vendedor. Solo lo ven admin y gerente.'],
+    ['fus-', 'Proveedor con el que se unirá este. Sus ofertas y compras pasan a él.'],
+    ['evo-ins', 'Insumo cuyo precio quieres ver a lo largo del tiempo.'],
+    // registrar compra y libro
+    ['cp-prov', 'Proveedor donde compraste. Define el tipo de documento sugerido.'],
+    ['cp-fecha', 'Fecha de la compra o del documento.'],
+    ['cp-tipo', 'Factura electrónica (33): da crédito de IVA. Factura exenta (34): sin IVA. Boleta (39) o sin documento: el IVA no se recupera.'],
+    ['cp-doc', 'Folio (número) del documento. Imprescindible en facturas: se usa en el libro de compras y para cruzar con el SII.'],
+    ['cp-desp', 'Lo que pagaste por despacho en esta compra, con IVA. Vacío si no hubo.'],
+    ['cp-neto', 'Monto neto del documento (sin IVA). Se calcula solo; corrígelo para que coincida exactamente con la factura.'],
+    ['cp-exento', 'Parte del documento que no paga IVA (productos exentos). Normalmente 0.'],
+    ['cp-iva', 'IVA del documento. Se calcula solo; corrígelo si la factura dice otro monto.'],
+    ['cl-i-', 'Insumo comprado. Escribe y elige de la lista.'],
+    ['cl-o-', 'Formato comprado. Si eliges uno registrado se usa su cantidad; "Otro formato…" te deja definirlo.'],
+    ['cl-fl-', 'Nombre del formato (solo etiqueta). Ej.: saco 25 kg.'],
+    ['cl-fq-', 'Cuánto trae el formato, en la unidad del insumo (g, ml o un).'],
+    ['cl-c-', 'Cuántos formatos compraste. Ej.: 4 sacos.'],
+    ['cl-t-', 'Total pagado por esta línea, en pesos (con IVA si el documento lo incluye). No es el precio unitario.'],
+    ['lb-mes', 'Mes del libro de compras que se descarga.'],
+    // usuarios y generales
+    ['rol-', 'Qué ve y qué puede hacer esta persona. Visita = ve todo pero solo prueba cambios en modo demo.'],
+    ['demo-horas', 'Horas desde su primer cambio después de las cuales los cambios demo de una visita se deshacen solos.'],
+    ['esc-sel', 'Escenario de simulación: los números de toda la app lo incluyen sin tocar tus datos reales.']
+  ];
+
+  // texto de encabezado de columna, etiqueta o indicador (sin mayúsculas ni acentos) → ayuda
+  const TEXTOS = {
+    'rend. %': 'Rendimiento propio de este producto. Vacío = usa el del insumo.',
+    'cant. formato': 'Cuánto trae el formato, en la unidad del insumo. Ej.: 1 kg = 1000 g.',
+    'precio formato': 'Precio del formato completo, tal como lo pagas.',
+    'costo neto': 'Costo por unidad utilizable: precio del formato ÷ (cantidad × rendimiento). Sin IVA si es recuperable y hay factura.',
+    'fuente / fecha': 'De dónde viene el precio y desde cuándo. Se marca en naranja si está desactualizado.',
+    'usar': 'La oferta marcada es la que usan los costos de todos los platos.',
+    'disp.': 'Desmárcalo si ese producto no está disponible: se ignora en costos y comparaciones.',
+    'ingred.': 'Ingredientes + guarnición + imprevistos.',
+    'gas/mo': 'Gas, mano de obra y comisión por porción.',
+    'costo total': 'Ingredientes + envase + gas/mano de obra + comisión, por porción.',
+    'margen $': 'PVP neto menos costo total, en pesos por porción.',
+    'margen %': 'Margen sobre el PVP neto (sin IVA).',
+    'food cost': 'Parte del precio neto que se va en ingredientes. Se compara con el objetivo de Ajustes.',
+    'sugerido': 'PVP que cumple el food cost objetivo. Haz clic para aplicarlo.',
+    'costo/porc.': 'Cuánto aporta esta línea al costo de una porción.',
+    '%': 'Parte del costo total de la receta que representa esta línea.',
+    'necesito': 'Cantidad utilizable que piden las recetas del plan.',
+    'comprar': 'Formatos enteros a comprar para cubrir lo que necesitas (se redondea hacia arriba).',
+    'subtotal': 'Precio del formato × formatos a comprar.',
+    'despacho': 'Condiciones de despacho: costo, desde qué monto es gratis y mínimo de compra.',
+    'retiro': 'Si puedes ir a buscar la compra y cuánto te cuesta ir.',
+    'ofertas': 'Cantidad de ofertas (precios) de este proveedor.',
+    'activo': 'Los proveedores inactivos no se consideran en la canasta óptima.',
+    'factura': 'Si el proveedor entrega factura. Con factura, el IVA es crédito fiscal.',
+    'cobertura': 'Parte del valor de tu canasta semanal que este proveedor puede venderte al mejor precio.',
+    'insumos': 'Cuántos insumos de tu canasta vende este proveedor.',
+    'mas barato en': 'En cuántos de esos insumos es el más barato.',
+    'indice de precio': 'Cuánto más caro es, en lo que cubre, que el más barato de cada insumo. 0% = siempre el más barato.',
+    'gasto 30 dias': 'Lo que compraste en este proveedor en los últimos 30 días (compras registradas).',
+    'gasto/mes': 'Gasto mensual estimado en este insumo con el volumen semanal.',
+    'iva/mes': 'IVA que pagas al mes en este insumo y que no recuperas por comprarlo sin factura.',
+    'mejor con factura': 'La oferta más barata de un proveedor que sí da factura.',
+    'diferencia hoy': 'Diferencia mensual de cambiarte a esa oferta, pagando hoy el precio con IVA.',
+    'si estuvieras afecto': 'Diferencia mensual de cambiarte a esa oferta, descontando el IVA que recuperarías como crédito fiscal. Negativo = ahorro.',
+    'variacion': 'Cambio del precio de compra entre las dos fechas indicadas.',
+    'precio unitario': 'Total pagado ÷ cantidad comprada, por kg, litro o unidad.',
+    'total pagado': 'Lo que pagaste por esta línea, con IVA si el documento lo incluye.',
+    'documento': 'Tipo y folio del documento de la compra.',
+    'iva': 'IVA contenido en el total. Es crédito fiscal solo en facturas afectas (33).',
+    'impacto/mes': 'Cuánto cambia tu gasto mensual en este insumo si usas esta cotización.',
+    'vs. en uso': 'Diferencia de costo neto respecto de la oferta que se usa hoy.',
+    'uso semanal': 'Cantidad que se gasta por semana según el plan semanal o el volumen supuesto.',
+    'ahorro / mes': 'Ahorro mensual estimado al comprar en la oferta más barata.',
+    'δ por porcion': 'Cuánto cambia el costo de una porción con esa opción.',
+    'margen resultante': 'Margen del plato si aplicas esa opción.',
+    'opcion': 'Otra oferta del mismo insumo o un sustituto de su misma familia.',
+    'cantidad': 'Cantidad para toda la receta, en peso crudo o seco utilizable.',
+    'corte / uso': 'Cómo se corta o usa el ingrediente.',
+    'nota de corte / uso': 'Cómo se corta o usa el ingrediente. Sale en la ficha de cocina.',
+    'despacho / retiro': 'Cómo recibes la compra: con despacho (y su costo) o yendo a buscarla.',
+    'hoy en': 'Proveedor donde compras hoy este insumo.',
+    'comprado en': 'Proveedor de la oferta que usan los costos.',
+    'usado en': 'En cuántos platos se usa este insumo.',
+    'margen': 'Margen del plato antes y después del cambio simulado.',
+    'costo prom.': 'Costo total promedio por porción de los platos de esta línea.',
+    'pvp prom.': 'Precio de venta promedio de los platos de esta línea.',
+    'envase': 'Costo del envase por porción.',
+    'pvp': 'Precio de venta al público. Es editable: el margen se recalcula al instante.',
+    'δ costo': 'Cuánto cambia el costo por porción de cada plato.',
+    'costo': 'Costo por porción antes y después del cambio simulado.',
+    'alternativas (pollo ↔ carne…)': 'Otros insumos que pueden reemplazar a este ingrediente; permiten ver el rango de costo.',
+    // indicadores
+    'margen real promedio': 'Promedio de margen de los platos activos, incluyendo imprevistos, gas, envase y comisión.',
+    'food cost promedio': 'Promedio de la parte del precio neto que se va en ingredientes.',
+    'punto de equilibrio': 'Porciones diarias que debes vender para cubrir tus costos fijos mensuales.',
+    'ahorro posible por mes': 'Ahorro mensual si compraras cada insumo en su oferta más barata.',
+    'credito fiscal este mes': 'IVA de las facturas afectas registradas este mes. Es potencial mientras no estés afecto a IVA.',
+    'credito proyectado / mes': 'Crédito fiscal estimado al mes con tu volumen y las ofertas en uso.',
+    'iva sin recuperar / mes': 'IVA que pagas al mes en compras sin factura (feria, mercado…) y no recuperas.',
+    'hoy (ofertas en uso)': 'Costo semanal de tu canasta comprando como hoy, con despacho o visitas incluidos.',
+    'mejor combinacion': 'Costo semanal de la combinación de proveedores más barata, con despacho o visitas incluidos.',
+    'lo mas barato item por item': 'Costo si compras cada insumo donde es más barato, aunque implique muchos proveedores.',
+    // etiquetas con casilla
+    'despacha': 'Marca si el proveedor te lleva la compra a tu local.',
+    'se puede ir': 'Marca si puedes ir a buscar la compra tú mismo.',
+    'solo facturas': 'Muestra solo las compras con factura (las que entran al libro de compras).',
+    'incluir envases': 'Incluye o no los envases en la lista de compras.',
+    'solo activos': 'Oculta los platos o proveedores inactivos.',
+    'comprado con factura': 'Marca si esta compra tiene factura.'
+  };
+
+  const norm = function (s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[▲▼↑↓]/g, '').replace(/\s+/g, ' ').replace(/[:*]+$/, '').trim();
+  };
+  // texto propio de una etiqueta, sin el de los controles que contiene
+  const textoPropio = function (el) {
+    let t = '';
+    el.childNodes.forEach(function (n) { if (n.nodeType === 3) t += n.textContent; });
+    return norm(t);
+  };
+
+  App.ayudasOn = function () {
+    try { return localStorage.getItem(CLAVE) !== '0'; } catch (e) { return true; }
+  };
+  function fijarAyudas(on) {
+    try { localStorage.setItem(CLAVE, on ? '1' : '0'); } catch (e) { /* sin almacenamiento: vale hasta recargar */ }
+    App.render();
+  }
+
+  /* ---------- asignar textos tras cada render ---------- */
+  App.aplicarAyudas = function (root) {
+    ocultar();
+    const on = App.ayudasOn();
+    // 1. los `title` existentes pasan a la burbuja (el del navegador es lento y no funciona en celular)
+    root.querySelectorAll('[title]').forEach(function (el) {
+      const t = el.getAttribute('title');
+      if (!t) return;
+      if (on) { if (!el.dataset.ayuda) el.dataset.ayuda = t; el.removeAttribute('title'); }
+      else if (!/^(BUTTON|A)$/.test(el.tagName)) el.removeAttribute('title');
+    });
+    if (!on) return;
+    // 2. campos por nombre
+    root.querySelectorAll('[data-fk]').forEach(function (el) {
+      if (el.dataset.ayuda) return;
+      const fk = el.dataset.fk;
+      for (let i = 0; i < CAMPOS.length; i++) { if (fk.indexOf(CAMPOS[i][0]) === 0) { el.dataset.ayuda = CAMPOS[i][1]; return; } }
+    });
+    // 3. encabezados, indicadores y etiquetas por su texto
+    root.querySelectorAll('th, label').forEach(function (el) {
+      if (el.dataset.ayuda) return;
+      const t = TEXTOS[el.tagName === 'TH' ? norm(el.textContent) : textoPropio(el)];
+      if (t) el.dataset.ayuda = t;
+    });
+    root.querySelectorAll('.kpi').forEach(function (el) {
+      if (el.dataset.ayuda) return;
+      const l = el.querySelector('.kpi-l');
+      const t = l && TEXTOS[norm(l.textContent)];
+      if (t) el.dataset.ayuda = t;
+    });
+  };
+
+  /* ---------- burbuja ---------- */
+  let tip = null, ancla = null, espera = null, cierre = null, tecleo = 0;
+  function ocultar() {
+    clearTimeout(espera); clearTimeout(cierre); espera = cierre = null;
+    if (tip) { tip.remove(); tip = null; }
+    ancla = null;
+  }
+  function mostrar(el) {
+    if (!App.ayudasOn() || !el || !el.isConnected) return;
+    const txt = el.dataset.ayuda;
+    if (!txt) return;
+    if (ancla === el && tip) return;
+    ocultar();
+    ancla = el;
+    tip = h('div', { class: 'ayuda-tip', role: 'tooltip' }, txt);
+    document.body.appendChild(tip);
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, hh = tip.offsetHeight, m = 8;
+    let x = Math.min(Math.max(m, r.left), window.innerWidth - w - m);
+    let y = r.bottom + 6;
+    if (y + hh > window.innerHeight - m) y = Math.max(m, r.top - hh - 6);
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  }
+  const objetivo = function (ev) { return ev.target && ev.target.closest ? ev.target.closest('[data-ayuda]') : null; };
+
+  document.addEventListener('mouseover', function (ev) {
+    const el = objetivo(ev);
+    if (!el || el === ancla || Date.now() - tecleo < 800) return;
+    clearTimeout(espera);
+    espera = setTimeout(function () { mostrar(el); }, 300);
+  });
+  document.addEventListener('mouseout', function (ev) {
+    const el = objetivo(ev);
+    if (!el || (ev.relatedTarget && el.contains(ev.relatedTarget))) return;
+    if (document.activeElement === el) return;   // campo con el cursor dentro: la ayuda sigue mientras escribe
+    ocultar();
+  });
+  document.addEventListener('focusin', function (ev) {
+    const el = objetivo(ev);
+    if (!el || Date.now() - tecleo < 800) return;
+    mostrar(el);
+    clearTimeout(cierre);
+    cierre = setTimeout(ocultar, 7000);
+  });
+  document.addEventListener('focusout', ocultar);
+  document.addEventListener('keydown', function () { tecleo = Date.now(); if (tip) ocultar(); }, true);
+  document.addEventListener('touchstart', function (ev) {
+    const el = objetivo(ev);
+    if (!el) { ocultar(); return; }
+    mostrar(el);
+    clearTimeout(cierre);
+    cierre = setTimeout(ocultar, 4000);
+  }, { passive: true });
+  window.addEventListener('scroll', ocultar, true);
+  window.addEventListener('resize', ocultar);
+
+  /* ---------- interruptor general (pie de página) ---------- */
+  App.pieAyudas = function () {
+    return h('footer', { class: 'pie noprint' },
+      h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: App.ayudasOn(), onchange: function (ev) { fijarAyudas(ev.target.checked); } }),
+        ' Mostrar ayudas al pasar el mouse sobre los campos'));
+  };
+})();
+
 /* src/ui/acceso.js */
 /* Modo nube: sesión (Supabase Auth), roles, carga/sincronización y gestión de usuarios. */
 (function () {
@@ -1867,6 +2179,7 @@ window.CLOUD = {
   App.esStaff = function () { const r = App.rol(); return r === 'admin' || r === 'gerente' || r === 'visita'; };
   App.puedeVer = function (vista) {
     const r = App.rol();
+    if (r && !ROL_TXT[r]) return false;   // rol que esta versión no conoce: mejor no mostrar datos incompletos
     if (vista === 'usuarios') return N.activo && r === 'admin';
     if (r === 'cocina') return vista === 'cocina' || vista === 'cotizaciones';
     return !!r;
@@ -1882,6 +2195,25 @@ window.CLOUD = {
     const hh = Number(st.params && st.params.demoHoras);
     N.demoHoras = hh > 0 ? hh : 2;
   }
+
+  /* ---------- versión publicada ---------- */
+  // GitHub Pages deja que el navegador reutilice la página unos minutos: si se publicó otra versión, avisar
+  let ultimaRevision = 0;
+  async function revisarVersion() {
+    if (!window.BUILD || N.versionNueva || Date.now() - ultimaRevision < 60000) return;
+    ultimaRevision = Date.now();
+    try {
+      const html = await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : ''; });
+      const m = /<meta name="build" content="([^"]+)"/.exec(html);
+      if (m && m[1] !== window.BUILD) { N.versionNueva = true; App.render(); }
+    } catch (e) { /* sin conexión: se revisa después */ }
+  }
+  App.bannerVersion = function () {
+    if (!N.activo || !N.versionNueva) return null;
+    return h('div', { class: 'demo-banner' }, h('b', null, '🔄 Hay una versión nueva de la app.'),
+      h('span', null, App.esVisita() ? 'Recarga para verla (tus cambios demo se conservan).' : 'Recarga para usarla.'),
+      App.btn('Recargar', function () { if (N.sync && N.sync.pendiente && N.sync.pendiente()) { App.toast('Espera a que termine de guardar…'); return; } location.reload(); }, 'small primary'));
+  };
 
   /* ---------- modo demo (rol visita) ---------- */
   function guardarDemo(state) {
@@ -1978,6 +2310,10 @@ window.CLOUD = {
       if (!vigente()) return;
       N.perfil = perfil;
       if (!N.perfil || !N.perfil.rol) { N.fase = 'sinrol'; App.render(); return; }
+      if (!ROL_TXT[N.perfil.rol]) {
+        N.fase = 'error'; N.error = 'Tu rol (' + N.perfil.rol + ') es nuevo y esta copia de la app es anterior. Recarga la página sin caché: Ctrl + Shift + R (en el celular, cierra y vuelve a abrir la pestaña).';
+        App.render(); return;
+      }
       let st = await N.sync.cargar(App.esStaff());
       if (!vigente()) return;
       let esc = null; try { esc = localStorage.getItem(claveEsc()) || null; } catch (e) { /* sin almacenamiento */ }
@@ -2049,6 +2385,8 @@ window.CLOUD = {
     N.sb.auth.onAuthStateChange(function (ev, session) { setTimeout(function () { manejarSesion(ev, session); }, 0); });
     setInterval(refrescar, 45000);
     setInterval(revisarDemo, 30000);
+    setInterval(revisarVersion, 5 * 60000);
+    window.addEventListener('focus', revisarVersion);
     window.addEventListener('focus', refrescar);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) refrescar(); });
     window.addEventListener('beforeunload', function (ev) { if (N.sync && (N.sync.pendiente() || Store.guardadoProgramado())) { ev.preventDefault(); ev.returnValue = ''; } });
@@ -4161,6 +4499,11 @@ window.CLOUD = {
   ];
 
   function paramControl(def, p) {
+    const el = paramControlBase(def, p);
+    if (def[3]) el.setAttribute('title', def[3]);   // la explicación del parámetro sale también al pasar el mouse
+    return el;
+  }
+  function paramControlBase(def, p) {
     const key = def[0];
     const set = function (v) { Store.mutate(function (st) { st.params[key] = v; }, 'par' + key); };
     if (def[2] === 'bool') return h('input', { type: 'checkbox', checked: !!p[key], onchange: function (ev) { set(ev.target.checked); } });
