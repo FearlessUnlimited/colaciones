@@ -224,9 +224,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T20:21:16Z">
+<meta name="build" content="2026-10-03T20:33:33Z">
 <script>
-window.BUILD = "2026-10-03T20:21:16Z";
+window.BUILD = "2026-10-03T20:33:33Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -265,6 +265,7 @@ window.CLOUD = {
     stockMaxSemanas: 8,       // compras de oportunidad: máximo de semanas de consumo que conviene guardar
     costosFijosMes: 0,        // CLP costos fijos mensuales (para punto de equilibrio)
     diasOperacionMes: 22,
+    gasOpcionales: false,     // true = entradas, ensaladas y postres también suman gas por porción (cremas, consomés)
     recargoSueltoPct: 20,     // % "invisible" sobre el PVP sugerido de entradas, ensaladas, postres y bebestibles vendidos sueltos
     toleranciaAlternativasPct: 10, // ± % de costo para sugerir una entrada/ensalada/postre alternativa del día
     ivaRecuperable: 'potencial', // no | potencial | si — 'si': lo comprado con factura se costea sin IVA (crédito fiscal)
@@ -677,7 +678,8 @@ window.CLOUD = {
     const base = rc.porPorcion + guarn;
     const imprev = envasado ? 0 : base * p.imprevistosPct / 100;
     const insumosTot = base + imprev;
-    const overhead = envasado ? 0 : (p.gasPorPorcion || 0) + (p.manoObraPorPorcion || 0);
+    const sinGas = r && /^(entrada|ensalada|postre)$/.test(r.tipo) && !p.gasOpcionales;
+    const overhead = envasado ? 0 : (sinGas ? 0 : p.gasPorPorcion || 0) + (p.manoObraPorPorcion || 0);
     const pvp = r ? precioPlato(ctx, r) : 0;
     const pvpNeto = p.ivaOn ? pvp / (1 + p.ivaPct / 100) : pvp;
     const comision = pvp * p.comisionPct / 100;
@@ -6246,6 +6248,7 @@ window.CLOUD = {
       ['foodCostObjetivo', 'Food cost objetivo', '%', 'Parte del precio neto que quieres gastar en ingredientes. Define el PVP sugerido.'],
       ['foodCostAlerta', 'Alerta de food cost sobre', '%', 'Los platos sobre este valor aparecen como alerta.'],
       ['redondeo', 'Redondeo del PVP sugerido', 'CLP', 'Se redondea hacia arriba (ej. 100 → $4.900).'],
+      ['gasOpcionales', 'Sumar gas a entradas, ensaladas y postres', 'bool', 'Apagado: los opcionales no suman el gas por porción (la mayoría son fríos). Actívalo si suelen llevar cocción, como cremas o consomés.'],
       ['recargoSueltoPct', 'Recargo de entradas, ensaladas, postres y bebestibles sueltos', '%', 'Se suma al PVP sugerido de lo que se vende suelto, para que el combo se vea más conveniente. Los precios de los combos están en Platos y PVP → Combos.'],
       ['toleranciaAlternativasPct', 'Alternativas del día: diferencia de costo aceptada', '±%', 'Al sugerir otra entrada o ensalada para el día, solo propone las que cuestan más o menos lo mismo.']]],
     ['Compras y volumen', [
