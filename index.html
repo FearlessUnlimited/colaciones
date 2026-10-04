@@ -263,9 +263,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T09:33:21Z">
+<meta name="build" content="2026-10-04T10:42:18Z">
 <script>
-window.BUILD = "2026-10-04T09:33:21Z";
+window.BUILD = "2026-10-04T10:42:18Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2696,6 +2696,10 @@ window.CLOUD = {
     s.compras = s.compras || [];
     s.sobrestock = s.sobrestock || [];
     s.urgencias = s.urgencias || [];
+    // alternativas repetidas de una línea (un bug las duplicaba): se dejan una sola vez
+    (s.recetas || []).forEach(function (r) { (r.lineas || []).forEach(function (l) {
+      if (l.alternativas) l.alternativas = l.alternativas.filter(function (a, i, arr) { return arr.indexOf(a) === i && a !== l.ref; });
+    }); });
     if (window.Engine) {
       window.Engine.asegurarProveedores(s); window.Engine.unificarTextos(s);   // proveedores desde los "lugar"; familias/categorías sin variantes de mayúsculas
       window.Engine.asegurarDietas(s);   // pescados y mariscos: de "con carne/pescado" a pescetariano (una vez)
@@ -5210,7 +5214,7 @@ window.CLOUD = {
           const ai = s.insumos.find(function (x) { return x.id === a; });
           return h('button', { class: 'chip on small', title: 'Quitar alternativa', onclick: function () { upd(function (x) { x.lineas[i].alternativas = x.lineas[i].alternativas.filter(function (y) { return y !== a; }); }); } }, (ai ? ai.nombre : a) + ' ✕');
         }), esIns ? App.textInput({ fk: 'l-alt-' + r.id + '-' + i, cls: 'alt', value: '', ph: '+ alternativa', list: 'dl-ins',
-          onCommit: function (v) { const hit = App.insumoPorNombre(v); if (hit && hit.id !== l.ref) upd(function (x) { x.lineas[i].alternativas = (x.lineas[i].alternativas || []).concat(hit.id); }); else if (v.trim()) App.toast('No existe ese insumo'); } }) : null)),
+          onCommit: function (v) { const hit = App.insumoPorNombre(v); if (hit && (l.alternativas || []).indexOf(hit.id) >= 0) { App.render(); } else if (hit && hit.id !== l.ref) upd(function (x) { const a = x.lineas[i].alternativas = x.lineas[i].alternativas || []; if (a.indexOf(hit.id) < 0) a.push(hit.id); }); else if (v.trim()) App.toast('No existe ese insumo'); } }) : null)),
         h('td', { class: 'nowrap' }, App.btn('↑', function () { moverLinea(i, -1); }, 'small ghost'), App.btn('↓', function () { moverLinea(i, 1); }, 'small ghost'),
           App.btn('✕', function () { upd(function (x) { x.lineas.splice(i, 1); }); }, 'small ghost')));
     };
