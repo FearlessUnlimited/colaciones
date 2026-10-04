@@ -242,9 +242,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T01:51:16Z">
+<meta name="build" content="2026-10-04T01:57:54Z">
 <script>
-window.BUILD = "2026-10-04T01:51:16Z";
+window.BUILD = "2026-10-04T01:57:54Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2903,6 +2903,7 @@ window.CLOUD = {
     ['ins-dieta', 'Dieta del insumo: vegano, vegetariano (lácteos/huevo), pescetariano (pescados y mariscos) u omnívoro (carnes y aves). Evita que un plato vegano o vegetariano sugiera lo que no corresponde.'],
     ['ins-variedad', 'Presentación que distingue a este insumo de otros parecidos: granel, deshuesada, en aceite, congelado, a la chilena… Ayuda a decidir qué cotizaciones unir.'],
     ['ins-etiquetas', 'Marcas especiales del insumo: Sin gluten, Proteico (alto en proteínas) u Orgánico. Haz clic para activar o quitar.'],
+    ['nom-', 'Nombre de la cuenta. Edítalo y sal del campo para guardarlo; también se corrige en sus cotizaciones y avisos.'],
     ['cap-ins', 'Qué insumo es. Va elegido si la app lo reconoce; si no, queda como producto nuevo y el gerente lo completa. Si ves el que corresponde en "¿Es alguno de estos?", tócalo.'],
     ['cap-nuevo', 'Nombre sugerido del producto nuevo, sin marca ni tamaño. Puedes dejarlo como está.'],
     ['cap-unidad', 'Cómo se mide el producto: gramos (peso), mililitros (líquidos) o unidades. Viene sugerido.'],
@@ -3785,10 +3786,27 @@ window.CLOUD = {
         U.lista = null; cargar();
       });
     };
+    // cambiar el nombre de una cuenta; también el que quedó escrito como autor en sus cotizaciones y avisos
+    const cambiarNombre = function (p, v) {
+      const nuevo = String(v || '').trim();
+      if (!nuevo || nuevo === (p.nombre || '')) return;
+      N.sb.from('perfiles').update({ nombre: nuevo }).eq('id', p.id).select().then(function (r) {
+        if (r.error) App.toast(r.error.message);
+        else if (!r.data || !r.data.length) App.toast('No se pudo cambiar el nombre (sin permiso)');
+        else {
+          Store.mutate(function (st) {
+            (st.ofertas || []).concat(st.urgencias || []).forEach(function (x) { if (x.autorId === p.id) x.autor = nuevo; });
+          });
+          App.toast('Nombre actualizado: ' + nuevo); if (p.id === N.user.id) cargarTodo();
+        }
+        U.lista = null; cargar();
+      });
+    };
     const tabla = U.error ? h('div', { class: 'chk-error' }, U.error) : !U.lista ? App.empty('Cargando usuarios…') :
       h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Nombre'), h('th', null, 'Correo'), h('th', null, 'Rol'), h('th', null, 'Creado'))),
         h('tbody', null, U.lista.map(function (p) {
-          return h('tr', { class: p.rol ? '' : 'warnrow' }, h('td', null, p.nombre || '—', p.id === N.user.id ? h('small', null, ' (tú)') : null), h('td', null, p.email),
+          return h('tr', { class: p.rol ? '' : 'warnrow' }, h('td', null, App.textInput({ fk: 'nom-' + p.id, value: p.nombre || '', ph: 'Nombre', title: 'Haz clic para cambiar el nombre; se guarda al salir del campo',
+              onChange: function () { /* se guarda al terminar (onCommit) */ }, onCommit: function (v) { cambiarNombre(p, v); } }), p.id === N.user.id ? h('small', null, ' (tú)') : null), h('td', null, p.email),
             h('td', null, App.select({ fk: 'rol-' + p.id, value: p.rol || '', options: ROLES, onChange: function (v) {
               if (p.id === N.user.id && v !== 'admin') App.confirm('Vas a quitarte el rol de administrador. ¿Seguro?', function () { cambiarRol(p, v); }, 'Cambiar', true);
               else cambiarRol(p, v);
