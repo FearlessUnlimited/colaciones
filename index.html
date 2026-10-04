@@ -242,9 +242,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T01:47:09Z">
+<meta name="build" content="2026-10-04T01:51:16Z">
 <script>
-window.BUILD = "2026-10-04T01:47:09Z";
+window.BUILD = "2026-10-04T01:51:16Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2903,6 +2903,16 @@ window.CLOUD = {
     ['ins-dieta', 'Dieta del insumo: vegano, vegetariano (lácteos/huevo), pescetariano (pescados y mariscos) u omnívoro (carnes y aves). Evita que un plato vegano o vegetariano sugiera lo que no corresponde.'],
     ['ins-variedad', 'Presentación que distingue a este insumo de otros parecidos: granel, deshuesada, en aceite, congelado, a la chilena… Ayuda a decidir qué cotizaciones unir.'],
     ['ins-etiquetas', 'Marcas especiales del insumo: Sin gluten, Proteico (alto en proteínas) u Orgánico. Haz clic para activar o quitar.'],
+    ['cap-ins', 'Qué insumo es. Va elegido si la app lo reconoce; si no, queda como producto nuevo y el gerente lo completa. Si ves el que corresponde en "¿Es alguno de estos?", tócalo.'],
+    ['cap-nuevo', 'Nombre sugerido del producto nuevo, sin marca ni tamaño. Puedes dejarlo como está.'],
+    ['cap-unidad', 'Cómo se mide el producto: gramos (peso), mililitros (líquidos) o unidades. Viene sugerido.'],
+    ['cap-precio', 'Lo que se paga, tal como lo muestra la página. Si hay oferta, el precio de oferta. Si falta, envía igual: el gerente lo completa.'],
+    ['cap-normal', 'Precio normal, sin oferta. Se guarda aparte: es al que vuelve el costo cuando la oferta termina.'],
+    ['cap-lugar', 'Tienda o proveedor. Si no existe, se crea solo con este nombre y el gerente completa sus datos.'],
+    ['cap-marca', 'Marca del producto (opcional). Viene sugerida desde la página.'],
+    ['cap-fq', 'Cuánto trae el envase, en la unidad del producto. Ej.: bidón de 5 L = 5000 ml.'],
+    ['cap-fl', 'Cómo se llama el envase (solo etiqueta). Ej.: bidón 5 L.'],
+    ['cap-hasta', 'Último día de la oferta. Si no lo sabes, deja "no sé": el gerente lo confirma.'],
     ['cap-variedad', 'Presentación del producto (granel, deshuesada, en aceite…). Viene sugerida desde la página; el gerente la confirma al validar.'],
     ['cap-nota', 'Trae el nombre completo tal como aparece en la página, para que el gerente sepa exactamente qué producto es. Puedes agregar lo que quieras.'],
     ['ins-q', 'Busca por parte del nombre o de la categoría.'],
@@ -7025,7 +7035,8 @@ window.CLOUD = {
         paso('🍳', 'No alcanzó', 'La receta rindió menos de lo planificado. Anota para cuántas porciones preparaste y cuántas salieron.', avisos),
         paso('⭐', 'Opinión', 'Un insumo sirve (o no) para algo. Anota marca y dónde se compró.', avisos),
         h('h4', null, 'Anotar un precio que viste'),
-        paso('🏷️', 'Cotizaciones', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha.', function () { App.go('cotizaciones'); }),
+        paso('➕', 'Cotizar desde una página web', 'En el computador: arrastra el botón ➕ Cotizar a tu barra de favoritos y úsalo en la página del producto. En el celular: copia el enlace y pégalo. Todo viene escrito: solo revisa y envía. Si falta algo, envíalo igual: el gerente lo completa.', function () { App.go('capturar'); }),
+        paso('🏷️', 'Cotizar a mano', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha.', function () { App.go('cotizaciones'); }),
         h('h4', null, 'Ver recetas'),
         paso('📖', 'Cocina', 'Ingredientes y pasos. Elige las porciones y las cantidades se ajustan.', function () { App.go('cocina'); }),
         paso('🥗', 'Producción del día', 'Platos, más las entradas, ensaladas y postres de los combos (estimados) y los bebestibles envasados a despachar.', function () { App.go('cocina', 'dia'); }),
