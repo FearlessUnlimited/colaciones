@@ -235,6 +235,10 @@ ol.pasos li { margin: 6px 0; }
 .fecha-btn { position: relative; display: inline-block; }
 .fecha-oculta { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
 .fecha-oculta.visible { position: static; width: auto; height: auto; opacity: 1; pointer-events: auto; font-size: 12px; padding: 2px 4px; }
+.guia-link { cursor: pointer; border-radius: 10px; padding-left: 8px; padding-right: 8px; margin: 0 -8px; transition: background .12s, box-shadow .12s; }
+.guia-link:hover, .guia-link:focus-visible { background: var(--info-soft); box-shadow: inset 0 0 0 1px var(--info); outline: none; }
+.guia-ir { font-size: 22px; color: var(--mut); padding: 0 6px; }
+.guia-link:hover .guia-ir, .guia-link:focus-visible .guia-ir { color: var(--info); }
 
 </style>
 </head>
@@ -242,9 +246,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T02:21:30Z">
+<meta name="build" content="2026-10-04T02:34:09Z">
 <script>
-window.BUILD = "2026-10-04T02:21:30Z";
+window.BUILD = "2026-10-04T02:34:09Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -7068,9 +7072,12 @@ window.CLOUD = {
 
   App.views.guia = function () {
     const paso = function (icono, titulo, texto, ir) {
-      return h('div', { class: 'guia-paso' }, h('div', { class: 'guia-ico' }, icono),
+      // con destino, todo el recuadro es el botón: se ilumina al pasar el mouse y acepta clic (o Enter) en cualquier parte
+      return h('div', ir ? { class: 'guia-paso guia-link', role: 'button', tabindex: '0', title: 'Ir a ' + titulo, onclick: ir,
+        onkeydown: function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ir(); } } } : { class: 'guia-paso' },
+        h('div', { class: 'guia-ico' }, icono),
         h('div', null, h('b', null, titulo), h('div', { class: 'mut' }, texto)),
-        ir ? App.btn('Ir', ir, 'small noprint') : null);
+        ir ? h('span', { class: 'guia-ir noprint', 'aria-hidden': 'true' }, '›') : null);
     };
     const avisos = function () { App.go('cocina', 'avisos'); };
     return h('div', { class: 'stack guia' },
