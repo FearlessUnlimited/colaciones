@@ -217,6 +217,19 @@ select.w-prov { width: 160px; }
   .main { padding: 0; max-width: none; } .split, .split.cocina { display: block; } .card, .ficha { box-shadow: none; border: 0; break-inside: avoid; }
   .ficha { page-break-after: always; padding: 0; } .tbl td, .tbl th { color: #000; }
 }
+/* cotización rápida desde páginas web */
+.w100 { width: 110px; } .w120 { width: 140px; }
+.aviso { border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.aviso.warn { background: var(--warn-soft); border: 1px solid var(--warn); }
+.cap-prod { display: flex; gap: 12px; align-items: center; }
+.cap-prod .nm { font-weight: 600; font-size: 15px; }
+.cap-img { width: 72px; height: 72px; object-fit: contain; border-radius: 8px; background: #fff; border: 1px solid var(--line); flex: none; }
+input.grande { font-size: 20px; font-weight: 600; width: 150px; }
+.btn.grande { font-size: 16px; padding: 10px 18px; }
+.indent { padding-left: 22px; }
+.btn.marcador { cursor: grab; }
+ol.pasos li { margin: 6px 0; }
+.view-capturar { max-width: 720px; margin: 0 auto; }
 
 </style>
 </head>
@@ -224,9 +237,9 @@ select.w-prov { width: 160px; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T20:33:33Z">
+<meta name="build" content="2026-10-03T23:09:47Z">
 <script>
-window.BUILD = "2026-10-03T20:33:33Z";
+window.BUILD = "2026-10-03T23:09:47Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -1937,11 +1950,19 @@ window.CLOUD = {
     }
 
     // tablas: si se indica, solo se comparan y escriben esas tablas (ej. cocina → solo sus cotizaciones)
-    async function pasada(state, tablas) {
-      const dentro = function (k) { const t = k.slice(0, k.indexOf('|')); return !faltantes.has(t) && (!tablas || tablas.indexOf(t) >= 0); };
+    // filtro(tabla, fila): si se indica, además solo las filas que cumplan, tanto la versión local como la del
+    // servidor (ej. cocina → solo sus insumos propuestos; uno ya validado en el servidor no se toca)
+    async function pasada(state, tablas, filtro) {
+      const todas = mapa(aFilas(state));
+      const dentro = function (k, row) {
+        const t = k.slice(0, k.indexOf('|'));
+        return !faltantes.has(t) && (!tablas || tablas.indexOf(t) >= 0) && (!filtro || filtro(t, row));
+      };
+      const enSnap = function (k) { return !snap.has(k) || dentro(k, filtro ? JSON.parse(snap.get(k)) : null); };
+      const enLocal = function (k) { return !todas.has(k) || dentro(k, todas.get(k).row); };
       const actual = new Map(), base = new Map();
-      mapa(aFilas(state)).forEach(function (v, k) { if (dentro(k)) actual.set(k, v); });
-      snap.forEach(function (j, k) { if (dentro(k)) base.set(k, j); });
+      todas.forEach(function (v, k) { if (dentro(k, v.row) && enSnap(k)) actual.set(k, v); });
+      snap.forEach(function (j, k) { if (enSnap(k) && enLocal(k)) base.set(k, j); });
       const d = diferencias(base, actual);
       for (const t of ORDEN_UPSERT) {
         const filas = d.ups[t] || [];
@@ -1957,7 +1978,7 @@ window.CLOUD = {
           if (r.error) throw r.error;
         }
       }
-      const nuevo = new Map(); snap.forEach(function (j, k) { if (!dentro(k)) nuevo.set(k, j); });
+      const nuevo = new Map(); snap.forEach(function (j, k) { if (!base.has(k)) nuevo.set(k, j); });
       actual.forEach(function (v, k) { nuevo.set(k, v.json); });
       snap = nuevo;
       return Object.keys(d.ups).reduce(function (s, t) { return s + d.ups[t].length; }, 0) + Object.keys(d.dels).reduce(function (s, t) { return s + d.dels[t].length; }, 0);
@@ -1989,13 +2010,13 @@ window.CLOUD = {
       // acepta un estado traído del servidor como nueva base
       aceptar: function (base) { snap = base; },
       // guarda los cambios del estado (encola si ya hay un guardado en curso)
-      guardar: async function (state, tablas) {
+      guardar: async function (state, tablas, filtro) {
         pendiente = true;
-        if (enCurso) { siguiente = { state: state, tablas: tablas }; return; }
+        if (enCurso) { siguiente = { state: state, tablas: tablas, filtro: filtro }; return; }
         enCurso = true; avisar('guardando');
-        let s = { state: state, tablas: tablas }, cambios = 0;
+        let s = { state: state, tablas: tablas, filtro: filtro }, cambios = 0;
         try {
-          while (s) { siguiente = null; cambios += await pasada(s.state, s.tablas); s = siguiente; }
+          while (s) { siguiente = null; cambios += await pasada(s.state, s.tablas, s.filtro); s = siguiente; }
           pendiente = false; avisar('ok', cambios);
         } catch (e) {
           avisar('error', (e && (e.message || e.details)) || String(e));
@@ -2120,6 +2141,306 @@ window.CLOUD = {
     storageOk: function () { return storageOk; }, lastSaved: function () { return lastSaved; }, flush: function () { if (saveTimer) { clearTimeout(saveTimer); doSave(); } }
   };
 })();
+
+/* src/captura.js */
+/* Captura de cotizaciones desde páginas web de proveedores (supermercados, distribuidoras, tiendas online).
+ *
+ *  · Captura.extraer(appUrl): corre DENTRO de la página del producto (es el código del botón marcador "➕ Cotizar").
+ *    Solo junta datos crudos (JSON-LD, metas, precios visibles) y abre la app con ellos en el fragmento "#":
+ *    el fragmento no viaja a ningún servidor. No usa nada de la app: se serializa con toString().
+ *  · Captura.interpretar(raw, state): corre en la app; decide nombre, precio actual y normal, formato,
+ *    proveedor e insumos parecidos. Al publicar una versión nueva, el botón mejora sin reinstalarlo.
+ *  · Captura.desdeUrl(url): para el celular ("pegar enlace"): deduce lo que se pueda desde la dirección.
+ * Módulo puro (sin DOM, salvo extraer): se prueba en Node con tests/captura.test.js.
+ */
+(function (root) {
+  'use strict';
+
+  /* ---------- 1. botón marcador: corre en la página del proveedor ---------- */
+  function extraer(appUrl) {
+    var d = document, out = { v: 1, url: location.href.split('#')[0], host: location.hostname, titulo: d.title, ld: [], og: {}, precios: [], textos: [], variantes: [] };
+    var limpio = function (s, n) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n || 300); };
+    var h1 = d.querySelector('h1');
+    out.h1 = h1 ? limpio(h1.textContent, 200) : '';
+    // datos estructurados (schema.org Product): los publican casi todas las tiendas para Google
+    d.querySelectorAll('script[type="application/ld+json"]').forEach(function (s) {
+      try {
+        var j = JSON.parse(s.textContent), cola = [].concat(j);
+        while (cola.length && out.ld.length < 3) {
+          var x = cola.shift();
+          if (!x || typeof x !== 'object') continue;
+          if (x['@graph']) cola = cola.concat(x['@graph']);
+          if (!/Product/i.test(String(x['@type']))) continue;
+          var ofs = [].concat(x.offers || []).map(function (o) {
+            var ps = o.priceSpecification ? [].concat(o.priceSpecification)[0] : null;
+            return { precio: o.price != null ? o.price : o.lowPrice != null ? o.lowPrice : ps && ps.price, alto: o.highPrice, moneda: o.priceCurrency || (ps && ps.priceCurrency) };
+          });
+          out.ld.push({ nombre: limpio(x.name, 200), marca: limpio(x.brand && (x.brand.name || x.brand), 80), sku: limpio(x.sku, 40), gtin: limpio(x.gtin13 || x.gtin || x.gtin14 || x.gtin8, 20),
+            imagen: limpio([].concat(x.image || [])[0] && ([].concat(x.image)[0].url || [].concat(x.image)[0]), 400), descripcion: limpio(x.description, 300), ofertas: ofs });
+        }
+      } catch (e) { /* JSON-LD inválido: se ignora */ }
+    });
+    d.querySelectorAll('meta[property^="og:"],meta[property^="product:"],meta[name="description"]').forEach(function (m) {
+      var k = (m.getAttribute('property') || m.getAttribute('name')).replace(/^og:/, '');
+      if (!out.og[k]) out.og[k] = limpio(m.getAttribute('content'), 300);
+    });
+    // precios visibles cerca del título: el que se ve grande es el que se paga; el tachado, el normal
+    var y0 = h1 ? h1.getBoundingClientRect().top + scrollY : 0, vistos = 0;
+    var todos = d.querySelectorAll('body *'), esPrecio = /^(?:desde\s*)?\$\s?\d{1,3}(?:[.\s]\d{3})*(?:,\d+)?(?:\s*(?:c\/u|un|und|x\s?\w+|por\s+\w+))?$/i;
+    for (var i = 0; i < todos.length && vistos < 400; i++) {
+      var el = todos[i];
+      if (el.children.length > 6 || /SCRIPT|STYLE|NOSCRIPT|OPTION/.test(el.tagName)) continue;
+      // texto propio ("$2.000" junto a un <span> tachado con "$2.490") o, si está partido en hijos ("$" + "8.090"), el texto completo
+      var propio = limpio([].filter.call(el.childNodes, function (n) { return n.nodeType === 3; }).map(function (n) { return n.nodeValue; }).join(' '), 60);
+      var t = esPrecio.test(propio) ? propio : el.children.length <= 3 ? limpio(el.textContent, 60) : '';
+      if (!esPrecio.test(t)) continue;
+      if (t !== propio && [].some.call(el.children, function (c) { return esPrecio.test(limpio(c.textContent, 60)); })) continue;   // el precio completo está en un hijo
+      var r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      vistos++;
+      var cs = getComputedStyle(el), tach = false;
+      for (var a = el, k2 = 0; a && k2 < 4; a = a.parentElement, k2++) {
+        if (/^(DEL|S|STRIKE)$/.test(a.tagName) || /line-through/.test(getComputedStyle(a).textDecorationLine)) { tach = true; break; }
+      }
+      out.precios.push({ t: t, tam: parseFloat(cs.fontSize) || 0, peso: parseInt(cs.fontWeight, 10) || 400, tachado: tach, dy: Math.round(r.top + scrollY - y0) });
+    }
+    // se guardan los más cercanos al título y, aunque estén lejos (barra fija de compra), los que coinciden con el precio estructurado
+    var conocidos = [];
+    out.ld.forEach(function (x) { x.ofertas.forEach(function (o) { conocidos.push(Math.round(parseFloat(o.precio))); }); });
+    if (out.og['price:amount']) conocidos.push(parseInt(out.og['price:amount'].replace(/\D/g, ''), 10));
+    var cifra = function (p) { return parseInt(p.t.replace(/^[^$]*\$/, '').replace(/\s*(c\/u|un|und|x\s?\w+|por\s+\w+)$/i, '').replace(/\D/g, ''), 10); };
+    var cerca = out.precios.slice().sort(function (a, b) { return Math.abs(a.dy) - Math.abs(b.dy); });
+    out.precios = cerca.filter(function (p) { return conocidos.indexOf(cifra(p)) >= 0; }).slice(0, 4)
+      .concat(cerca.filter(function (p) { return p.dy > -1200 && p.dy < 1600 && conocidos.indexOf(cifra(p)) < 0; }).slice(0, 10));
+    // frases útiles: compra mínima, precio por kilo/litro, formato del envase
+    var texto = limpio(d.body.innerText, 20000), re = /(compra m[ií]nima[^\n.]{0,30}|m[ií]nimo de \d+[^\n.]{0,20}|\$\s?[\d.]+(?:,\d+)?\s*(?:x|por|\/)\s*(?:kg|kilo|lt|l|litro|un|unidad|100\s?g|100\s?ml)\b|llev[aá]\s*\d+[^\n.]{0,40}|\d+\s*x\s*\$\s?[\d.]+)/gi, m;
+    while ((m = re.exec(texto)) && out.textos.length < 10) out.textos.push(limpio(m[1], 80));
+    // variante elegida en tiendas Shopify (ej. "Posta Paleta - 1 Kilo")
+    try { (window.ShopifyAnalytics.meta.product.variants || []).slice(0, 5).forEach(function (v) { out.variantes.push({ nombre: limpio(v.name, 120), precio: v.price / 100 }); }); } catch (e) { /* no es Shopify */ }
+    if (!appUrl) return out;
+    var w = window.open(appUrl + '#/capturar?d=' + encodeURIComponent(JSON.stringify(out)), '_blank');
+    if (!w) alert('Permite las ventanas emergentes de este sitio para enviar la cotización a la app.');
+    return out;
+  }
+
+  // enlace del botón marcador ("javascript:…") que llama a extraer() con la dirección de la app
+  function marcador(appUrl) {
+    return 'javascript:' + encodeURIComponent('(' + extraer.toString() + ')(' + JSON.stringify(appUrl) + ');void 0');
+  }
+
+  /* ---------- 2. interpretación (en la app) ---------- */
+  function norm(s) {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+  // "$1.290" → 1290; "12500.0" → 12500; "9.998" (og de Shopify) → 9998
+  function numero(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    let t = String(v == null ? '' : v).replace(/[^\d.,]/g, '');
+    if (!t) return null;
+    if (/^\d+\.\d{1,2}$/.test(t)) return parseFloat(t);           // decimal con punto (12500.0)
+    t = t.replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');   // separador de miles chileno
+    const n = parseFloat(t);
+    return isNaN(n) ? null : n;
+  }
+  function tituloBonito(s) {
+    s = String(s || '').replace(/\s+/g, ' ').trim();
+    if (s && (s === s.toUpperCase() || s === s.toLowerCase())) s = s.toLowerCase().replace(/(^|\s)(\S)/g, function (m, a, b) { return a + b.toUpperCase(); });
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  // proveedores conocidos por dominio (el resto: nombre del sitio o del dominio)
+  const SITIOS = { 'acuenta.cl': 'Acuenta', 'centralmayorista.cl': 'Central Mayorista', 'lider.cl': 'Lider', 'santaisabel.cl': 'Santa Isabel', 'jumbo.cl': 'Jumbo',
+    'unimarc.cl': 'Unimarc', 'alvi.cl': 'Alvi', 'laoferta.cl': 'La Oferta', 'xn--doacarne-e3a.cl': 'Doña Carne', 'doñacarne.cl': 'Doña Carne', 'micoca-cola.cl': 'Coca-Cola Embonor',
+    'perdices.cl': 'Las Perdices', 'tottus.cl': 'Tottus', 'mayoristamekano.cl': 'Mekano', 'superprecio.cl': 'Super Precio' };
+  function dominio(host) {
+    const p = String(host || '').toLowerCase().replace(/^www\./, '').split('.');
+    return p.length > 2 && /^(cl|com|net|org)$/.test(p[p.length - 1]) ? p.slice(-2).join('.') : p.join('.');
+  }
+  function nombreSitio(host, siteName) {
+    const dom = dominio(host);
+    if (SITIOS[dom]) return SITIOS[dom];
+    const sn = String(siteName || '').replace(/^https?:\/\//, '').replace(/\s*[|–-].*$/, '').replace(/\.(cl|com)$/i, '').trim();
+    if (sn && sn.length <= 40 && !/\//.test(sn)) return tituloBonito(sn);
+    return tituloBonito(dom.split('.')[0].replace(/-/g, ' '));
+  }
+
+  /* formato del envase: "5 L", "6 x 350 ml", "400GR", "Bolsa 10 und", "1 Kilo" → {g|ml|un: {qty, label}} */
+  const UNID = [
+    [/^(kg|kgs|kilo|kilos|k)$/, 'g', 1000], [/^(g|gr|grs|gramos?)$/, 'g', 1], [/^(l|lt|lts|litros?)$/, 'ml', 1000], [/^(ml|cc)$/, 'ml', 1],
+    [/^(un|und|unid|unidades?|u|uds?)$/, 'un', 1]
+  ];
+  function unidadDe(u) { for (const x of UNID) if (x[0].test(u)) return x; return null; }
+  function formatos(textos) {
+    const r = {};
+    [].concat(textos).filter(Boolean).forEach(function (txt) {
+      const t = String(txt).toLowerCase().replace(/(\d),(\d)/g, '$1.$2');
+      const re = /(?:(\d+)\s*x\s*)?(\d+(?:\.\d+)?)\s*(kgs?|kilos?|k|grs?|gramos?|g|lts?|litros?|l|ml|cc|unidades?|unid|und|uds?|un|u)\b/g;
+      let m;
+      while ((m = re.exec(t))) {
+        const u = unidadDe(m[3]); if (!u) continue;
+        const n = m[1] ? parseInt(m[1], 10) : 1, q = parseFloat(m[2]) * u[2] * n;
+        if (!(q > 0) || r[u[1]]) continue;
+        const etU = u[1] === 'un' ? 'un' : u[2] === 1000 ? (u[1] === 'g' ? 'kg' : 'L') : u[1];
+        r[u[1]] = { qty: Math.round(q * 1000) / 1000, label: (m[1] ? m[1] + ' x ' : '') + String(parseFloat(m[2])).replace('.', ',') + ' ' + etU };
+      }
+      if (!r.un) { const dz = /\b(docena|bandeja (?:de )?(\d+))\b/.exec(t); if (dz) r.un = { qty: dz[2] ? parseInt(dz[2], 10) : 12, label: dz[1] }; }
+    });
+    return r;
+  }
+  // "$1.618 por LT" / "$4.000 x kg" → {unidad, porBase} (precio por 1000 g / 1000 ml / 1 un)
+  function precioPorUnidad(textos) {
+    for (const t of textos || []) {
+      const m = /\$\s?([\d.]+(?:,\d+)?)\s*(?:x|por|\/)\s*(kg|kilo|lt|l|litro|un|unidad|100\s?g|100\s?ml)\b/i.exec(t);
+      if (!m) continue;
+      const n = numero(m[1]), u = m[2].toLowerCase().replace(/\s/g, '');
+      if (!(n > 0)) continue;
+      if (u === '100g') return { unidad: 'g', porBase: n * 10 };
+      if (u === '100ml') return { unidad: 'ml', porBase: n * 10 };
+      return { unidad: /^(kg|kilo)$/.test(u) ? 'g' : /^(un|unidad)$/.test(u) ? 'un' : 'ml', porBase: n };
+    }
+    return null;
+  }
+  // "2 x $1.000" → {minimo: 2, precio: 500} (precio por unidad llevando el mínimo)
+  function promoCantidad(textos, actual) {
+    for (const t of textos || []) {
+      const m = /(\d+)\s*x\s*\$\s?([\d.]+)/i.exec(t);
+      if (!m) continue;
+      const n = parseInt(m[1], 10), total = numero(m[2]);
+      if (n >= 2 && total > 0 && (!actual || total / n < actual)) return { minimo: n, precio: Math.round(total / n) };
+    }
+    return null;
+  }
+  function compraMinima(textos) {
+    for (const t of textos || []) { const m = /m[ií]nim[ao](?: de)?\s*(\d+)\s*(un|und|unidades)?/i.exec(t); if (m) return parseInt(m[1], 10); }
+    return null;
+  }
+
+  /* precio actual y normal: lo visible manda (el JSON-LD a veces trae el precio normal y no el de oferta) */
+  function precios(raw) {
+    const ld = (raw.ld || [])[0] || {};
+    const ldP = ((ld.ofertas || [])[0] || {}), deLd = numero(ldP.precio), ogP = numero((raw.og || {})['price:amount'] || (raw.og || {})['product:price:amount']);
+    const ogOrig = numero((raw.og || {})['product:original_price:amount'] || (raw.og || {})['original_price:amount']);
+    const vis = (raw.precios || []).filter(function (p) { return !/\b(x|por|\/)\s*\w+$|c\/u$/i.test(p.t); })   // los "$x por kg" no son el precio del producto
+      .map(function (p) { return Object.assign({}, p, { n: numero(p.t) }); }).filter(function (p) { return p.n > 0; });
+    let actual = null, normal = null, fuente = 'ld';
+    const conocidos = [deLd, ogP].filter(function (n) { return n > 0; });
+    // candidatos visibles: los que coinciden con un precio estructurado, o los más destacados cerca del título
+    const cerca = vis.slice(0, 6);
+    if (cerca.length) {
+      const sinTachar = cerca.filter(function (p) { return !p.tachado; });
+      const pool = sinTachar.length ? sinTachar : cerca;
+      const masGrande = pool.slice().sort(function (a, b) { return (b.tam - a.tam) || (b.peso - a.peso) || (Math.abs(a.dy) - Math.abs(b.dy)); })[0];
+      const coincide = pool.find(function (p) { return conocidos.indexOf(p.n) >= 0; });
+      actual = (masGrande.tam >= ((coincide || {}).tam || 0) ? masGrande : coincide).n; fuente = 'visible';
+      // normal: tachado, o un precio vecino mayor (el JSON-LD de algunas tiendas trae justo ese)
+      const tach = cerca.filter(function (p) { return p.tachado && p.n > actual; })[0];
+      const mayorLd = conocidos.filter(function (n) { return n > actual && n < actual * 3; })[0];
+      const vecino = cerca.slice(0, 3).filter(function (p) { return p.n > actual && p.n < actual * 2 && p.tam < masGrande.tam; })[0];
+      normal = tach ? tach.n : mayorLd || (vecino ? vecino.n : null);
+    } else {
+      actual = deLd || ogP || null;
+      if (ogOrig > actual) normal = ogOrig;
+      fuente = actual ? (deLd ? 'ld' : 'og') : null;
+    }
+    // si el texto visible no estaba disponible, pero hay dos precios estructurados distintos: el menor es la oferta
+    const dudoso = conocidos.length === 2 && conocidos[0] !== conocidos[1] && conocidos.indexOf(actual) < 0;
+    return { actual: actual, normal: normal && normal > actual ? normal : null, fuente: fuente, dudoso: dudoso };
+  }
+
+  /* ---------- parecido con insumos existentes ---------- */
+  const VACIAS = new Set(('de del la las el los con sin en y o x para por a al bolsa bidon caja pack sobre unidad unidades un und kg kilo kilos g gr grs ml l lt lts litro litros cc ' +
+    'malla bandeja frasco botella lata tarro envase granel formato porciones porcion aprox app web oferta promo nuevo').split(' '));
+  function raiz(t) { return t.length > 4 ? t.replace(/(es|s)$/, '') : t; }
+  function fichas(s, quitar) {
+    return norm(s).split(' ').filter(function (t) { return t && !VACIAS.has(t) && !/\d/.test(t) && !(quitar && quitar.has(t)); }).map(raiz);
+  }
+  // insumo "Fideos / Spaghetti / Espirales" → alternativas; lo entre paréntesis no cuenta
+  function alternativas(nombre) {
+    return String(nombre || '').replace(/\([^)]*\)/g, ' ').split('/').map(function (a) { return fichas(a); }).filter(function (a) { return a.length; });
+  }
+  function sugerirInsumos(nombreProducto, insumos, extraQuitar) {
+    const quitar = new Set(fichas((extraQuitar || []).join(' ')).concat(norm((extraQuitar || []).join(' ')).split(' ')));
+    const prod = Array.from(new Set(fichas(nombreProducto, quitar)));
+    if (!prod.length) return [];
+    return (insumos || []).map(function (i) {
+      const todas = new Set([].concat.apply([], alternativas(i.nombre)));
+      let cobIns = 0;
+      alternativas(i.nombre).forEach(function (a) { const n = a.filter(function (t) { return prod.indexOf(t) >= 0; }).length; cobIns = Math.max(cobIns, n / a.length); });
+      const cobProd = prod.filter(function (t) { return todas.has(t); }).length / prod.length;
+      return { insumo: i, puntaje: Math.round((cobIns * 0.7 + cobProd * 0.3) * 100) / 100, cobProd: cobProd };
+    }).filter(function (x) { return x.puntaje > 0; }).sort(function (a, b) { return b.puntaje - a.puntaje; });
+  }
+
+  function claveUrl(u) {
+    try { const x = new URL(u); return (x.hostname.replace(/^www\./, '') + x.pathname.replace(/\/+$/, '')).toLowerCase(); } catch (e) { return String(u || '').toLowerCase(); }
+  }
+  // ¿este producto ya se cotizó antes? (enlaces aprendidos al aprobar, o cotizaciones visibles con el mismo enlace)
+  function insumoConocido(state, url, sku, host) {
+    const k = claveUrl(url), ks = sku ? dominio(host) + '#' + sku : null;
+    const ins = (state.insumos || []).find(function (i) { return (i.enlaces || []).some(function (e) { return claveUrl(e.url) === k || (ks && e.sku && dominio(e.host) + '#' + e.sku === ks); }); });
+    if (ins) return ins;
+    const o = (state.ofertas || []).slice().reverse().find(function (x) { return x.url && claveUrl(x.url) === k; });
+    return o ? (state.insumos || []).find(function (i) { return i.id === o.insumoId; }) || null : null;
+  }
+  function proveedorDe(state, host, nombre) {
+    const dom = dominio(host), k = norm(nombre);
+    return (state.proveedores || []).find(function (p) { return p.web && dominio(p.web) === dom; }) ||
+      (state.proveedores || []).find(function (p) { return norm(p.nombre) === k || (p.alias || []).some(function (a) { return norm(a) === k; }); }) || null;
+  }
+
+  // raw (del botón o de un enlace) + estado de la app → propuesta lista para revisar
+  function interpretar(raw, state) {
+    raw = raw || {}; state = state || {};
+    const ld = (raw.ld || [])[0] || {}, og = raw.og || {};
+    const sitio = nombreSitio(raw.host, og.site_name);
+    const quitarSitio = function (s) { return String(s || '').replace(/\s*[|–]\s*[^|–]*$/, '').trim(); };
+    const nombre = tituloBonito(ld.nombre || quitarSitio(og.title) || raw.h1 || quitarSitio(raw.titulo) || raw.nombre || '');
+    const marca = tituloBonito(ld.marca || og['product:brand'] || og.brand || '');
+    const p = precios(raw);
+    const textosFormato = [nombre, raw.h1, (raw.variantes || []).map(function (v) { return v.nombre; }).join(' · '), og.description, ld.descripcion];
+    const fmts = formatos(textosFormato);
+    const ppu = precioPorUnidad(raw.textos);
+    // verificación del formato con el "$x por kg/LT" que muestra la tienda
+    if (ppu && p.actual > 0) {
+      const deducido = Math.round(p.actual / ppu.porBase * (ppu.unidad === 'un' ? 1 : 1000) * 10) / 10;
+      const f = fmts[ppu.unidad];
+      if (!f) fmts[ppu.unidad] = { qty: deducido, label: App_cant(deducido, ppu.unidad), deducido: true };
+      else if (Math.abs(f.qty - deducido) / deducido > 0.08 && !(p.normal && Math.abs(f.qty - p.normal / ppu.porBase * (ppu.unidad === 'un' ? 1 : 1000)) / f.qty < 0.08)) f.revisar = deducido;
+    }
+    const prov = proveedorDe(state, raw.host, sitio);
+    const conocido = insumoConocido(state, raw.url, ld.sku, raw.host);
+    const sug = sugerirInsumos(nombre, (state.insumos || []).filter(function (i) { return i.activo !== false; }), [marca, sitio]);
+    const mejor = sug[0], segundo = sug[1];
+    const elegido = conocido || (mejor && mejor.puntaje >= 0.8 && mejor.cobProd >= 0.5 && (!segundo || segundo.puntaje < mejor.puntaje) ? mejor.insumo : null);
+    const unidadNueva = fmts.g ? 'g' : fmts.ml ? 'ml' : 'un';
+    return {
+      url: raw.url || '', host: raw.host || '', nombre: nombre, marca: marca, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
+      sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
+      formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
+      insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
+    };
+  }
+  function App_cant(q, u) { return u === 'un' ? q + ' un' : q >= 1000 ? String(Math.round(q / 10) / 100).replace('.', ',') + (u === 'g' ? ' kg' : ' L') : q + ' ' + u; }
+
+  /* ---------- 3. celular: solo el enlace ---------- */
+  function desdeUrl(texto) {
+    const m = /https?:\/\/[^\s]+/i.exec(String(texto || ''));
+    if (!m) return null;
+    let u;
+    try { u = new URL(m[0]); } catch (e) { return null; }
+    const partes = u.pathname.split('/').map(function (x) { try { return decodeURIComponent(x); } catch (e) { return x; } }).filter(function (x) { return x && !/^(p|ip|product|products|producto|tienda|shop|item)$/i.test(x); });
+    let slug = '';
+    for (let i = partes.length - 1; i >= 0; i--) { if (/[a-z]{3,}/i.test(partes[i]) && /-/.test(partes[i])) { slug = partes[i]; break; } }
+    if (partes.length && /^\d{6,}$/.test(partes[partes.length - 1])) slug = '';   // Lider: /ip/<categoría>/<código> → la categoría no es el nombre
+    const nombre = slug.replace(/\.html?$/, '').replace(/-\d{3,}$/, '').replace(/[-_]+/g, ' ').trim();
+    return { v: 1, url: u.href.split('#')[0], host: u.hostname, nombre: tituloBonito(nombre), ld: [], og: {}, precios: [], textos: [], variantes: [], soloEnlace: true };
+  }
+
+  const Captura = { extraer: extraer, marcador: marcador, interpretar: interpretar, desdeUrl: desdeUrl, formatos: formatos, precios: precios, numero: numero,
+    nombreSitio: nombreSitio, dominio: dominio, sugerirInsumos: sugerirInsumos, claveUrl: claveUrl, precioPorUnidad: precioPorUnidad, compraMinima: compraMinima };
+  if (typeof module !== 'undefined' && module.exports) module.exports = Captura;
+  else root.Captura = Captura;
+})(typeof window !== 'undefined' ? window : globalThis);
 
 /* src/ui/core.js */
 /* Núcleo de UI: helpers DOM, formato, enrutador, render con foco preservado, escenarios, modales. */
@@ -2417,14 +2738,16 @@ window.CLOUD = {
     window.scrollTo(0, y);
     restoreFocus(f);
     if (App.reanclarAC) App.reanclarAC();
-    document.title = 'Colaciones — ' + (NAV.find(function (n) { return n[0] === App.route.name; }) || ['', ''])[1];
+    document.title = 'Colaciones — ' + (NAV.find(function (n) { return n[0] === App.route.name; }) || ['', App.route.name === 'capturar' ? 'Cotización rápida' : ''])[1];
   };
 
   App.go = function (name, arg) {
     location.hash = '#/' + name + (arg ? '/' + encodeURIComponent(arg) : '');
   };
   function parseHash() {
-    const m = location.hash.replace(/^#\/?/, '').split('/');
+    const partes = location.hash.replace(/^#\/?/, '').split('?');
+    if (partes[0] === 'capturar' && partes[1] && App.recibirCaptura) App.recibirCaptura(partes[1]);   // datos del botón ➕ Cotizar
+    const m = partes[0].split('/');
     let name = App.views[m[0]] ? m[0] : App.vistaInicial();
     if (!App.puedeVer(name) && (!App.nube.activo || App.nube.fase === 'listo')) name = App.vistaInicial();
     const arg = m[1] ? decodeURIComponent(m[1]) : null;
@@ -3012,7 +3335,7 @@ window.CLOUD = {
     const r = App.rol();
     if (r && !ROL_TXT[r]) return false;   // rol que esta versión no conoce: mejor no mostrar datos incompletos
     if (vista === 'usuarios') return N.activo && r === 'admin';
-    if (r === 'cocina') return vista === 'cocina' || vista === 'cotizaciones' || vista === 'guia';
+    if (r === 'cocina') return vista === 'cocina' || vista === 'cotizaciones' || vista === 'capturar' || vista === 'guia';
     return !!r;
   };
   App.vistaInicial = function () { return App.rol() === 'cocina' ? 'cocina' : 'panel'; };
@@ -3099,11 +3422,15 @@ window.CLOUD = {
     if (g.estado === 'error') return '⚠ Sin guardar: reintentando (' + (g.msg || 'error') + ')';
     return g.hora ? '☁ Guardado ' + g.hora.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : '☁ Sincronizado';
   };
-  // staff guarda todo; el resto solo sus cotizaciones y avisos (la base rechaza cualquier otra cosa)
+  // staff guarda todo; el resto solo sus cotizaciones, avisos y los productos nuevos que propuso (la base rechaza cualquier otra cosa)
+  function soloMisPropuestos(t, row) {
+    return t !== 'insumos' || !!(row && row.data && row.data.propuesto === true && row.data.autorId === N.user.id);
+  }
   function guardar(state) {
     if (!App.rol()) return;
     if (App.esVisita()) { guardarDemo(state); return; }
-    N.sync.guardar(state, App.esStaff() ? undefined : ['ofertas', 'urgencias']).catch(function (e) {
+    const staff = App.esStaff();
+    N.sync.guardar(state, staff ? undefined : ['insumos', 'ofertas', 'urgencias'], staff ? undefined : soloMisPropuestos).catch(function (e) {
       const m = (e && (e.message || e.details)) || '';
       if (/row-level security|permission denied|violates/i.test(m)) {
         App.toast('Ese cambio no está permitido para tu rol; se restauraron los datos.');
@@ -3469,7 +3796,7 @@ window.CLOUD = {
         const c = E.costoInsumo(ctx, i.id), ofs = App.ofertasDe(i.id), u = uso.get(i.id) || [];
         const viejo = ofs.some(function (o) { return precioViejo(o, p); });
         return h('tr', { class: i.id === sel ? 'on' : '', onclick: function () { App.go('insumos', i.id); } },
-          h('td', null, h('div', { class: 'nm' }, i.nombre), h('small', null, i.categoria, c.missing ? ' ' : null, c.missing ? App.badge('sin precio', 'bad') : null,
+          h('td', null, h('div', { class: 'nm' }, i.nombre), h('small', null, i.categoria, i.propuesto ? ' ' : null, i.propuesto ? App.badge('🆕 por validar', 'warn') : null, c.missing ? ' ' : null, c.missing ? App.badge('sin precio', 'bad') : null,
             viejo ? App.badge('precio viejo', 'warn') : null, c.modo === 'oportunidad' ? App.badge('🔥 oferta', 'good') : null, ofs.some(function (o) { return o.pendiente; }) ? App.badge('cotización nueva', 'info') : null, ofs.length > 1 ? App.badge(ofs.length + ' ofertas', 'info') : null)),
           h('td', { class: 'r' }, c.missing ? '—' : App.costoVisible(c.unit, i.unidad)),
           h('td', null, c.oferta ? lugarTxt(c.oferta) : (c.modo === 'promedio' ? 'promedio' : '—')),
@@ -3535,6 +3862,15 @@ window.CLOUD = {
       h('div', { class: 'card-h' }, h('h3', null, ins.nombre),
         h('div', { class: 'row gap' }, App.btn('🚨 Compra urgente', function () { App.compraUrgente(ins.nombre); }, 'small', 'Compara las formas más rápidas de conseguirlo'),
           App.btn('Eliminar insumo', function () { eliminar(ins); }, 'small danger'))),
+      ins.propuesto ? h('div', { class: 'aviso warn stack' },
+        h('div', null, h('b', null, '🆕 Producto nuevo propuesto'), ins.autor ? ' por ' + ins.autor : '', ins.propuestoEl ? ' (' + App.fechaCorta(ins.propuestoEl) + ')' : '',
+          '. Revisa nombre, categoría, unidad y rendimiento; al validarlo ya se puede usar en recetas y aprobar sus cotizaciones.'),
+        (ins.enlaces || []).length ? h('small', null, 'Visto en: ', ins.enlaces.map(function (e) { return h('a', { href: e.url, target: '_blank', rel: 'noopener' }, (e.host || 'página') + ' ↗ '); })) : null,
+        App.esStaff() ? h('div', null, App.btn('✓ Validar producto', function () {
+          if (ins.categoria === 'Por clasificar') { App.toast('Elige primero su categoría'); return; }
+          upd(function (x) { delete x.propuesto; x.validadoPor = (App.nube.perfil && App.nube.perfil.nombre) || 'admin'; });
+          App.toast('Producto validado: ya puedes aprobar sus cotizaciones en Cotizaciones');
+        }, 'small primary')) : null) : null,
       h('div', { class: 'form-grid' },
         h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); } }),
           (function () {
@@ -4886,6 +5222,32 @@ window.CLOUD = {
   }
 
   /* ---------- bandeja de revisión (admin/gerente) ---------- */
+  // al aprobar una cotización tomada de una página web: el insumo recuerda el enlace (así la próxima vez se reconoce solo)
+  // y el proveedor queda vinculado, con su página; si es nuevo, queda "por completar"
+  App.aprenderCotizacion = function (st, y) {
+    if (!y.proveedorId && y.lugar) {
+      const antes = (st.proveedores || []).length;
+      const p = App.vincularProveedor(st, y.lugar);
+      if (p) { y.proveedorId = p.id; y.lugar = p.nombre; if ((st.proveedores || []).length > antes && y.fuente === 'web') p.porCompletar = true; }
+    }
+    if (y.fuente !== 'web' || !y.url) return;
+    const p = y.proveedorId && (st.proveedores || []).find(function (x) { return x.id === y.proveedorId; });
+    if (p && !p.web && y.host) p.web = 'https://' + y.host;
+    const ins = st.insumos.find(function (i) { return i.id === y.insumoId; });
+    if (!ins) return;
+    ins.enlaces = (ins.enlaces || []).filter(function (e) { return window.Captura.claveUrl(e.url) !== window.Captura.claveUrl(y.url); });
+    ins.enlaces.push({ url: y.url, host: y.host || '', sku: y.sku || '' });
+    if (ins.enlaces.length > 12) ins.enlaces.shift();
+  };
+  function badgesWeb(o, ins, s) {
+    const provNuevo = !o.proveedorId && !(s.proveedores || []).some(function (p) { return E.normNombre(p.nombre) === E.normNombre(o.lugar) || (p.alias || []).some(function (a) { return E.normNombre(a) === E.normNombre(o.lugar); }); });
+    return h('div', { class: 'row gap wrap' },
+      o.fuente === 'web' && o.url ? h('a', { href: o.url, target: '_blank', rel: 'noopener', class: 'badge info' }, '🌐 desde web ↗') : null,
+      ins && ins.propuesto ? App.badge('🆕 producto nuevo', 'warn') : null,
+      provNuevo && o.lugar ? App.badge('🏪 proveedor nuevo', 'warn') : null,
+      o.hastaPorConfirmar ? App.badge('📅 fecha por confirmar', 'warn') : null);
+  }
+
   function bandeja() {
     const s = Store.get(), ctx = App.ctx();
     const pend = s.ofertas.filter(function (o) { return o.pendiente; }).sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
@@ -4894,16 +5256,18 @@ window.CLOUD = {
       Store.mutate(function (st) {
         st.ofertas.forEach(function (x) { if (x.insumoId === o.insumoId) x.preferida = (x.id === o.id); });
         const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.revisadoPor = yo().nombre;
+        App.aprenderCotizacion(st, y);
       });
       App.toast('Ahora se usa la cotización de ' + (o.lugar || 'ese lugar'));
     };
     const alternativa = function (o) {
-      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = false; y.revisadoPor = yo().nombre; });
+      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = false; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
       App.toast('Guardada como alternativa');
     };
     // oferta temporal: se usa en los costos hasta su fecha de término y luego vuelve sola al precio normal
     const usarMientrasDure = function (o) {
-      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = true; y.revisadoPor = yo().nombre; });
+      if (o.hastaPorConfirmar) { App.toast('Primero confirma hasta cuándo dura la oferta (fecha en la fila)'); return; }
+      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = true; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
       App.toast('Se usará hasta el ' + App.fechaCorta(o.temporal.hasta) + '; después los costos vuelven solos al precio normal');
     };
     const descartar = function (o) {
@@ -4913,18 +5277,22 @@ window.CLOUD = {
       h('thead', null, h('tr', null, ['Insumo', 'Dónde / quién', 'Formato y precio', 'vs. en uso', 'Impacto/mes', ''].map(function (t, i) { return h('th', { class: i === 3 || i === 4 ? 'r' : '' }, t); }))),
       h('tbody', null, pend.map(function (o) {
         const ins = s.insumos.find(function (i) { return i.id === o.insumoId; }) || { nombre: '?', unidad: 'g' };
+        const fijarHasta = function (v) { Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); if (v && y.temporal) { y.temporal.hasta = v; delete y.hastaPorConfirmar; } }); };
         const actual = E.costoInsumo(ctx, o.insumoId);
         const nuevo = E.costoNetoOferta(ctx, o);
         const dif = actual.missing ? null : (nuevo - actual.unit) / actual.unit * 100;
         const mes = actual.missing ? null : (nuevo - actual.unit) * (uso.get(o.insumoId) || 0) * 4.33;
         return h('tr', null,
           h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(o.insumoId) }, ins.nombre), h('div', null, h('small', null, (App.usoMap().get(o.insumoId) || []).length + ' platos'))),
-          h('td', null, o.temporal ? h('div', null, App.badgeTemporal(o)) : null, App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
+          h('td', null, badgesWeb(o, ins, s), o.temporal ? h('div', null, App.badgeTemporal(o)) : null,
+            o.hastaPorConfirmar ? h('div', { class: 'row gap' }, h('small', { class: 'mut' }, 'dura hasta'), h('input', { type: 'date', min: App.hoy(), 'data-fk': 'hasta-' + o.id, onchange: function (ev) { fijarHasta(ev.target.value); } })) : null,
+            App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
           h('td', null, App.clp(o.precio) + ' / ' + o.formatoLabel, h('div', null, h('small', null, App.costoVisible(nuevo, ins.unidad) + ' neto'))),
           h('td', { class: 'r ' + (dif == null ? '' : dif < 0 ? 'good-t' : 'bad-t') }, dif == null ? 'sin precio actual' : (dif > 0 ? '+' : '') + App.num(dif, 0) + '%',
             actual.oferta ? h('div', null, h('small', { class: 'mut' }, 'hoy ' + App.costoVisible(actual.unit, ins.unidad))) : null),
           h('td', { class: 'r ' + (mes == null ? '' : mes < 0 ? 'good-t' : 'bad-t') }, mes == null ? '—' : App.sg(mes)),
-          h('td', { class: 'nowrap' }, o.temporal ? App.btn('Usar mientras dure', function () { usarMientrasDure(o); }, 'small primary', 'Se usa en los costos hasta su fecha de término')
+          h('td', { class: 'nowrap' }, ins.propuesto ? App.btn('Completar producto', function () { App.go('insumos', ins.id); }, 'small primary', 'Es un producto nuevo: revisa su categoría, unidad y rendimiento y valídalo antes de usar esta cotización')
+            : o.temporal ? App.btn('Usar mientras dure', function () { usarMientrasDure(o); }, 'small primary', 'Se usa en los costos hasta su fecha de término')
             : App.btn('Usar esta', function () { usar(o); }, 'small primary'), App.btn('Alternativa', function () { alternativa(o); }, 'small', 'Aprobar sin usarla todavía (queda para comparar)'),
             App.btn('✕', function () { descartar(o); }, 'small ghost', 'Descartar')));
       })))) : App.empty('No hay cotizaciones nuevas. Las que registren tú o el equipo aparecerán aquí.'),
@@ -4953,7 +5321,249 @@ window.CLOUD = {
   }
 
   App.views.cotizaciones = function () {
-    return h('div', { class: 'stack' }, formulario(), App.esStaff() ? bandeja() : null, mias());
+    return h('div', { class: 'stack' },
+      h('div', { class: 'card row gap wrap' }, h('b', null, '¿Lo viste en una página web?'),
+        h('a', { href: '#/capturar', class: 'btn primary', onclick: function () { App.ui.cap = {}; } }, '➕ Cotizar desde una página o enlace'),
+        h('small', { class: 'mut' }, 'Precio, formato y tienda se llenan solos.')),
+      formulario(), App.esStaff() ? bandeja() : null, mias());
+  };
+})();
+
+/* src/ui/capturar.js */
+/* Cotización rápida: recibe lo que el botón "➕ Cotizar" leyó en la página de un proveedor (o un enlace pegado
+ * desde el celular), lo muestra ya interpretado y lo envía con un clic. Lo que la persona no sepa (fecha de término
+ * de una oferta, datos del proveedor, categoría de un producto nuevo) lo completa admin/gerente al revisar. */
+(function () {
+  'use strict';
+  const App = window.App, h = App.h, E = window.Engine, Store = window.Store, C = window.Captura;
+  const SS = 'colaciones.captura';
+  const NUEVO = '__nuevo';
+  const UNIDADES = [['g', 'gramos (se compra por peso)'], ['ml', 'mililitros (líquidos)'], ['un', 'unidades']];
+
+  function yo() {
+    const N = App.nube;
+    if (N.activo && N.perfil) return { id: N.user.id, nombre: N.perfil.nombre || N.perfil.email };
+    return { id: 'local', nombre: 'Yo' };
+  }
+  function masDias(n) { return E.fechaMenos(App.hoy(), -n); }
+  function finDeMes() { const d = new Date(App.hoy() + 'T12:00:00'); return new Date(d.getFullYear(), d.getMonth() + 1, 0, 12).toISOString().slice(0, 10); }
+  function domingo() { const d = new Date(App.hoy() + 'T12:00:00'); return masDias((7 - d.getDay()) % 7); }
+
+  /* ---------- llegada: "#/capturar?d=<json>" (del botón) ---------- */
+  App.recibirCaptura = function (query) {
+    const m = /(?:^|&)d=([^&]*)/.exec(query || '');
+    if (!m) return;
+    try {
+      const raw = JSON.parse(decodeURIComponent(m[1]));
+      if (!raw || !raw.url) return;
+      try { sessionStorage.setItem(SS, JSON.stringify(raw)); } catch (e) { /* sin sessionStorage: igual funciona mientras no se recargue */ }
+      App.ui.cap = { raw: raw };
+    } catch (e) { App.ui.cap = { error: 'No se pudo leer la página. Intenta de nuevo o pega el enlace.' }; }
+    // la dirección queda limpia (si hay que iniciar sesión primero, los datos esperan en sessionStorage)
+    try { history.replaceState(null, '', location.pathname + location.search + '#/capturar'); } catch (e) { /* navegador antiguo */ }
+  };
+  function capturaActual() {
+    const U = App.ui.cap = App.ui.cap || {};
+    if (!U.raw && !U.enviado) { try { const g = sessionStorage.getItem(SS); if (g) U.raw = JSON.parse(g); } catch (e) { /* nada guardado */ } }
+    return U;
+  }
+  function olvidar() { try { sessionStorage.removeItem(SS); } catch (e) { /* sin sessionStorage */ } }
+
+  /* ---------- formulario prellenado ---------- */
+  function iniciar(U) {
+    const s = Store.get(), r = C.interpretar(U.raw, s);
+    U.r = r;
+    U.F = {
+      insumoId: r.insumo ? r.insumo.id : '', nombreNuevo: r.nombre, unidadNueva: r.unidadNueva,
+      precio: r.precio, precioNormal: r.precioNormal, oferta: !!r.precioNormal, hasta: '',
+      promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: '', fq: null, fl: ''
+    };
+    elegirFormato(U);
+  }
+  function unidadElegida(U) {
+    const F = U.F;
+    if (F.insumoId === NUEVO) return F.unidadNueva;
+    const ins = App.insumo(F.insumoId);
+    return ins ? ins.unidad : null;
+  }
+  function elegirFormato(U) {
+    const u = unidadElegida(U), f = u ? U.r.formatos[u] : null;
+    U.F.fq = f ? f.qty : null; U.F.fl = f ? f.label : '';
+  }
+
+  function precioPorBase(precio, qty, unidad) {
+    if (!(precio > 0) || !(qty > 0)) return '—';
+    const u = precio / qty;
+    return unidad === 'g' ? App.clp(u * 1000) + '/kg' : unidad === 'ml' ? App.clp(u * 1000) + '/L' : App.clpU(u) + '/un';
+  }
+
+  function enviar(U) {
+    const F = U.F, r = U.r, staff = App.esStaff(), u = yo(), hoy = App.hoy();
+    const nuevo = F.insumoId === NUEVO;
+    if (!F.insumoId) { App.toast('Elige qué insumo es, o marca "Es un producto nuevo"'); return; }
+    if (nuevo && !(F.nombreNuevo || '').trim()) { App.toast('Escribe el nombre del producto nuevo'); return; }
+    if (nuevo) {
+      const ya = App.insumoPorNombre(F.nombreNuevo);
+      if (ya) { App.toast('Ya existe "' + ya.nombre + '": lo dejé elegido'); F.insumoId = ya.id; elegirFormato(U); App.render(); return; }
+    }
+    if (!(F.precio > 0)) { App.toast('Escribe el precio que se paga'); return; }
+    if (!(F.fq > 0)) { App.toast('Indica cuánto trae el envase (formato)'); return; }
+    if (!(F.lugar || '').trim()) { App.toast('Indica la tienda o proveedor'); return; }
+    if (F.oferta && F.precioNormal != null && !(F.precioNormal > F.precio)) { App.toast('El precio normal debe ser mayor que el de oferta'); return; }
+    const unidad = unidadElegida(U);
+    const notas = [r.compraMinima ? 'Compra mínima ' + r.compraMinima + ' un' : '', (F.nota || '').trim()].filter(Boolean).join(' · ');
+    const hasta = F.hasta || masDias(7);
+    let insumoId = F.insumoId, ids = [];
+    Store.mutate(function (st) {
+      if (nuevo) {
+        insumoId = Store.uid('INS-');
+        st.insumos.push({ id: insumoId, nombre: F.nombreNuevo.trim(), categoria: 'Por clasificar', unidad: unidad, rendimiento: 1, familia: null, dieta: null,
+          propuesto: true, autor: u.nombre, autorId: u.id, propuestoEl: hoy });
+      }
+      const antes = (st.proveedores || []).length;
+      const prov = staff ? App.vincularProveedor(st, F.lugar) : null;   // quien no es staff no edita proveedores: se vincula al revisar
+      if (prov && (st.proveedores || []).length > antes) prov.porCompletar = true;
+      const base = { insumoId: insumoId, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(),
+        formatoLabel: F.fl || unidad, formatoQty: F.fq, rendimiento: null, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
+        pendiente: !staff, autor: u.nombre, autorId: u.id, nota: notas, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
+      const promo = F.promo && r.promoCantidad ? { minimo: r.promoCantidad.minimo, precio: r.promoCantidad.precio, desde: hoy, hasta: masDias(7), hastaPorConfirmar: true } : undefined;
+      const lista = [];
+      // oferta con precio normal visible: se guardan las dos (la normal es el precio de reposición)
+      if (F.oferta && F.precioNormal > F.precio) lista.push(Object.assign({}, base, { precio: F.precioNormal, promoCantidad: promo }));
+      lista.push(Object.assign({}, base, { precio: F.precio, promoCantidad: F.oferta ? undefined : promo,
+        temporal: F.oferta ? { hasta: hasta } : undefined, hastaPorConfirmar: F.oferta && !F.hasta ? true : undefined }));
+      lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); if (staff) App.aprenderCotizacion(st, o); });
+    });
+    olvidar();
+    App.ui.cap = { enviado: { n: ids.length, nombre: nuevo ? F.nombreNuevo.trim() : (App.insumo(insumoId) || {}).nombre, nuevo: nuevo, staff: staff } };
+    App.render();
+  }
+
+  /* ---------- pantallas ---------- */
+  function pegarEnlace(U) {
+    const enviarEnlace = function () {
+      const raw = C.desdeUrl(U.enlace);
+      if (!raw) { App.toast('Pega la dirección completa (empieza con https://)'); return; }
+      App.ui.cap = { raw: raw };
+      try { sessionStorage.setItem(SS, JSON.stringify(raw)); } catch (e) { /* sin sessionStorage */ }
+      App.render();
+    };
+    return App.card('📋 Cotizar desde un enlace', h('div', { class: 'stack' },
+      h('p', { class: 'help' }, 'En el celular: en la página del producto toca ', h('b', null, 'Compartir → Copiar enlace'), ', pégalo aquí y escribe el precio. Lo demás se completa solo.'),
+      h('div', { class: 'row gap wrap' },
+        h('input', { type: 'url', class: 'wide', 'data-fk': 'cap-enlace', value: U.enlace || '', placeholder: 'https://www.jumbo.cl/…', inputmode: 'url',
+          oninput: function (ev) { U.enlace = ev.target.value; }, onkeydown: function (ev) { if (ev.key === 'Enter') enviarEnlace(); } }),
+        App.btn('Continuar', enviarEnlace, 'primary'))));
+  }
+
+  function instalarBoton() {
+    const appUrl = location.href.split('#')[0];
+    const local = /^file:/.test(appUrl);
+    const enlace = h('a', { class: 'btn primary marcador', href: C.marcador(appUrl), title: 'Arrástrame a la barra de favoritos',
+      onclick: function (ev) { ev.preventDefault(); App.toast('No lo hagas clic aquí: arrástralo a la barra de favoritos'); } }, '➕ Cotizar');
+    return App.card('Botón ➕ Cotizar (computador)', h('div', { class: 'stack' },
+      local ? h('p', { class: 'bad-t' }, 'Este botón funciona con la app publicada en internet, no con el archivo local.') : null,
+      h('ol', { class: 'help pasos' },
+        h('li', null, 'Muestra la barra de favoritos de Chrome: ', h('b', null, 'Ctrl + Mayús + B'), '.'),
+        h('li', null, 'Arrastra este botón hasta la barra: ', enlace),
+        h('li', null, 'En la página de un producto (Jumbo, Lider, Unimarc, una distribuidora…) haz clic en ', h('b', null, '➕ Cotizar'),
+          ': se abre esta app con el producto, el precio y el formato ya escritos. Revisa y envía.')),
+      h('p', { class: 'help' }, 'Si Chrome bloquea la ventana nueva, acepta "Permitir ventanas emergentes" para ese sitio una vez.')));
+  }
+
+  function listo(U) {
+    const e = U.enviado;
+    return App.card('✓ Cotización enviada', h('div', { class: 'stack' },
+      h('p', null, e.n === 2 ? 'Se guardaron dos precios de ' : 'Se guardó el precio de ', h('b', null, e.nombre || 'el producto'),
+        e.n === 2 ? ': la oferta 🔥 y el precio normal.' : '.'),
+      h('p', { class: 'help' }, e.staff ? 'Quedó como alternativa: para usarla en los costos márcala en Cotizaciones o en Insumos.'
+        : 'El gerente la revisa y decide si se usa.' + (e.nuevo ? ' Como es un producto nuevo, también completará sus datos.' : '')),
+      h('div', { class: 'row gap wrap' },
+        App.btn('Cerrar esta pestaña', function () { window.close(); setTimeout(function () { App.toast('Ciérrala con la ✕ de la pestaña'); }, 300); }, 'primary'),
+        App.btn('Cotizar otro por enlace', function () { App.ui.cap = {}; App.render(); }),
+        App.btn('Ver mis cotizaciones', function () { App.ui.cap = {}; App.go('cotizaciones'); }))));
+  }
+
+  function formulario(U) {
+    const s = Store.get(), F = U.F, r = U.r;
+    const unidad = unidadElegida(U);
+    const ins = F.insumoId && F.insumoId !== NUEVO ? App.insumo(F.insumoId) : null;
+    const sugIds = new Set(r.sugerencias.map(function (i) { return i.id; }));
+    const resto = s.insumos.filter(function (i) { return !sugIds.has(i.id) && (i.categoria !== 'Envases' || App.esStaff()); })
+      .slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); });
+    const selIns = h('select', { 'data-fk': 'cap-ins', class: 'wide', onchange: function (ev) { F.insumoId = ev.target.value; elegirFormato(U); App.render(); } },
+      h('option', { value: '' }, '— Elige qué insumo es —'),
+      r.sugerencias.length ? h('optgroup', { label: 'Parecidos' }, r.sugerencias.map(function (i) { return h('option', { value: i.id }, i.nombre); })) : null,
+      h('optgroup', { label: 'Todos' }, resto.map(function (i) { return h('option', { value: i.id }, i.nombre); })),
+      h('optgroup', { label: 'No está en la lista' }, h('option', { value: NUEVO }, '🆕 Es un producto nuevo')));
+    selIns.value = F.insumoId;
+    const fmt = unidad ? r.formatos[unidad] : null;
+
+    return h('div', { class: 'stack' },
+      App.card('Cotización rápida', h('div', { class: 'stack' },
+        h('div', { class: 'cap-prod' },
+          r.imagen ? h('img', { src: r.imagen, alt: '', class: 'cap-img', referrerpolicy: 'no-referrer', onerror: function (ev) { ev.target.remove(); } }) : null,
+          h('div', null,
+            h('div', { class: 'nm' }, r.nombre || 'Producto sin nombre'),
+            h('small', null, [r.marca, r.sitio].filter(Boolean).join(' · ')),
+            r.url ? h('div', null, h('a', { href: r.url, target: '_blank', rel: 'noopener' }, h('small', null, 'Ver la página ↗'))) : null)),
+
+        h('label', { class: 'block' }, 'Insumo', selIns,
+          U.r.recordado && ins ? h('small', { class: 'good-t' }, '✓ Ya se había cotizado este producto como "' + ins.nombre + '"') : null,
+          !F.insumoId && r.sugerencias.length ? h('small', { class: 'mut' }, 'Los más parecidos aparecen primero.') : null),
+        F.insumoId === NUEVO ? h('div', { class: 'form-grid' },
+          h('label', null, 'Nombre del producto nuevo', App.textInput({ fk: 'cap-nuevo', value: F.nombreNuevo, ph: 'ej. Pasta de choclo', onChange: function (v) { F.nombreNuevo = v; } })),
+          h('label', null, 'Se mide en', App.select({ fk: 'cap-unidad', value: F.unidadNueva, options: UNIDADES, onChange: function (v) { F.unidadNueva = v; elegirFormato(U); App.render(); } })),
+          h('small', { class: 'help' }, 'Basta con el nombre: el gerente completa categoría y demás antes de usarlo en recetas.')) : null,
+
+        h('div', { class: 'form-grid' },
+          h('label', null, F.oferta ? 'Precio de oferta (lo que se paga)' : 'Precio (lo que se paga)',
+            App.numInput({ fk: 'cap-precio', cls: 'grande', value: F.precio, ph: 'ej. 2990', onChange: function (n) { F.precio = n; App.render(); }, onEmpty: function () { F.precio = null; } }),
+            r.fuentePrecio === 'visible' || !r.precio ? null : h('small', { class: 'mut' }, 'Revisa que sea el precio que muestra la página.')),
+          h('label', null, 'Tienda o proveedor', App.textInput({ fk: 'cap-lugar', value: F.lugar, onChange: function (v) { F.lugar = v; } }),
+            !r.proveedor && F.lugar ? h('small', { class: 'mut' }, '🏪 Proveedor nuevo: basta el nombre, el gerente completa el resto.') : null),
+          h('label', null, 'Marca (opcional)', App.textInput({ fk: 'cap-marca', value: F.marca, onChange: function (v) { F.marca = v; } }))),
+
+        unidad ? h('div', { class: 'stack' },
+          h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'El envase trae'),
+            App.numInput({ fk: 'cap-fq', cls: 'w80', value: F.fq, ph: 'cantidad', onChange: function (n) { F.fq = n; App.render(); }, onEmpty: function () { F.fq = null; } }),
+            h('small', null, unidad), h('span', { class: 'mut' }, 'como'),
+            App.textInput({ fk: 'cap-fl', cls: 'w120', value: F.fl, ph: 'ej. bolsa 1 kg', onChange: function (v) { F.fl = v; } })),
+          fmt && fmt.revisar ? h('small', { class: 'bad-t' }, '⚠ Según el precio por kilo/litro de la página serían ' + App.cantidad(fmt.revisar, unidad) + ': revisa el formato.') : null,
+          !fmt && Object.keys(r.formatos).length ? h('small', { class: 'mut' }, 'La página dice: ' + Object.keys(r.formatos).map(function (k) { return r.formatos[k].label; }).join(' · ')) : null,
+          h('div', { class: 'help' }, 'Equivale a ', h('b', null, precioPorBase(F.precio, F.fq, unidad)), F.oferta && F.precioNormal ? ' (normal ' + precioPorBase(F.precioNormal, F.fq, unidad) + ')' : '', '.')) : null,
+
+        h('div', { class: 'stack' },
+          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.oferta, onchange: function (ev) { F.oferta = ev.target.checked; App.render(); } }), ' 🔥 Está en oferta'),
+          F.oferta ? h('div', { class: 'stack indent' },
+            h('label', { class: 'row gap wrap' }, h('span', { class: 'mut' }, 'Precio normal (sin oferta)'),
+              App.numInput({ fk: 'cap-normal', cls: 'w100', value: F.precioNormal, ph: 'si lo sabes', onChange: function (n) { F.precioNormal = n; App.render(); }, onEmpty: function () { F.precioNormal = null; } })),
+            F.precioNormal > F.precio ? h('small', { class: 'mut' }, 'Se guardan los dos: la oferta y el precio normal, que es al que vuelve cuando la oferta termina.') : null,
+            h('div', { class: 'row gap wrap' }, h('span', { class: 'mut' }, 'Dura hasta'),
+              h('div', { class: 'chips' },
+                [['', 'no sé'], [App.hoy(), 'hoy'], [domingo(), 'domingo'], [finDeMes(), 'fin de mes']].map(function (c) {
+                  return App.chip(c[1], F.hasta === c[0], function () { F.hasta = c[0]; App.render(); });
+                })),
+              h('input', { type: 'date', value: F.hasta || '', min: App.hoy(), 'data-fk': 'cap-hasta', onchange: function (ev) { F.hasta = ev.target.value; App.render(); } }))) : null,
+          r.promoCantidad ? h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.promo, onchange: function (ev) { F.promo = ev.target.checked; } }),
+            ' 🏷️ Promo: llevando ' + r.promoCantidad.minimo + ', ' + App.clp(r.promoCantidad.precio) + ' c/u') : null,
+          r.compraMinima ? h('small', { class: 'mut' }, 'La página exige compra mínima de ' + r.compraMinima + ' unidades (queda anotado).') : null),
+
+        h('label', { class: 'block' }, 'Nota (opcional)', App.textInput({ fk: 'cap-nota', value: F.nota, ph: 'ej. buena calidad, solo despacho los martes…', onChange: function (v) { F.nota = v; } })),
+        h('div', { class: 'row gap wrap' },
+          App.btn(App.esStaff() ? 'Guardar cotización' : 'Enviar cotización', function () { enviar(U); }, 'primary grande'),
+          App.btn('Descartar', function () { olvidar(); App.ui.cap = {}; App.render(); }, 'ghost')))));
+  }
+
+  App.views.capturar = function () {
+    const U = capturaActual();
+    if (U.enviado) return listo(U);
+    if (U.error) { const e = U.error; App.ui.cap = {}; App.toast(e); }
+    if (U.raw) {
+      if (!U.r || U.rawUsado !== U.raw) { iniciar(U); U.rawUsado = U.raw; }
+      return formulario(U);
+    }
+    return h('div', { class: 'stack' }, pegarEnlace(U), instalarBoton());
   };
 })();
 
@@ -5283,6 +5893,9 @@ window.CLOUD = {
         h('td', null, App.textInput({ fk: 'pv-n-' + p.id, value: p.nombre, onChange: function (v) { if (v.trim()) renombrar(p, v); }, onCommit: function () { finRenombrar(p); } }),
           (p.alias || []).length ? h('div', null, h('small', { title: 'También se reconoce como' }, '≈ ' + p.alias.join(', '))) : null,
           nombres.get(E.normNombre(p.nombre)) > 1 ? h('div', null, App.badge('nombre repetido: usa Fusionar…', 'bad')) : null,
+          p.porCompletar ? h('div', { class: 'row gap' }, App.badge('🏪 nuevo: completa factura y despacho', 'warn'),
+            App.btn('✓ Listo', function () { upd(p, function (x) { delete x.porCompletar; }); }, 'small ghost', 'Ya revisaste sus datos')) : null,
+          p.web ? h('div', null, h('a', { href: p.web, target: '_blank', rel: 'noopener' }, h('small', null, p.web.replace(/^https?:\/\/(www\.)?/, '') + ' ↗'))) : null,
           h('div', null, p.rut ? h('small', { class: E.validarRut(p.rut) ? '' : 'bad-t' }, 'RUT ' + p.rut + (p.razonSocial ? ' · ' + p.razonSocial : '')) :
             p.factura !== 'no' ? App.badge('faltan datos de facturación', 'warn') : null),
           h('div', { class: 'row gap wrap' }, App.badgeMembresia(p),
