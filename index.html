@@ -263,9 +263,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T07:33:28Z">
+<meta name="build" content="2026-10-04T07:44:00Z">
 <script>
-window.BUILD = "2026-10-04T07:33:28Z";
+window.BUILD = "2026-10-04T07:44:00Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2946,11 +2946,12 @@ window.CLOUD = {
     });
     return { texto: t, variedades: out };
   }
-  // etiquetas: Sin gluten, Proteico (alto en proteínas), Orgánico
+  // etiquetas: Sin gluten, Sin lactosa, Proteico (alto en proteínas), Orgánico
   function etiquetas(textos) {
     const t = norm([].concat(textos).filter(Boolean).join(' '));
     const out = [];
     if (/\b(sin gluten|libre de gluten|gluten free|celiac)/.test(t)) out.push('Sin gluten');
+    if (/\b(sin lactosa|libre de lactosa|deslactosad[oa]s?|zero lactosa|lactose free|lactosa free)/.test(t)) out.push('Sin lactosa');
     if (/\b(proteico|proteica|alto en proteina|alta en proteina|high protein|protein|whey)\b/.test(t)) out.push('Proteico');
     if (/\b(organico|organica|organic|bio)\b/.test(t)) out.push('Orgánico');
     return out;
@@ -3509,7 +3510,7 @@ window.CLOUD = {
     ['ins-fam', 'Agrupa insumos equivalentes (ej. ave, pescado-blanco) para sugerir sustitutos. Elige una de la lista o crea una con "+ Nueva familia…". Sin familia = sin sustitutos.'],
     ['ins-dieta', 'Dieta del insumo: vegano, vegetariano (lácteos/huevo), pescetariano (pescados y mariscos) u omnívoro (carnes y aves). Evita que un plato vegano o vegetariano sugiera lo que no corresponde.'],
     ['ins-variedad', 'Presentación que distingue a este insumo de otros parecidos: granel, deshuesada, en aceite, congelado, a la chilena… Ayuda a decidir qué cotizaciones unir.'],
-    ['ins-etiquetas', 'Marcas especiales del insumo: Sin gluten, Proteico (alto en proteínas) u Orgánico. Haz clic para activar o quitar.'],
+    ['ins-etiquetas', 'Marcas especiales del insumo: Sin gluten, Sin lactosa, Proteico (alto en proteínas) u Orgánico. Haz clic para activar o quitar.'],
     ['nom-', 'Nombre de la cuenta. Edítalo y sal del campo para guardarlo; también se corrige en sus cotizaciones y avisos.'],
     ['promo-nueva', 'Crea una promoción de despacho para ese proveedor y abre su ficha para completarla: fechas, costo y desde qué monto es gratis.'],
     ['cap-ins', 'Qué insumo es. Va elegido si la app lo reconoce; si no, queda como producto nuevo y el gerente lo completa. Si ves el que corresponde en "¿Es alguno de estos?", tócalo.'],
@@ -4465,7 +4466,7 @@ window.CLOUD = {
   const CATS = ['Carnes de Vacuno', 'Aves y Cerdo', 'Pescados y Mariscos', 'Legumbres y Granos', 'Abarrotes y Condimentos', 'Verduras y Frutas (Cardonal)', 'Lácteos y Huevos', 'Bebestibles', 'Envases'];
   const UNIDADES = [['g', 'gramos (g)'], ['ml', 'mililitros (ml)'], ['un', 'unidades (un)']];
   const DIETAS = [['vegano', 'Vegano'], ['vegetariano', 'Vegetariano (lácteos, huevo)'], ['pescetariano', 'Pescetariano (pescados y mariscos)'], ['omni', 'Omnívoro (carnes y aves)']];
-  const ETIQUETAS = ['Sin gluten', 'Proteico', 'Orgánico'];
+  const ETIQUETAS = ['Sin gluten', 'Sin lactosa', 'Proteico', 'Orgánico'];
   const VARIEDADES_BASE = ['tradicional', 'granel', 'a la chilena', 'en aceite', 'en agua', 'deshuesada', 'con piel', 'sin piel', 'congelado', 'fresco', 'IQF', 'porcionada'];
   const FUENTES = [['estimado', 'Estimado'], ['comprado', 'Comprado'], ['cotizacion', 'Cotización'], ['ODEPA', 'ODEPA']];
 
@@ -6447,7 +6448,7 @@ window.CLOUD = {
           h('label', null, 'Nombre del producto nuevo', App.textInput({ fk: 'cap-nuevo', value: F.nombreNuevo, ph: 'ej. Pasta de choclo', onChange: function (v) { F.nombreNuevo = v; } })),
           h('label', null, 'Se mide en', App.select({ fk: 'cap-unidad', value: F.unidadNueva, options: UNIDADES, onChange: function (v) { F.unidadNueva = v; elegirFormato(U); App.render(); } })),
           h('label', null, 'Variedad (opcional)', App.textInput({ fk: 'cap-variedad', value: F.variedad, ph: 'ej. granel, deshuesada, en aceite', onChange: function (v) { F.variedad = v; } })),
-          h('div', { class: 'block' }, h('small', { class: 'mut' }, 'Etiquetas'), h('div', { class: 'chips' }, ['Sin gluten', 'Proteico', 'Orgánico'].map(function (t) {
+          h('div', { class: 'block' }, h('small', { class: 'mut' }, 'Etiquetas'), h('div', { class: 'chips' }, ['Sin gluten', 'Sin lactosa', 'Proteico', 'Orgánico'].map(function (t) {
             const on = F.etiquetas.indexOf(t) >= 0;
             return App.chip((on ? '✓ ' : '') + t, on, function () { F.etiquetas = on ? F.etiquetas.filter(function (x) { return x !== t; }) : F.etiquetas.concat([t]); App.render(); });
           }))),
