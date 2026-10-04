@@ -246,9 +246,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T03:24:12Z">
+<meta name="build" content="2026-10-04T04:05:02Z">
 <script>
-window.BUILD = "2026-10-04T03:24:12Z";
+window.BUILD = "2026-10-04T04:05:02Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -480,14 +480,71 @@ window.CLOUD = {
   // una oferta que exige membresía solo vale si la membresía de su proveedor está activa
   function ofertaHabilitada(ctx, o) { return !o.requiereMembresia || membresiaActiva(ctx, proveedorDe(ctx, o)); }
 
-  // estado de una promoción de despacho: vigente | programada | vencida | inactiva | sin-membresia
+  // estado de una promoción de despacho: vigente | programada | vencida | inactiva | usada (solo primera compra, ya usada) | sin-membresia
   function estadoPromo(ctx, p, pr) {
     const hoy = hoyISO(ctx.p);
     if (pr.activa === false) return 'inactiva';
     if (pr.desde && pr.desde > hoy) return 'programada';
     if (pr.hasta && pr.hasta < hoy) return 'vencida';
+    if (promoPrimeraUsada(ctx, p, pr)) return 'usada';
     if (pr.requiereMembresia && !membresiaActiva(ctx, p)) return 'sin-membresia';
     return 'vigente';
+  }
+  // ¿ya se usó la promoción de "solo primera compra"? Sí si se marcó como usada o si hay una compra registrada a ese proveedor
+  function promoPrimeraUsada(ctx, p, pr) {
+    if (!pr.soloPrimeraCompra) return false;
+    return !!pr.usada || ((ctx.state && ctx.state.compras) || []).some(function (c) { return c.proveedorId === p.id; });
+  }
+
+  /* Radar de promociones de despacho: para cada promoción que vale hoy o empieza pronto, cuánto de tu compra semanal
+   * podrías hacer en ese proveedor con los productos que ahí salen más baratos que como compras hoy, si con eso se alcanza
+   * el "gratis desde" / compra mínima, y cuánto ahorras (productos + despacho). Sirve para esperar el buen momento y
+   * juntar una buena compra. items = [{recetaId, porciones}] (el plan semanal). */
+  function radarPromosDespacho(ctx, items) {
+    const filas = listaCompras(ctx, items).filter(function (f) { return f.usable > 0 && !f.missing; });
+    const hoy = hoyISO(ctx.p), out = [];
+    (ctx.state.proveedores || []).forEach(function (p) {
+      if (p.activo === false) return;
+      const prov = ctx.proveedores.get(p.id) || p, d = prov.despacho || {};
+      (prov.promosDespacho || []).forEach(function (pr) {
+        const est = estadoPromo(ctx, prov, pr);
+        if (est !== 'vigente' && est !== 'programada') return;
+        if (promoPrimeraUsada(ctx, prov, pr)) return;
+        const gd = Number(pr.gratisDesde) || 0, cp = num(pr.costo), minimo = Number(pr.minimoPedido) || 0;
+        const costoNormal = d.ofrece ? Number(d.costo) || 0 : null;
+        const costoPromo = cp != null && !(gd > 0 && cp === 0) ? cp : costoNormal;
+        const umbral = gd > 0 ? gd : minimo;
+        let cesta = 0, ahorroProductos = 0;
+        const productos = [];
+        filas.forEach(function (f) {
+          const aqui = f.proveedorId === prov.id;
+          let mejor = null;
+          (ctx.ofertasPorInsumo.get(f.insumoId) || []).forEach(function (o) {
+            if (o.disponible === false || o.pendiente || ofertaVencida(ctx, o) || !ofertaHabilitada(ctx, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
+            const pv = proveedorDe(ctx, o);
+            if (!pv || pv.id !== prov.id) return;
+            const c = compraConOferta(ctx, o, f.usable);
+            if (!mejor || c.bruto < mejor.bruto) mejor = c;
+          });
+          if (aqui) { cesta += f.costo; productos.push({ nombre: f.nombre, bruto: f.costo, ahorro: 0, yaAqui: true }); }
+          else if (mejor && mejor.bruto < f.costo - 1) {
+            cesta += mejor.bruto; ahorroProductos += f.costo - mejor.bruto;
+            productos.push({ nombre: f.nombre, bruto: mejor.bruto, ahorro: f.costo - mejor.bruto, yaAqui: false });
+          }
+        });
+        const alcanza = umbral > 0 ? cesta >= umbral : cesta > 0;
+        const costoConPromo = gd > 0 && cesta >= gd ? 0 : costoPromo;   // sobre el 'gratis desde' no se paga; bajo él rige el costo de la promoción (o el normal)
+        const ahorroDespacho = alcanza && costoNormal != null && costoConPromo != null ? Math.max(0, costoNormal - costoConPromo) : 0;
+        productos.sort(function (a, b) { return b.ahorro - a.ahorro; });
+        out.push({ proveedor: prov, promo: pr, estado: est, desde: pr.desde || null, hasta: pr.hasta || null,
+          diasParaEmpezar: pr.desde && pr.desde > hoy ? diasEntre(hoy, pr.desde) : 0, diasRestantes: pr.hasta ? diasEntre(hoy, pr.hasta) : null,
+          umbral: umbral, gratis: gd > 0 || costoPromo === 0, costoNormal: costoNormal, costoPromo: costoPromo, primeraCompra: !!pr.soloPrimeraCompra,
+          cesta: cesta, nProductos: productos.length, productos: productos, ahorroProductos: ahorroProductos, ahorroDespacho: ahorroDespacho,
+          ahorroTotal: ahorroProductos + ahorroDespacho, alcanza: alcanza, falta: umbral > 0 && cesta < umbral ? umbral - cesta : 0 });
+      });
+    });
+    out.sort(function (a, b) { return (b.estado === 'vigente') - (a.estado === 'vigente') || b.alcanza - a.alcanza || b.ahorroTotal - a.ahorroTotal; });
+    return out;
   }
   // condiciones de despacho que valen hoy: las normales (si despacha) + las promociones vigentes
   // alcance 'seleccionados': el mínimo y el "gratis desde" cuentan solo los productos marcados para promociones del proveedor
@@ -1813,7 +1870,7 @@ window.CLOUD = {
     proveedorDe: proveedorDe, daFactura: daFactura, costoBrutoOferta: costoBrutoOferta,
     historialPrecios: historialPrecios, variacionInsumo: variacionInsumo, inflacionCanasta: inflacionCanasta,
     tieneMembresia: tieneMembresia, membresiaActiva: membresiaActiva, ofertaHabilitada: ofertaHabilitada, estadoPromo: estadoPromo,
-    condicionesDespacho: condicionesDespacho, pedidoOnline: pedidoOnline, plazoEntrega: plazoEntrega, brutoSeleccionado: brutoSeleccionado, evaluarMembresias: evaluarMembresias,
+    condicionesDespacho: condicionesDespacho, radarPromosDespacho: radarPromosDespacho, promoPrimeraUsada: promoPrimeraUsada, pedidoOnline: pedidoOnline, plazoEntrega: plazoEntrega, brutoSeleccionado: brutoSeleccionado, evaluarMembresias: evaluarMembresias,
     promoCantidadVigente: promoCantidadVigente, precioPorPack: precioPorPack, opcionesUrgencia: opcionesUrgencia, quiebresProximos: quiebresProximos,
     ofertaVencida: ofertaVencida, diasParaVencer: diasParaVencer, oportunidadActiva: oportunidadActiva,
     sobrestockVigente: sobrestockVigente, sugerenciaOportunidad: sugerenciaOportunidad, ofertasTemporales: ofertasTemporales,
@@ -2946,6 +3003,7 @@ window.CLOUD = {
     ['ins-variedad', 'Presentación que distingue a este insumo de otros parecidos: granel, deshuesada, en aceite, congelado, a la chilena… Ayuda a decidir qué cotizaciones unir.'],
     ['ins-etiquetas', 'Marcas especiales del insumo: Sin gluten, Proteico (alto en proteínas) u Orgánico. Haz clic para activar o quitar.'],
     ['nom-', 'Nombre de la cuenta. Edítalo y sal del campo para guardarlo; también se corrige en sus cotizaciones y avisos.'],
+    ['promo-nueva', 'Crea una promoción de despacho para ese proveedor y abre su ficha para completarla: fechas, costo y desde qué monto es gratis.'],
     ['cap-ins', 'Qué insumo es. Va elegido si la app lo reconoce; si no, queda como producto nuevo y el gerente lo completa. Si ves el que corresponde en "¿Es alguno de estos?", tócalo.'],
     ['cap-nuevo', 'Nombre sugerido del producto nuevo, sin marca ni tamaño. Puedes dejarlo como está.'],
     ['cap-unidad', 'Cómo se mide el producto: gramos (peso), mililitros (líquidos) o unidades. Viene sugerido.'],
@@ -6018,7 +6076,7 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
-  const TABS = [['directorio', 'Directorio'], ['urgencias', '🚨 Urgencias'], ['calidad', '⭐ Opiniones de cocina'], ['compras', 'Compras'], ['oportunidades', 'Ofertas y sobrestock'], ['evolucion', 'Evolución de precios'], ['iva', 'IVA y crédito fiscal'], ['canasta', 'Evaluación y canasta óptima']];
+  const TABS = [['directorio', 'Directorio'], ['urgencias', '🚨 Urgencias'], ['calidad', '⭐ Opiniones de cocina'], ['compras', 'Compras'], ['promos', '🚚 Promos de despacho'], ['oportunidades', 'Ofertas y sobrestock'], ['evolucion', 'Evolución de precios'], ['iva', 'IVA y crédito fiscal'], ['canasta', 'Evaluación y canasta óptima']];
   const TIPOS = [['supermercado', 'Supermercado'], ['mayorista', 'Mayorista'], ['feria', 'Feria / mercado'], ['carniceria', 'Carnicería / especialista'], ['distribuidora', 'Distribuidora'], ['otro', 'Otro']];
   const FACTURA = [['si', 'Da factura'], ['a_pedido', 'Factura a pedido'], ['no', 'Sin factura']];
 
@@ -6081,7 +6139,7 @@ window.CLOUD = {
     if (!E.tieneMembresia(p)) return null;
     return E.membresiaActiva(App.ctx(), p) ? App.badge('⭐ ' + p.membresia.nombre, 'good') : App.badge('⭐ ' + p.membresia.nombre + ' (inactiva)', '');
   };
-  const ESTADO_PROMO = { vigente: ['vigente', 'good'], programada: ['programada', 'info'], vencida: ['vencida', ''], inactiva: ['desactivada', ''], 'sin-membresia': ['requiere membresía activa', 'warn'] };
+  const ESTADO_PROMO = { vigente: ['vigente', 'good'], programada: ['programada', 'info'], vencida: ['vencida', ''], inactiva: ['desactivada', ''], 'sin-membresia': ['requiere membresía activa', 'warn'], usada: ['ya usada', ''] };
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function avisoNube() {
     const N = App.nube;
@@ -6233,7 +6291,7 @@ window.CLOUD = {
         h('p', { class: 'help' }, 'Los precios marcados "solo online" obligan a pedir online a este proveedor: se reciben con despacho o, si lo permite, retirando el pedido.'),
         h('h4', null, 'Promociones de despacho'),
         promos.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
-          h('thead', null, h('tr', null, ['Promoción', 'Activa', 'Desde', 'Hasta', 'Costo', 'Gratis desde', 'Compra mínima', 'Cuenta', 'Llega en (días)', 'Corte', 'Socio', 'Estado', ''].map(function (t) { return h('th', null, t); }))),
+          h('thead', null, h('tr', null, ['Promoción', 'Activa', 'Desde', 'Hasta', 'Costo', 'Gratis desde', 'Compra mínima', 'Cuenta', 'Llega en (días)', 'Corte', 'Socio', 'Solo 1ª compra', 'Estado', ''].map(function (t) { return h('th', null, t); }))),
           h('tbody', null, promos.map(function (pr, i) {
             const est = ESTADO_PROMO[E.estadoPromo(App.ctx(), p, pr)];
             return h('tr', null,
@@ -6248,6 +6306,8 @@ window.CLOUD = {
               h('td', null, App.numInput({ fk: 'pv-ppl-' + p.id + '-' + i, cls: 'w60', value: pr.plazoDias, ph: '= normal', onChange: function (n) { setP(i, 'plazoDias', n, 'pppl' + p.id + i); }, onEmpty: function () { setP(i, 'plazoDias', null); } })),
               h('td', null, h('input', { type: 'time', class: 'w-hora', value: pr.horaCorte || '', 'data-fk': 'pv-phc-' + p.id + '-' + i, onchange: function (e) { setP(i, 'horaCorte', e.target.value || ''); } })),
               h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: !!pr.requiereMembresia, title: 'Exige la membresía activa', onchange: function (e) { setP(i, 'requiereMembresia', e.target.checked); } })),
+              h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: !!pr.soloPrimeraCompra, title: 'Vale solo en la primera compra a este proveedor', onchange: function (e) { setP(i, 'soloPrimeraCompra', e.target.checked); } }),
+                pr.soloPrimeraCompra ? h('div', null, h('label', { class: 'chk', title: 'Márcala si ya compraste y no lo registraste' }, h('input', { type: 'checkbox', checked: !!pr.usada, onchange: function (e) { setP(i, 'usada', e.target.checked); } }), h('small', null, ' ya usada'))) : null),
               h('td', null, App.badge(est[0], est[1])),
               h('td', null, App.btn('✕', function () { upd(p, function (x) { x.promosDespacho.splice(i, 1); }); }, 'small ghost', 'Eliminar promoción')));
           })))) : h('p', { class: 'help' }, 'Sin promociones. Las condiciones normales son las de la columna Despacho; una promoción vigente se usa en vez de ellas cuando sale más barata o llega antes. Si la promoción cuenta solo "productos seleccionados", marca esos productos en sus ofertas (Insumos y compras).'),
@@ -7067,9 +7127,65 @@ window.CLOUD = {
       membTabla, evTabla);
   }
 
+  /* ================= Promos de despacho (radar para esperar el buen momento) ================= */
+  function promosRadar() {
+    const s = Store.get(), ctx = App.ctx();
+    const filas = E.radarPromosDespacho(ctx, itemsPlan());
+    const vigencia = function (r) {
+      if (r.estado === 'programada') return App.badge('empieza ' + App.fechaCorta(r.desde) + ' (en ' + r.diasParaEmpezar + ' d)', 'info');
+      if (r.hasta) return App.badge('hasta ' + App.fechaCorta(r.hasta) + ' · ' + (r.diasRestantes <= 0 ? 'último día' : 'quedan ' + r.diasRestantes + ' d'), r.diasRestantes <= 3 ? 'warn' : 'good');
+      return App.badge('vigente, sin fecha de término', 'good');
+    };
+    const condicion = function (r) {
+      const partes = [];
+      if (r.gratis && r.umbral > 0) partes.push('despacho gratis sobre ' + App.clp(r.umbral));
+      else if (r.costoPromo != null) partes.push('despacho ' + (r.costoPromo > 0 ? App.clp(r.costoPromo) : 'gratis'));
+      if (!(r.gratis && r.umbral > 0) && r.umbral > 0) partes.push('compra mínima ' + App.clp(r.umbral));
+      return partes.join(' · ');
+    };
+    const nuevaPromo = function (provId) {
+      if (!provId) return;
+      Store.mutate(function (st) {
+        const p = st.proveedores.find(function (x) { return x.id === provId; });
+        p.promosDespacho = (p.promosDespacho || []).concat([{ id: Store.uid('PD-'), nombre: '', activa: true, desde: App.hoy(), hasta: null, costo: null, gratisDesde: null, minimoPedido: null, requiereMembresia: false, soloPrimeraCompra: false, alcance: 'todo', plazoDias: null, horaCorte: '' }]);
+      });
+      App.ui.provAbierto = provId;
+      App.go('proveedores', 'directorio');
+      App.toast('Completa la promoción en la ficha del proveedor (nombre, fechas y "gratis desde")');
+    };
+    const tabla = filas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' },
+      h('thead', null, h('tr', null, ['Proveedor y promoción', 'Vigencia', 'Tu compra semanal aquí', 'Ahorro', ''].map(function (t, i) { return h('th', { class: i === 3 ? 'r' : '' }, t); }))),
+      h('tbody', null, filas.map(function (r) {
+        const top = r.productos.slice(0, 4).map(function (x) { return x.nombre; }).join(', ');
+        return h('tr', null,
+          h('td', null, h('b', null, r.proveedor.nombre), r.promo.nombre ? ' · ' + r.promo.nombre : '',
+            h('div', null, h('small', null, condicion(r))),
+            h('div', { class: 'row gap wrap' }, r.primeraCompra ? App.badge('solo 1ª compra', 'info') : null, r.promo.requiereMembresia ? App.badge('⭐ socio', 'info') : null)),
+          h('td', null, vigencia(r)),
+          h('td', null, r.nProductos ? [App.clp(r.cesta) + ' en ' + r.nProductos + ' producto(s)',
+              h('div', null, h('small', { class: 'mut' }, top + (r.productos.length > 4 ? '…' : ''))),
+              r.umbral > 0 ? (r.alcanza ? h('div', { class: 'good-t' }, '✓ alcanzas los ' + App.clp(r.umbral)) : h('div', { class: 'warn-t' }, 'faltan ' + App.clp(r.falta) + ' para ' + App.clp(r.umbral))) : null]
+            : h('small', { class: 'mut' }, 'Ahí no tienes productos más baratos que hoy (cotiza más para este proveedor)')),
+          h('td', { class: 'r ' + (r.ahorroTotal > 0 ? 'good-t' : '') }, r.ahorroTotal > 0 ? App.clp(r.ahorroTotal) : '—',
+            h('div', null, h('small', { class: 'mut' }, 'productos ' + App.clp(r.ahorroProductos) + (r.ahorroDespacho > 0 ? ' · despacho ' + App.clp(r.ahorroDespacho) : '')))),
+          h('td', null, r.alcanza && r.estado === 'vigente' && r.ahorroTotal > 0 ? App.badge('conviene comprar ahora', 'good') : r.alcanza ? App.badge(r.estado === 'programada' ? 'espera que empiece' : 'alcanzable', 'info') : App.badge('junta más compra', 'warn')));
+      })))) : App.empty('No hay promociones de despacho vigentes o próximas. Agrégalas con el selector de abajo.');
+    const activos = (s.proveedores || []).filter(function (p) { return p.activo !== false; }).sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); });
+    const selNueva = h('select', { 'data-fk': 'promo-nueva', onchange: function (ev) { nuevaPromo(ev.target.value); } },
+      h('option', { value: '' }, '+ Agregar una promoción de despacho a…'), activos.map(function (p) { return h('option', { value: p.id }, p.nombre); }));
+    return h('div', { class: 'stack' },
+      App.card('🚚 Promociones de despacho: ¿es buen momento para comprar?', h('div', { class: 'stack' },
+        h('p', { class: 'help' }, 'Reúne las promociones de despacho que valen hoy o empiezan pronto (ej. "despacho gratis en la primera compra sobre $29.990") y las cruza con tu plan semanal: cuánto de lo que compras saldría más barato en ese proveedor, si con eso alcanzas el mínimo o el despacho gratis, y cuánto ahorras. Cuando diga "conviene comprar ahora", arma esa compra.'),
+        tabla, h('div', null, selNueva))),
+      App.card('Cómo se calcula', h('ul', { class: 'help' },
+        h('li', null, 'Solo cuentan los productos con precio ya aprobado en ese proveedor. Las cotizaciones por revisar no entran hasta aprobarlas.'),
+        h('li', null, 'Una promoción "solo 1ª compra" deja de mostrarse sola cuando registras una compra a ese proveedor, o si la marcas "ya usada" en su ficha.'),
+        h('li', null, 'Para elegir cuándo comprar, revisa también las ofertas temporales que vencen pronto (Ofertas y sobrestock).'))));
+  }
+
   App.views.proveedores = function (arg) {
     const tab = TABS.some(function (t) { return t[0] === arg; }) ? arg : 'directorio';
-    const cuerpo = tab === 'directorio' ? directorio() : tab === 'compras' ? compras() : tab === 'oportunidades' ? oportunidades() : tab === 'urgencias' ? urgencias() : tab === 'calidad' ? calidad() : tab === 'evolucion' ? evolucion() : tab === 'iva' ? iva() : canasta();
+    const cuerpo = tab === 'directorio' ? directorio() : tab === 'compras' ? compras() : tab === 'promos' ? promosRadar() : tab === 'oportunidades' ? oportunidades() : tab === 'urgencias' ? urgencias() : tab === 'calidad' ? calidad() : tab === 'evolucion' ? evolucion() : tab === 'iva' ? iva() : canasta();
     return h('div', { class: 'stack' }, avisoNube(),
       h('div', { class: 'chips big' }, TABS.map(function (t) { return App.chip(t[1], tab === t[0], function () { App.go('proveedores', t[0]); }); })), cuerpo);
   };
