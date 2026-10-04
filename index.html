@@ -263,9 +263,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T10:42:18Z">
+<meta name="build" content="2026-10-04T11:12:36Z">
 <script>
-window.BUILD = "2026-10-04T10:42:18Z";
+window.BUILD = "2026-10-04T11:12:36Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2910,8 +2910,13 @@ window.CLOUD = {
     if (!modal && h1 && h1.innerText) { var pos = completo.indexOf(limpio(h1.innerText, 80).slice(0, 40)); if (pos > 0) ini = pos; }
     var texto = limpio(completo.slice(ini).split(cortes)[0].slice(0, 3500), 20000), re = /(compra m[ií]nima[^\n.]{0,30}|m[ií]nimo de \d+[^\n.]{0,20}|\$\s?[\d.]+(?:,\d+)?\s*(?:x|por|\/)\s*(?:kg|kilo|lt|l|litro|un|unidad|100\s?g|100\s?ml)\b|llev[aá]\s*\d+[^\n.]{0,40}|\d+\s*x\s*\$\s?[\d.]+)/gi, m;
     while ((m = re.exec(texto)) && out.textos.length < 10) out.textos.push(limpio(m[1], 80));
-    // variante elegida en tiendas Shopify (ej. "Posta Paleta - 1 Kilo")
-    try { (window.ShopifyAnalytics.meta.product.variants || []).slice(0, 5).forEach(function (v) { out.variantes.push({ nombre: limpio(v.name, 120), precio: v.price / 100 }); }); } catch (e) { /* no es Shopify */ }
+    // variante elegida en tiendas Shopify (ej. "Posta Paleta - 1 Kilo"): la del enlace (?variant=), la del formulario de compra o la que informa la tienda.
+    // Con varias variantes cada una trae su propio tamaño y precio, así que solo la elegida sirve para cotizar.
+    try {
+      var meta = window.ShopifyAnalytics.meta, vs = meta.product.variants || [];
+      var fid = d.querySelector('form[action*="/cart/add"] [name="id"]'), vid = (location.search.match(/[?&]variant=(\d+)/) || [])[1] || (fid && fid.value) || meta.selectedVariantId;
+      vs.slice(0, 12).forEach(function (v) { out.variantes.push({ nombre: limpio(v.name, 120), precio: v.price / 100, sel: vs.length === 1 || String(v.id) === String(vid) }); });
+    } catch (e) { /* no es Shopify */ }
     if (!appUrl) return out;
     var w = window.open(appUrl + '#/capturar?d=' + encodeURIComponent(JSON.stringify(out)), '_blank');
     if (!w) alert('Permite las ventanas emergentes de este sitio para enviar la cotización a la app.');
@@ -3127,6 +3132,9 @@ window.CLOUD = {
       if (ogOrig > actual) normal = ogOrig;
       fuente = actual ? (deLd ? 'ld' : 'og') : null;
     }
+    // tienda con variantes (tamaños): el precio de la variante elegida es exacto; el visible puede ser el "desde" de otra
+    const vSel = (raw.variantes || []).filter(function (v) { return v.sel && v.precio > 0; })[0];
+    if (vSel && !(raw.modal && raw.modal.nombre)) { actual = vSel.precio; fuente = 'variante'; if (!(normal > actual)) normal = null; }
     // si el texto visible no estaba disponible, pero hay dos precios estructurados distintos: el menor es la oferta
     const dudoso = conocidos.length === 2 && conocidos[0] !== conocidos[1] && conocidos.indexOf(actual) < 0;
     return { actual: actual, normal: normal && normal > actual ? normal : null, fuente: fuente, dudoso: dudoso };
@@ -3188,7 +3196,7 @@ window.CLOUD = {
     const tituloPagina = String(ld.nombre || quitarSitio(og.title) || raw.h1 || quitarSitio(raw.titulo) || raw.nombre || '');
     const nombre = Eng.oracion(tituloPagina, propios);
     const p = precios(raw);
-    const textosFormato = [nombre, raw.h1, (raw.variantes || []).map(function (v) { return v.nombre; }).join(' · '), og.description, ld.descripcion];
+    const textosFormato = [nombre, raw.h1, (raw.variantes || []).filter(function (v) { return v.sel !== false; }).map(function (v) { return v.nombre; }).join(' · '), og.description, ld.descripcion];
     const fmts = formatos(textosFormato);
     const ppu = precioPorUnidad(raw.textos);
     // verificación del formato con el "$x por kg/LT" que muestra la tienda
@@ -6642,7 +6650,7 @@ window.CLOUD = {
         h('div', { class: 'form-grid' },
           h('label', null, F.oferta ? 'Precio de oferta (lo que se paga)' : 'Precio (lo que se paga)',
             App.numInput({ fk: 'cap-precio', cls: 'grande', value: F.precio, ph: 'ej. 2990', onChange: function (n) { F.precio = n; App.render(); }, onEmpty: function () { F.precio = null; } }),
-            r.fuentePrecio === 'visible' || !r.precio ? null : h('small', { class: 'mut' }, 'Revisa que sea el precio que muestra la página.')),
+            r.fuentePrecio === 'visible' || r.fuentePrecio === 'variante' || !r.precio ? null : h('small', { class: 'mut' }, 'Revisa que sea el precio que muestra la página.')),
           h('label', null, 'Tienda o proveedor', App.textInput({ fk: 'cap-lugar', value: F.lugar, onChange: function (v) { F.lugar = v; }, onCommit: function () { App.render(); } }),
             !r.proveedor && F.lugar ? h('small', { class: 'mut' }, '🏪 Proveedor nuevo: basta el nombre, el gerente completa el resto.') : null),
           h('label', null, 'Marca (opcional)', App.textInput({ fk: 'cap-marca', value: F.marca, onChange: function (v) { F.marca = v; } }))),
