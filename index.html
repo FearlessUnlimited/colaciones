@@ -263,9 +263,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T07:44:00Z">
+<meta name="build" content="2026-10-04T08:16:06Z">
 <script>
-window.BUILD = "2026-10-04T07:44:00Z";
+window.BUILD = "2026-10-04T08:16:06Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -314,7 +314,7 @@ window.CLOUD = {
   const TIPOS_VENDIBLES = ['plato', 'entrada', 'ensalada', 'postre', 'acompanamiento', 'bebestible'];
   const TIPOS_SUELTOS = ['entrada', 'ensalada', 'postre', 'bebestible'];   // se venden en combos o sueltos (con recargo)
   const DIAS = ['lun', 'mar', 'mie', 'jue', 'vie'];
-  const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
+  const LINEAS = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína'];
   // vegano ⊂ vegetariano ⊂ pescetariano (+ pescados y mariscos) ⊂ omnívoro (+ carnes y aves)
   const DIETA_NIVEL = { vegano: 0, vegetariano: 1, pescetariano: 2, omni: 3 };
   const LINEA_NIVEL_MAX = { 'Vegano': 0, 'Vegetariano': 1, 'Pescetariano': 2 };
@@ -452,6 +452,75 @@ window.CLOUD = {
     return cambios;
   }
 
+  /* ---------- capitalización ---------- */
+  // Mayúscula solo al iniciar una oración y en nombres propios; sin mayúsculas sostenidas (salvo siglas conocidas).
+  // propios: marcas, lugares y personas que conservan su mayúscula ("Soprole", "Viña del Mar"). Es idempotente.
+  const SIGLAS = ['UHT', 'IQF', 'IVA', 'PVP', 'RUT', 'SII', 'SKU', 'ODEPA', 'RCV', 'CLP'];
+  const PROPIOS_BASE = ['Valparaíso', 'Viña del Mar', 'Cardonal', 'Cerro Jiménez', 'Caleta Portales', 'Hass', 'Chile', 'Santiago'];
+  function oracion(texto, propios) {
+    const t = String(texto == null ? '' : texto).replace(/\s+/g, ' ').trim();
+    if (!t) return t;
+    const letras = t.replace(/[^\p{L}]/gu, '');
+    const todoMayus = letras.length >= 4 && letras.replace(/[^\p{Lu}]/gu, '').length / letras.length >= 0.6;   // título entero en mayúsculas
+    const partes = t.split(/([\p{L}\p{N}]+)/u);   // separador, palabra, separador, palabra…
+    const palabras = [];
+    let numAntes = false;
+    for (let i = 1; i < partes.length; i += 2) {
+      const w = partes[i], sep = partes[i - 1], inicio = i === 1 || /[.!?]\s/.test(sep);
+      let r;
+      if (/^\p{Lu}$/u.test(w) && numAntes && /^\s?$/.test(sep)) r = w;                                        // "5 L": símbolo de litro
+      else if (/^[\p{Lu}\p{N}]+$/u.test(w) && /\p{Lu}.*\p{Lu}/u.test(w)) r = !todoMayus && SIGLAS.indexOf(w) >= 0 ? w : w.toLowerCase();
+      else if (/\p{Ll}\p{Lu}/u.test(w)) r = w;                                                                // "SuperBodega", "McKay": marca
+      else r = w.toLowerCase();
+      if (inicio) r = r.charAt(0).toLocaleUpperCase('es') + r.slice(1);
+      palabras.push(r);
+      numAntes = /^\d+$/.test(w);
+    }
+    // nombres propios: se restituye su escritura (frases más largas primero)
+    const lista = (propios || []).concat(PROPIOS_BASE).filter(Boolean).map(function (p) {
+      const pw = String(p).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+      return { pw: pw, k: pw.map(normNombre) };
+    }).filter(function (x) { return x.pw.length; }).sort(function (a, b) { return b.pw.length - a.pw.length; });
+    const nk = palabras.map(normNombre);
+    lista.forEach(function (p) {
+      for (let j = 0; j + p.k.length <= palabras.length; j++) {
+        let ok = true;
+        for (let m = 0; m < p.k.length && ok; m++) ok = nk[j + m] === p.k[m] && (m === 0 || !/[.!?]\s/.test(partes[(j + m) * 2]));
+        if (ok) for (let m = 0; m < p.k.length; m++) palabras[j + m] = p.pw[m];
+      }
+    });
+    let out = partes[0];
+    for (let i = 0; i < palabras.length; i++) out += palabras[i] + partes[i * 2 + 2];
+    return out;
+  }
+  // nombres propios del negocio: marcas de las ofertas y proveedores de más de una palabra ("Caleta Portales")
+  function propiosDe(state) {
+    const propios = [];
+    ((state && state.proveedores) || []).forEach(function (p) { if (/\s/.test(p.nombre || '')) propios.push(p.nombre); });
+    ((state && state.ofertas) || []).forEach(function (o) { if (o.marca) propios.push(o.marca); });
+    return propios;
+  }
+  // Migración única (params.mayusV1): nombres de insumos, recetas, categorías, líneas y combos pasan a la regla de capitalización.
+  // Las líneas son llaves de los precios de combos y de los bebestibles por línea: se renombran juntas.
+  function normalizarMayusculas(state) {
+    state.params = state.params || {};
+    if (state.params.mayusV1) return 0;
+    const propios = propiosDe(state);
+    let n = 0;
+    const cambia = function (o, k) { if (typeof o[k] !== 'string') return; const v = oracion(o[k], propios); if (v !== o[k]) { o[k] = v; n++; } };
+    (state.insumos || []).forEach(function (i) { cambia(i, 'nombre'); cambia(i, 'categoria'); });
+    (state.recetas || []).forEach(function (r) {
+      cambia(r, 'nombre'); cambia(r, 'linea');
+      if (Array.isArray(r.soloLineas)) r.soloLineas = r.soloLineas.map(function (l) { return oracion(l, propios); });
+    });
+    (state.combos || []).forEach(function (c) {
+      cambia(c, 'nombre');
+      if (c.precios) { const np = {}; Object.keys(c.precios).forEach(function (k) { np[oracion(k, propios)] = c.precios[k]; }); c.precios = np; }
+    });
+    state.params.mayusV1 = true;
+    return n;
+  }
+
   // id determinista: dos usuarios que migran los mismos datos generan el mismo proveedor
   function idProveedor(nombre) { return 'PRV-' + normNombre(nombre).replace(/ /g, '-'); }
 
@@ -514,6 +583,8 @@ window.CLOUD = {
     return !!(p.membresia && p.membresia.activa);
   }
   // una oferta que exige membresía (ella o su campaña) solo vale si la membresía de su proveedor está activa
+  // la oferta exige membresía por sí misma o porque su campaña la exige
+  function exigeMembresia(ctx, o) { const e = campanaDe(ctx, o); return !!(o && (o.requiereMembresia || (e && e.c.requiereMembresia))); }
   function ofertaHabilitada(ctx, o) {
     if (o.requiereMembresia && !membresiaActiva(ctx, proveedorDe(ctx, o))) return false;
     const e = campanaDe(ctx, o);
@@ -1105,7 +1176,7 @@ window.CLOUD = {
   function asegurarDietas(state) {
     state.params = state.params || {};
     if (state.params.dietasV2) return;
-    (state.insumos || []).forEach(function (i) { if (i.dieta === 'omni' && normNombre(i.categoria) === normNombre('Pescados y Mariscos')) i.dieta = 'pescetariano'; });
+    (state.insumos || []).forEach(function (i) { if (i.dieta === 'omni' && normNombre(i.categoria) === normNombre('Pescados y mariscos')) i.dieta = 'pescetariano'; });
     state.params.dietasV2 = true;
   }
   function nivelDieta(ins) { return DIETA_NIVEL[ins && ins.dieta] != null ? DIETA_NIVEL[ins.dieta] : 0; }
@@ -1298,7 +1369,7 @@ window.CLOUD = {
       let ahorroMes = 0;
       u.uso.forEach(function (q, id) {
         if (!(q > 0)) return;
-        const ofs = (ctx.ofertasPorInsumo.get(id) || []).filter(function (o) { return o.requiereMembresia && !o.pendiente && o.disponible !== false && !fueraDeVigencia(ctx, o) && proveedorDe(ctx, o) === p; });
+        const ofs = (ctx.ofertasPorInsumo.get(id) || []).filter(function (o) { return exigeMembresia(ctx, o) && !o.pendiente && o.disponible !== false && !fueraDeVigencia(ctx, o) && proveedorDe(ctx, o) === p; });
         if (!ofs.length) return;
         const hoy = activa ? costoInsumo(makeCtx(ctx.state, Object.assign({}, ctx.opts, { sinMembresia: p.id })), id) : costoInsumo(ctx, id);
         const mejor = ofs.map(function (o) { return { o: o, c: costoNetoOferta(conM, o) }; }).filter(function (x) { return x.c > 0; })
@@ -2119,10 +2190,10 @@ window.CLOUD = {
   const COMPONENTES = ['entrada', 'ensalada', 'postre', 'bebestible'];
   const COMBOS_BASE = [
     { id: COMBO_SOLO, nombre: 'Solo colación', incluye: [], extra: 0, mezclaPct: 45 },
-    { id: 'CMB-simple', nombre: 'Combo Simple', incluye: ['bebestible'], extra: 800, mezclaPct: 20 },
-    { id: 'CMB-mix', nombre: 'Combo Mix', incluye: ['ensalada', 'bebestible'], extra: 1500, mezclaPct: 10 },
-    { id: 'CMB-trilogia', nombre: 'Combo Trilogía', incluye: ['entrada', 'ensalada', 'postre'], extra: null, mezclaPct: 15 },
-    { id: 'CMB-full', nombre: 'Combo Full', incluye: ['entrada', 'ensalada', 'postre', 'bebestible'], extra: null, mezclaPct: 10 }
+    { id: 'CMB-simple', nombre: 'Combo simple', incluye: ['bebestible'], extra: 800, mezclaPct: 20 },
+    { id: 'CMB-mix', nombre: 'Combo mix', incluye: ['ensalada', 'bebestible'], extra: 1500, mezclaPct: 10 },
+    { id: 'CMB-trilogia', nombre: 'Combo trilogía', incluye: ['entrada', 'ensalada', 'postre'], extra: null, mezclaPct: 15 },
+    { id: 'CMB-full', nombre: 'Combo full', incluye: ['entrada', 'ensalada', 'postre', 'bebestible'], extra: null, mezclaPct: 10 }
   ];
 
   // líneas de menú de los platos: las conocidas primero, en su orden
@@ -2356,6 +2427,7 @@ window.CLOUD = {
     alternativasReceta: alternativasReceta, volumenSemanal: volumenSemanal, usoSemanalInsumos: usoSemanalInsumos,
     ahorrosPosibles: ahorrosPosibles, pesoEnCosto: pesoEnCosto, listaCompras: listaCompras, chequeos: chequeos,
     puntoEquilibrio: puntoEquilibrio, SEMANAS_MES: SEMANAS_MES, fechaMenos: fechaMenos,
+    oracion: oracion, propiosDe: propiosDe, normalizarMayusculas: normalizarMayusculas, SIGLAS: SIGLAS,
     normNombre: normNombre, canonico: canonico, parecidos: parecidos, unificarTextos: unificarTextos, idProveedor: idProveedor, nuevoProveedor: nuevoProveedor, asegurarProveedores: asegurarProveedores,
     proveedorDe: proveedorDe, daFactura: daFactura, costoBrutoOferta: costoBrutoOferta,
     historialPrecios: historialPrecios, variacionInsumo: variacionInsumo, inflacionCanasta: inflacionCanasta,
@@ -2363,7 +2435,7 @@ window.CLOUD = {
     condicionesDespacho: condicionesDespacho, radarPromosDespacho: radarPromosDespacho, promoPrimeraUsada: promoPrimeraUsada, pedidoOnline: pedidoOnline, plazoEntrega: plazoEntrega, brutoSeleccionado: brutoSeleccionado, evaluarMembresias: evaluarMembresias,
     promoCantidadVigente: promoCantidadVigente, precioPorPack: precioPorPack, opcionesUrgencia: opcionesUrgencia, quiebresProximos: quiebresProximos,
     ofertaVencida: ofertaVencida, diasParaVencer: diasParaVencer, oportunidadActiva: oportunidadActiva, fueraDeVigencia: fueraDeVigencia,
-    variante: variante, ACUMULA_DEF: ACUMULA_DEF, acumulaDe: acumulaDe, seAcumulan: seAcumulan, estadoCampana: estadoCampana, campanaDe: campanaDe,
+    variante: variante, exigeMembresia: exigeMembresia, ACUMULA_DEF: ACUMULA_DEF, acumulaDe: acumulaDe, seAcumulan: seAcumulan, estadoCampana: estadoCampana, campanaDe: campanaDe,
     esTemporal: esTemporal, hastaOferta: hastaOferta, esSoloOnline: esSoloOnline, infoPrecio: infoPrecio, descuentosDeOferta: descuentosDeOferta, unitLista: unitLista,
     opcionesPromoGrupo: opcionesPromoGrupo, reconocerCampana: reconocerCampana, campanasPropuestas: campanasPropuestas, listaCampanas: listaCampanas,
     ahorroCampana: ahorroCampana, historialCampanas: historialCampanas, planCompras: planCompras,
@@ -2627,6 +2699,7 @@ window.CLOUD = {
     if (window.Engine) {
       window.Engine.asegurarProveedores(s); window.Engine.unificarTextos(s);   // proveedores desde los "lugar"; familias/categorías sin variantes de mayúsculas
       window.Engine.asegurarDietas(s);   // pescados y mariscos: de "con carne/pescado" a pescetariano (una vez)
+      window.Engine.normalizarMayusculas(s);   // mayúscula solo al iniciar oración y en nombres propios (una vez); antes de los combos: renombra las líneas
       window.Engine.asegurarCombos(s);   // combos y precio por línea (la primera vez, desde el antiguo precio de la Trilogía)
     }
     return s;
@@ -2724,6 +2797,7 @@ window.CLOUD = {
  */
 (function (root) {
   'use strict';
+  const Eng = typeof require === 'function' && typeof module !== 'undefined' ? require('./engine.js') : root.Engine;   // capitalización: mayúscula solo al iniciar oración y en nombres propios
 
   /* ---------- 1. botón marcador: corre en la página del proveedor ---------- */
   function extraer(appUrl) {
@@ -3103,8 +3177,12 @@ window.CLOUD = {
     const og = mo ? {} : raw.og || {};
     const sitio = nombreSitio(raw.host, og.site_name);
     const quitarSitio = function (s) { return String(s || '').replace(/\s*[|–]\s*[^|–]*$/, '').trim(); };
-    const nombre = tituloBonito(ld.nombre || quitarSitio(og.title) || raw.h1 || quitarSitio(raw.titulo) || raw.nombre || '');
     const marca = tituloBonito(ld.marca || og['product:brand'] || og.brand || '');
+    // marcas y tiendas conservan su mayúscula; el resto del título pasa a minúscula salvo la primera letra
+    // (los últimos ganan: la escritura del catálogo manda sobre la que trae la página)
+    const propios = [marca, sitio].concat((state.ofertas || []).map(function (o) { return o.marca; }).filter(Boolean), Object.keys(SITIOS).map(function (k) { return SITIOS[k]; }), MARCAS);
+    const tituloPagina = String(ld.nombre || quitarSitio(og.title) || raw.h1 || quitarSitio(raw.titulo) || raw.nombre || '');
+    const nombre = Eng.oracion(tituloPagina, propios);
     const p = precios(raw);
     const textosFormato = [nombre, raw.h1, (raw.variantes || []).map(function (v) { return v.nombre; }).join(' · '), og.description, ld.descripcion];
     const fmts = formatos(textosFormato);
@@ -3132,7 +3210,7 @@ window.CLOUD = {
     const marcasConocidas = Array.from(new Set((state.ofertas || []).map(function (o) { return o.marca; }).filter(function (m) { return m && m.length >= 3; })));
     const limpio = limpiarNombre(nombre, marca, sitio, marcasConocidas);
     return {
-      url: raw.url || '', host: raw.host || '', nombre: nombre, tituloOriginal: String(ld.nombre || quitarSitio(og.title) || raw.h1 || quitarSitio(raw.titulo) || raw.nombre || '').replace(/\s+/g, ' ').trim(), nombreLimpio: limpio.nombre || nombre, extras: limpio.extras || [], variedad: limpio.variedad || [],
+      url: raw.url || '', host: raw.host || '', nombre: nombre, tituloOriginal: Eng.oracion(tituloPagina, propios), nombreLimpio: limpio.nombre || nombre, extras: limpio.extras || [], variedad: limpio.variedad || [],
       etiquetas: etiquetas([nombre, raw.h1, og.description, ld.descripcion]), dieta: dietaSugerida(nombre), marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
       soloWeb: !!raw.soloWeb, etiquetasPromo: (raw.etiquetas || []).slice(0, 25), formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
@@ -3215,6 +3293,8 @@ window.CLOUD = {
     if ((unidad === 'g' || unidad === 'ml') && Math.abs(q) >= 1000) return nf2.format(q / 1000).replace(/,00$/, '') + (unidad === 'g' ? ' kg' : ' L');
     return App.num(q, q < 10 ? 2 : 1) + ' ' + unidad;
   };
+  // texto con la regla de mayúsculas (inicio de oración y nombres propios); se aplica al guardar nombres
+  App.oracion = function (t) { return E.oracion(t, E.propiosDe(Store.get())); };
   App.hoy = function () { return E.hoyISO(E.params(Store.get())); };
 
   /* ---------- controles ---------- */
@@ -3311,7 +3391,7 @@ window.CLOUD = {
           try { Store.importJSON(rd.result); App.toast('Respaldo importado'); }
           catch (e) { App.modal('No se pudo importar', h('p', null, String(e.message || e)), function (c) { return [App.btn('Cerrar', c, 'primary')]; }); }
         };
-        if (App.nube.activo) App.confirm('Esto reemplaza los datos en la nube para TODOS los usuarios con el contenido de "' + f.name + '". ¿Continuar?', go, 'Reemplazar', true);
+        if (App.nube.activo) App.confirm('Esto reemplaza los datos en la nube para “todos” los usuarios con el contenido de "' + f.name + '". ¿Continuar?', go, 'Reemplazar', true);
         else go();
       };
       rd.readAsText(f);
@@ -3563,7 +3643,7 @@ window.CLOUD = {
     ['r-em', 'Costo del envase por porción, en pesos, cuando no hay un insumo de envase asignado.'],
     ['l-t-', 'Insumo (algo que se compra) o sub-receta (una base preparada, como el sofrito).'],
     ['l-n-', 'Escribe para buscar y elige de la lista.'],
-    ['l-q-', 'Cantidad de esta línea para TODA la receta (no por porción), en peso crudo o seco utilizable, en la unidad del insumo (g, ml o un). Ej.: lentejas secas, arroz crudo, carne cruda.'],
+    ['l-q-', 'Cantidad de esta línea para “toda” la receta (no por porción), en peso crudo o seco utilizable, en la unidad del insumo (g, ml o un). Ej.: lentejas secas, arroz crudo, carne cruda.'],
     ['l-nt-', 'Nota de corte o de uso. Ej.: en cubos, para el sofrito. Sale en la ficha de cocina.'],
     ['l-alt-', 'Otro insumo que puede reemplazar a este (ej. pechuga ↔ trutro). Permite ver el rango de costo del plato.'],
     ['nr-tipo', 'Tipo de receta que vas a crear.'],
@@ -4463,7 +4543,7 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
-  const CATS = ['Carnes de Vacuno', 'Aves y Cerdo', 'Pescados y Mariscos', 'Legumbres y Granos', 'Abarrotes y Condimentos', 'Verduras y Frutas (Cardonal)', 'Lácteos y Huevos', 'Bebestibles', 'Envases'];
+  const CATS = ['Carnes de vacuno', 'Aves y cerdo', 'Pescados y mariscos', 'Legumbres y granos', 'Abarrotes y condimentos', 'Verduras y frutas (Cardonal)', 'Lácteos y huevos', 'Bebestibles', 'Envases'];
   const UNIDADES = [['g', 'gramos (g)'], ['ml', 'mililitros (ml)'], ['un', 'unidades (un)']];
   const DIETAS = [['vegano', 'Vegano'], ['vegetariano', 'Vegetariano (lácteos, huevo)'], ['pescetariano', 'Pescetariano (pescados y mariscos)'], ['omni', 'Omnívoro (carnes y aves)']];
   const ETIQUETAS = ['Sin gluten', 'Sin lactosa', 'Proteico', 'Orgánico'];
@@ -4611,7 +4691,7 @@ window.CLOUD = {
       if (ya) { App.toast('Ya existe el insumo "' + ya.nombre + '": te llevé a él'); App.go('insumos', ya.id); return; }
       const id = Store.uid('INS-');
       Store.mutate(function (s) {
-        s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: (window.Captura && window.Captura.dietaSugerida(nombre)) || 'vegano' });
+        s.insumos.push({ id: id, nombre: App.oracion(nombre), categoria: 'Abarrotes y condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: (window.Captura && window.Captura.dietaSugerida(nombre)) || 'vegano' });
         s.ofertas.push({ id: Store.uid('OF-'), insumoId: id, lugar: '', marca: '', formatoLabel: 'kg', formatoQty: 1000, precio: 0, rendimiento: null,
           fecha: App.hoy(), fuente: 'estimado', disponible: true, preferida: true, nota: '' });
       });
@@ -4671,13 +4751,14 @@ window.CLOUD = {
           App.toast('Producto validado: ya puedes aprobar sus cotizaciones en Cotizaciones');
         }, 'small primary'), ' ', unirAExistente(ins)) : null) : null,
       h('div', { class: 'form-grid' },
-        h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); } }),
+        h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); },
+          onCommit: function (v) { const n = App.oracion(v); if (n !== v) upd(function (x) { x.nombre = n; }); } }),
           (function () {
             const otro = s.insumos.find(function (x) { return x.id !== ins.id && E.normNombre(x.nombre) === E.normNombre(ins.nombre); });
             return otro ? h('small', { class: 'bad-t' }, 'Ya existe otro insumo con este nombre: las recetas no podrán distinguirlos.') : null;
           })()),
         h('label', null, 'Categoría', selConNuevo({ fk: 'ins-categoria', value: ins.categoria, valores: listaCats(s, ins.categoria), nuevo: '+ Nueva categoría…', titulo: 'Nueva categoría',
-          ph: 'Ej.: Congelados', onSet: function (v) { upd(function (x) { x.categoria = v; if (v === 'Bebestibles' && x.unidad === 'g') x.unidad = 'un'; }); } })),
+          ph: 'Ej.: Congelados', onSet: function (v) { v = App.oracion(v); upd(function (x) { x.categoria = v; if (v === 'Bebestibles' && x.unidad === 'g') x.unidad = 'un'; }); } })),
         h('label', null, 'Unidad de receta', App.select({ fk: 'ins-unidad', value: ins.unidad, options: UNIDADES, onChange: function (v) { upd(function (x) { x.unidad = v; }); } })),
         h('label', null, 'Rendimiento (merma de limpieza) %', App.numInput({ fk: 'ins-rend', value: Math.round(ins.rendimiento * 1000) / 10, title: 'Parte utilizable tras pelar/limpiar. 100% = sin merma. No incluir merma de cocción.',
           onChange: function (n) { if (n > 0 && n <= 100) upd(function (x) { x.rendimiento = n / 100; }, 'rd' + ins.id); } })),
@@ -4709,8 +4790,10 @@ window.CLOUD = {
           o.pendiente ? h('div', null, App.badge('por revisar', 'warn')) : null, o.autor ? h('div', null, h('small', null, 'cotizó ' + o.autor)) : null,
           App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null,
           h('div', { class: 'row gap wrap mini' },
-            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!o.soloOnline, onchange: function (ev) { upO(o, function (x) { x.soloOnline = ev.target.checked || undefined; }); } }), ' solo online'),
-            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!o.requiereMembresia, onchange: function (ev) { upO(o, function (x) { x.requiereMembresia = ev.target.checked || undefined; }); } }), ' socio'),
+            (function () { const ec = E.campanaDe(ctx, o), fo = ec && ec.c.canal && ec.c.canal !== 'todos' ? ec.c.canal : null;   // la campaña lo define: casilla marcada y bloqueada
+              return h('label', { class: 'chk', title: fo ? 'Lo define la campaña ' + (ec.c.nombre || '') : '' }, h('input', { type: 'checkbox', checked: fo ? fo === 'online' : !!o.soloOnline, disabled: !!fo, onchange: function (ev) { upO(o, function (x) { x.soloOnline = ev.target.checked || undefined; }); } }), fo ? ' solo online (campaña)' : ' solo online'); })(),
+            (function () { const ec = E.campanaDe(ctx, o), fm = !!(ec && ec.c.requiereMembresia);
+              return h('label', { class: 'chk', title: fm ? 'Lo define la campaña ' + (ec.c.nombre || '') : '' }, h('input', { type: 'checkbox', checked: fm || !!o.requiereMembresia, disabled: fm, onchange: function (ev) { upO(o, function (x) { x.requiereMembresia = ev.target.checked || undefined; }); } }), fm ? ' socio (campaña)' : ' socio'); })(),
             (function () {
               const pv = App.proveedorDeOferta(o);
               return pv && (pv.promosDespacho || []).some(function (pr) { return pr.alcance === 'seleccionados'; }) || o.promoSeleccionado
@@ -4856,14 +4939,14 @@ window.CLOUD = {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
   const TIPOS = [['plato', 'Plato'], ['base', 'Base / sub-receta'], ['acompanamiento', 'Acompañamiento'], ['entrada', 'Entrada'], ['ensalada', 'Ensalada'], ['postre', 'Postre'], ['bebestible', 'Bebestible']];
-  const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
+  const LINEAS = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína'];
   const FILTROS = [['plato', 'Platos'], ['base', 'Bases'], ['acompanamiento', 'Guarniciones'], ['opc', 'Opcionales'], ['bebestible', 'Bebestibles'], ['', 'Todas']];
 
   // envasadoId: insumo que se vende tal cual (bebida, jugo en caja); sin él, el bebestible es una receta propia (jugo natural)
   App.nuevaReceta = function (nombre, tipo, envasadoId) {
     const id = Store.uid('R');
     const s = Store.get();
-    const r = { id: id, tipo: tipo, linea: tipo === 'plato' ? 'Tradicional' : (TIPOS.find(function (t) { return t[0] === tipo; }) || ['', ''])[1], nombre: nombre, descripcion: '', porciones: tipo === 'base' ? 10 : 1,
+    const r = { id: id, tipo: tipo, linea: tipo === 'plato' ? 'Tradicional' : (TIPOS.find(function (t) { return t[0] === tipo; }) || ['', ''])[1], nombre: App.oracion(nombre), descripcion: '', porciones: tipo === 'base' ? 10 : 1,
       lineas: [], pvp: 0, activo: true, pasos: '', montaje: '' };
     if (tipo === 'plato') {
       r.envaseId = s.insumos.some(function (i) { return i.id === 'INS-50'; }) ? 'INS-50' : null;
@@ -4978,7 +5061,7 @@ window.CLOUD = {
     App.confirm('"' + nombre + '" no existe en Insumos. ¿Crearlo ahora (podrás ponerle precio en Insumos y compras)?', function () {
       const id = Store.uid('INS-');
       Store.mutate(function (s) {
-        s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: (window.Captura && window.Captura.dietaSugerida(nombre)) || 'vegano' });
+        s.insumos.push({ id: id, nombre: App.oracion(nombre), categoria: 'Abarrotes y condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: (window.Captura && window.Captura.dietaSugerida(nombre)) || 'vegano' });
         s.ofertas.push({ id: Store.uid('OF-'), insumoId: id, lugar: '', marca: '', formatoLabel: 'kg', formatoQty: 1000, precio: 0, rendimiento: null, fecha: App.hoy(), fuente: 'estimado', disponible: true, preferida: true, nota: '' });
       });
       onCreated(id);
@@ -5011,11 +5094,12 @@ window.CLOUD = {
         h('div', { class: 'row gap' }, vendible ? App.btn('Ver en Platos y PVP', function () { App.go('platos', r.id); }, 'small') : null,
           App.btn('Duplicar', function () { duplicar(r); }, 'small'), App.btn('Eliminar', function () { eliminar(r); }, 'small danger'))),
       h('div', { class: 'form-grid' },
-        h('label', null, 'Nombre', App.textInput({ fk: 'r-nombre', value: r.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'rn'); } })),
+        h('label', null, 'Nombre', App.textInput({ fk: 'r-nombre', value: r.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'rn'); },
+          onCommit: function (v) { const n = App.oracion(v); if (n !== v) upd(function (x) { x.nombre = n; }); } })),
         h('label', null, 'Tipo', App.select({ fk: 'r-tipo', value: r.tipo, options: TIPOS, onChange: function (v) { upd(function (x) { x.tipo = v; }); } })),
         h('label', null, 'Línea de menú', r.tipo === 'plato' ? App.select({ fk: 'r-linea', value: r.linea, options: LINEAS.map(function (l) { return [l, l]; }), onChange: function (v) { upd(function (x) { x.linea = v; }); } })
           : App.textInput({ fk: 'r-linea2', value: r.linea || '', onChange: function (v) { upd(function (x) { x.linea = v; }, 'rl'); },
-            onCommit: function (v) { const c = E.canonico(s.recetas.filter(function (x) { return x.id !== r.id; }).map(function (x) { return x.linea; }), v); if (c !== v) upd(function (x) { x.linea = c; }); } })),
+            onCommit: function (v) { const c = E.canonico(s.recetas.filter(function (x) { return x.id !== r.id; }).map(function (x) { return x.linea; }), App.oracion(v)); if (c !== v) upd(function (x) { x.linea = c; }); } })),
         h('label', null, r.tipo === 'base' ? 'Porciones del lote' : 'Porciones que rinde', App.numInput({ fk: 'r-porc', value: r.porciones, onChange: function (n) { if (n > 0) upd(function (x) { x.porciones = n; }, 'rp'); } })),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: r.activo !== false, onchange: function (ev) { upd(function (x) { x.activo = ev.target.checked; }); } }), ' Activa en la carta')),
       h('label', { class: 'block' }, 'Descripción', h('textarea', { rows: 2, 'data-fk': 'r-desc', oninput: function (ev) { upd(function (x) { x.descripcion = ev.target.value; }, 'rd'); } }, r.descripcion || '')));
@@ -5175,7 +5259,7 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
-  const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
+  const LINEAS = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína'];
   const TIPOS = [['plato', 'Platos'], ['opc', 'Opcionales'], ['bebestible', 'Bebestibles'], ['acompanamiento', 'Guarniciones'], ['combos', 'Combos'], ['todo', 'Todo']];
   const COMP_TXT = { entrada: 'Entrada', ensalada: 'Ensalada', postre: 'Postre', bebestible: 'Bebestible' };
 
@@ -5377,7 +5461,8 @@ window.CLOUD = {
         h('tbody', null, combos.map(function (c) {
           const solo = c.id === E.COMBO_SOLO;
           return h('tr', { class: c.activo === false ? 'off' : '' },
-            h('td', null, App.textInput({ fk: 'cbn-' + c.id, value: c.nombre, onChange: function (v) { updCombo(c.id, function (x) { x.nombre = v; }, 'cbn' + c.id); } })),
+            h('td', null, App.textInput({ fk: 'cbn-' + c.id, value: c.nombre, onChange: function (v) { updCombo(c.id, function (x) { x.nombre = v; }, 'cbn' + c.id); },
+              onCommit: function (v) { const n = App.oracion(v); if (n !== v) updCombo(c.id, function (x) { x.nombre = n; }); } })),
             h('td', null, solo ? h('small', { class: 'mut' }, 'solo el plato: fija el precio de cada línea') : h('div', { class: 'chips' }, E.COMPONENTES.map(function (t) {
               const on = c.incluye.indexOf(t) >= 0;
               return App.chip(COMP_TXT[t], on, function () { updCombo(c.id, function (x) { x.incluye = on ? x.incluye.filter(function (y) { return y !== t; }) : E.COMPONENTES.filter(function (y) { return y === t || x.incluye.indexOf(y) >= 0; }); }); });
@@ -5610,7 +5695,7 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
-  const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
+  const LINEAS = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína'];
 
   App.views.panel = function () {
     const s = Store.get(), ctx = App.ctx(), calc = App.calc(), p = ctx.p;
@@ -5865,7 +5950,7 @@ window.CLOUD = {
     const grupos = {};
     filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? 'Bases y sub-recetas' : r.tipo === 'acompanamiento' ? 'Guarniciones' : r.tipo === 'bebestible' ? 'Bebestibles' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
     const sel = platos.find(function (r) { return r.id === F.id; }) || filtrados.find(function (r) { return r.tipo === 'plato'; }) || filtrados[0];
-    const ORDEN = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína', 'Guarniciones', 'Opcionales', 'Bebestibles', 'Bases y sub-recetas'];
+    const ORDEN = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína', 'Guarniciones', 'Opcionales', 'Bebestibles', 'Bases y sub-recetas'];
     return h('div', { class: 'split cocina' },
       h('div', { class: 'pane-list noprint' },
         h('div', { class: 'filters' }, App.textInput({ fk: 'co-q', value: F.q, ph: 'Buscar receta…', cls: 'search', onChange: function (v) { F.q = v; App.render(); } })),
@@ -6001,13 +6086,35 @@ window.CLOUD = {
     return { campanaId: F.campana };
   };
   App.CAMP_NUEVA = CAMP_NUEVA;
+  // la campaña elegida (objeto), o null; lo que ella exige (solo online, solo tienda, membresía) manda sobre las casillas del formulario
+  App.campanaElegida = function (F) { const e = F.campana && F.campana !== CAMP_NUEVA ? App.ctx().campanas.get(F.campana) : null; return e ? e.c : null; };
+  App.canalForzado = function (F) { const c = App.campanaElegida(F); return c && c.canal && c.canal !== 'todos' ? c.canal : null; };
+  // casillas 'solo online' y 'membresía': marcadas y bloqueadas cuando la campaña lo exige
+  App.casillaOnline = function (F, etiqueta, extra) {
+    const f = App.canalForzado(F), c = App.campanaElegida(F), on = f ? f === 'online' : !!F.online;
+    return h('label', { class: 'chk', title: f ? 'Lo define la campaña ' + (c.nombre || '') : '' },
+      h('input', { type: 'checkbox', checked: on, disabled: !!f, onchange: function (ev) { F.online = ev.target.checked; } }), etiqueta,
+      f ? h('small', { class: 'mut' }, f === 'online' ? ' (lo exige la campaña)' : ' (la campaña vale solo en tienda)') : extra || null);
+  };
+  App.casillaMembresia = function (F, etiqueta) {
+    const c = App.campanaElegida(F), f = !!(c && c.requiereMembresia);
+    return h('label', { class: 'chk', title: f ? 'Lo define la campaña ' + (c.nombre || '') : '' },
+      h('input', { type: 'checkbox', checked: f || !!F.membresia, disabled: f, onchange: function (ev) { F.membresia = ev.target.checked; App.render(); } }), etiqueta,
+      f ? h('small', { class: 'mut' }, ' (lo exige la campaña)') : null);
+  };
+  // lo que se guarda en la oferta: si la campaña lo define, no se duplica (si la campaña cambia, la oferta la sigue)
+  App.exigenciasOferta = function (F) {
+    const c = App.campanaElegida(F);
+    return { soloOnline: c && c.canal && c.canal !== 'todos' ? undefined : F.online || undefined, requiereMembresia: c && c.requiereMembresia ? undefined : F.membresia || undefined };
+  };
   // 🌐 solo online · ⭐ requiere membresía (avisa si está inactiva: así no entra a los costos)
   App.badgesCanal = function (o) {
-    if (!o || (!o.soloOnline && !o.requiereMembresia && !o.promoCantidad)) return null;
+    const ctx0 = App.ctx(), onl = !!o && E.esSoloOnline(ctx0, o), ec = o && E.campanaDe(ctx0, o), socio = !!o && (o.requiereMembresia || (ec && ec.c.requiereMembresia));
+    if (!o || (!onl && !socio && !o.promoCantidad)) return null;
     const ctx = App.ctx(), habil = E.ofertaHabilitada(ctx, o);
-    return h('div', { class: 'row gap wrap' }, o.soloOnline ? App.badge('🌐 solo online', 'info') : null,
+    return h('div', { class: 'row gap wrap' }, onl ? App.badge('🌐 solo online', 'info') : null,
       o.promoCantidad ? App.badge('🏷️ desde ' + o.promoCantidad.minimo + ': ' + App.clp(o.promoCantidad.precio) + ' c/u', 'good') : null,
-      o.requiereMembresia ? App.badge(habil ? '⭐ precio de socio' : '⭐ requiere membresía (inactiva: no se usa)', habil ? 'good' : 'warn') : null);
+      socio ? App.badge(habil ? '⭐ precio de socio' : '⭐ requiere membresía (inactiva: no se usa)', habil ? 'good' : 'warn') : null);
   };
   function enUnaSemana() { return E.fechaMenos(App.hoy(), -7); }
 
@@ -6051,7 +6158,7 @@ window.CLOUD = {
           temporal: camp.campanaId ? undefined : F.temporal ? { hasta: F.hasta } : camp.campanaPropuesta ? { hasta: enUnaSemana() } : undefined,
           hastaPorConfirmar: camp.campanaPropuesta && !F.temporal ? true : undefined,
           campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta,
-          soloOnline: F.online || undefined, requiereMembresia: F.membresia || undefined,
+          soloOnline: App.exigenciasOferta(F).soloOnline, requiereMembresia: App.exigenciasOferta(F).requiereMembresia,
           promoCantidad: F.porCantidad ? { minimo: F.pcMin || 2, precio: F.pcPrecio, desde: App.hoy(), hasta: F.pcHasta || enUnaSemana() } : undefined });
       });
       App.toast(camp.campanaId || camp.campanaPropuesta ? 'Cotización de campaña enviada a revisión 🎯' : F.temporal ? 'Oferta temporal enviada a revisión 🔥' : 'Cotización enviada a revisión');
@@ -6079,8 +6186,8 @@ window.CLOUD = {
       h('div', { class: 'row gap wrap' },
         F.campana && F.campana !== App.CAMP_NUEVA ? null :
           h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.temporal, onchange: function (ev) { F.temporal = ev.target.checked; App.render(); } }), ' Es oferta temporal 🔥'),
-        h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.online, onchange: function (ev) { F.online = ev.target.checked; } }), ' Precio solo comprando online 🌐'),
-        h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.membresia, onchange: function (ev) { F.membresia = ev.target.checked; App.render(); } }), ' Requiere membresía ⭐'),
+        App.casillaOnline(F, ' Precio solo comprando online 🌐'),
+        App.casillaMembresia(F, ' Requiere membresía ⭐'),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.porCantidad, onchange: function (ev) { F.porCantidad = ev.target.checked; App.render(); } }), ' Promo por cantidad 🏷️'),
         F.porCantidad ? h('span', { class: 'row gap' }, h('span', { class: 'mut' }, 'llevando'),
           App.numInput({ fk: 'cot-pcm', cls: 'w60', value: F.pcMin || 2, onChange: function (n) { F.pcMin = n; } }), h('span', { class: 'mut' }, 'o más, c/u a'),
@@ -6329,6 +6436,7 @@ window.CLOUD = {
     if (!F.insumoId) F.insumoId = NUEVO;
     if (F.insumoId === NUEVO) {
       if (!(F.nombreNuevo || '').trim()) F.nombreNuevo = r.nombreLimpio || r.nombre || 'Producto sin nombre';
+      F.nombreNuevo = App.oracion(F.nombreNuevo);   // la regla de mayúsculas también al proponer un producto
       const ya = App.insumoPorNombre(F.nombreNuevo);
       if (ya) F.insumoId = ya.id;   // ya existía con ese nombre: se usa ese
     }
@@ -6361,7 +6469,7 @@ window.CLOUD = {
       lista.push(Object.assign({}, base, { precio: sinPrecio ? null : F.precio, promoCantidad: F.oferta ? undefined : promo,
         temporal: temporal ? { hasta: hasta } : undefined, hastaPorConfirmar: temporal && !F.hasta ? true : undefined,
         campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta,
-        soloOnline: F.online || undefined }));   // el precio exclusivo de la web va en la cotización que se paga (la normal, si hay, no lo es)
+        soloOnline: App.exigenciasOferta(F).soloOnline, requiereMembresia: App.exigenciasOferta(F).requiereMembresia }));   // el precio exclusivo de la web va en la cotización que se paga (la normal, si hay, no lo es)
       lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); });
     });
     olvidar();
@@ -6430,6 +6538,9 @@ window.CLOUD = {
       h('optgroup', { label: 'No está en la lista' }, h('option', { value: NUEVO }, '🆕 Es un producto nuevo')));
     selIns.value = F.insumoId;
     const fmt = unidad ? r.formatos[unidad] : null;
+    // primero la campaña: lo que ella exige (solo online, membresía) define las casillas que siguen
+    const campNode = App.campoCampana(F, { lugar: F.lugar, precio: F.precio, precioNormal: F.oferta ? F.precioNormal : null, titulo: r.tituloOriginal || r.nombre,
+      textos: (U.raw.textos || []).concat(r.etiquetasPromo || []), fk: 'cap' });
 
     return h('div', { class: 'stack' },
       App.card('Cotización rápida', h('div', { class: 'stack' },
@@ -6472,11 +6583,9 @@ window.CLOUD = {
           h('div', { class: 'help' }, 'Equivale a ', h('b', null, precioPorBase(F.precio, F.fq, unidad)), F.oferta && F.precioNormal ? ' (normal ' + precioPorBase(F.precioNormal, F.fq, unidad) + ')' : '', '.')) : null,
 
         h('div', { class: 'stack' },
-          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.online, onchange: function (ev) { F.online = ev.target.checked; } }), ' 🌐 Precio solo comprando online',
-            r.soloWeb ? h('small', { class: 'good-t' }, ' (la página lo marca como exclusivo web)') : null),
+          campNode,
+          App.casillaOnline(F, ' 🌐 Precio solo comprando online', r.soloWeb ? h('small', { class: 'good-t' }, ' (la página lo marca como exclusivo web)') : null),
           h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.oferta, onchange: function (ev) { F.oferta = ev.target.checked; App.render(); } }), ' 🔥 Está en oferta'),
-          App.campoCampana(F, { lugar: F.lugar, precio: F.precio, precioNormal: F.oferta ? F.precioNormal : null, titulo: r.tituloOriginal || r.nombre,
-            textos: (U.raw.textos || []).concat(r.etiquetasPromo || []), fk: 'cap' }),
           F.oferta ? h('div', { class: 'stack indent' },
             h('label', { class: 'row gap wrap' }, h('span', { class: 'mut' }, 'Precio normal (sin oferta)'),
               App.numInput({ fk: 'cap-normal', cls: 'w100', value: F.precioNormal, ph: 'si lo sabes', onChange: function (n) { F.precioNormal = n; App.render(); }, onEmpty: function () { F.precioNormal = null; } })),
@@ -6584,7 +6693,7 @@ window.CLOUD = {
       });
       out.push('   Subtotal ' + lugar + ': ' + App.clp(grupos[lugar].total), '');
     });
-    out.push('TOTAL: ' + App.clp(total));
+    out.push('Total: ' + App.clp(total));
     return out.join('\n');
   }
 
@@ -7215,7 +7324,7 @@ window.CLOUD = {
       const rows = filas.map(function (x) {
         return [fechaCL(x.fecha), x.tipoNombre, x.tipoDoc === 'sd' ? '' : x.tipoDoc, x.folio, x.rut, x.razonSocial, x.proveedor, Math.round(x.neto), Math.round(x.exento), Math.round(x.iva), Math.round(x.total), Math.round(x.credito), x.avisos.join(', ')];
       });
-      rows.push(['', '', '', '', '', '', 'TOTAL', Math.round(tot.neto), Math.round(tot.exento), Math.round(tot.iva), Math.round(tot.total), Math.round(tot.credito), '']);
+      rows.push(['', '', '', '', '', '', 'Total', Math.round(tot.neto), Math.round(tot.exento), Math.round(tot.iva), Math.round(tot.total), Math.round(tot.credito), '']);
       App.descargarCSV('libro-compras-' + L.mes + (L.solo ? '' : '-todo') + '.csv', enc, rows);
     };
     return App.card('Libro de compras', h('div', { class: 'stack' },
@@ -7355,7 +7464,7 @@ window.CLOUD = {
             return h('tr', { class: x.viable ? '' : 'off' },
               h('td', null, x === r.masRapida ? App.badge('⚡ más rápida', 'good') : null, x === r.masBarata && x !== r.masRapida ? App.badge('💲 más barata', 'info') : null),
               h('td', null, h('b', null, x.proveedor.nombre), x.porRevisar ? h('div', null, App.badge('precio por revisar', 'warn')) : null, App.badgeOpinion(x.oferta)),
-              h('td', null, (x.oferta.soloOnline ? '🌐 ' : '') + x.modo + (x.promo ? ' (' + x.promo + ')' : ''),
+              h('td', null, (E.esSoloOnline(ctx, x.oferta) ? '🌐 ' : '') + x.modo + (x.promo ? ' (' + x.promo + ')' : ''),
                 !x.viable ? h('div', null, h('small', { class: 'bad-t' }, 'falta ' + App.clp(x.faltaMinimo) + ' para la compra mínima')) : null),
               h('td', null, llegaTxt(x)),
               h('td', null, x.packs + ' × ' + x.oferta.formatoLabel),
@@ -7643,7 +7752,7 @@ window.CLOUD = {
     const banner = modo === 'si'
       ? h('div', { class: 'alert good' }, h('span', null, '✅'), h('span', null, 'IVA recuperable: lo que compras con factura se costea sin IVA (el ' + p.ivaPct + '% vuelve como crédito fiscal en tu F29).'))
       : h('div', { class: 'alert ' + (modo === 'potencial' ? 'info' : '') }, h('span', null, 'ℹ️'), h('span', null,
-        modo === 'potencial' ? 'Aún no estás afecto a IVA: estos montos son crédito fiscal POTENCIAL. Cuando inicies actividades afectas y declares IVA (F29), cambia “IVA de compras recuperable” a Sí en Ajustes: los costos de tus platos bajarán automáticamente en lo que compres con factura.'
+        modo === 'potencial' ? 'Aún no estás afecto a IVA: estos montos son crédito fiscal “potencial”. Cuando inicies actividades afectas y declares IVA (F29), cambia “IVA de compras recuperable” a Sí en Ajustes: los costos de tus platos bajarán automáticamente en lo que compres con factura.'
           : 'Marcaste que el IVA de compras no es recuperable: se muestra solo como referencia.',
         ' ', h('a', { href: '#/ajustes' }, 'Ir a Ajustes')));
     const sinFac = pr.filas.filter(function (x) { return !x.conFactura; });
