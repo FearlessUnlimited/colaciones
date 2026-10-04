@@ -246,9 +246,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T04:05:02Z">
+<meta name="build" content="2026-10-04T06:35:01Z">
 <script>
-window.BUILD = "2026-10-04T04:05:02Z";
+window.BUILD = "2026-10-04T06:35:01Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -324,9 +324,19 @@ window.CLOUD = {
       state: state, opts: opts, p: params(state, opts),
       insumos: new Map(), ofertas: new Map(), ofertasPorInsumo: new Map(), recetas: new Map(),
       proveedores: new Map(), provPorNombre: indiceProveedores(state.proveedores),
-      memoInsumo: new Map(), memoReceta: new Map(), errors: []
+      memoInsumo: new Map(), memoReceta: new Map(), memoPrecio: new Map(), variantes: new Map(), errors: [],
+      campanas: new Map(), descuentosPorProv: new Map(), excluidas: new Set(opts.campanasExcluidas || [])
     };
-    (state.proveedores || []).forEach(function (p) { ctx.proveedores.set(p.id, p); });
+    (state.proveedores || []).forEach(function (p) {
+      ctx.proveedores.set(p.id, p);
+      (p.campanas || []).forEach(function (c) {
+        ctx.campanas.set(c.id, { c: c, p: p });
+        if (c.tipo === 'descuento' && Number(c.descuentoPct) > 0) {
+          if (!ctx.descuentosPorProv.has(p.id)) ctx.descuentosPorProv.set(p.id, []);
+          ctx.descuentosPorProv.get(p.id).push({ c: c, p: p });
+        }
+      });
+    });
     (state.insumos || []).forEach(function (i) { ctx.insumos.set(i.id, i); });
     (state.ofertas || []).forEach(function (o) {
       ctx.ofertas.set(o.id, o);
@@ -336,6 +346,15 @@ window.CLOUD = {
     (state.recetas || []).forEach(function (r) { ctx.recetas.set(r.id, r); });
     ctx.combos = (state.combos || []).slice().sort(function (a, b) { return (a.orden || 0) - (b.orden || 0); });
     return ctx;
+  }
+  // el mismo contexto con opciones extra (sin ciertas campañas, sin ninguna promoción = precio normal, otra fecha); se reutiliza
+  function variante(ctx, extra) {
+    const x = Object.assign({}, extra);
+    if (x.campanasExcluidas) x.campanasExcluidas = Array.from(new Set((ctx.opts.campanasExcluidas || []).concat(x.campanasExcluidas))).sort();
+    if (x.params) x.params = Object.assign({}, ctx.opts.params || {}, x.params);
+    const k = JSON.stringify(x);
+    if (!ctx.variantes.has(k)) ctx.variantes.set(k, makeCtx(ctx.state, Object.assign({}, ctx.opts, x)));
+    return ctx.variantes.get(k);
   }
 
   /* ---------- proveedores ---------- */
@@ -477,8 +496,12 @@ window.CLOUD = {
     if (ctx.opts.membresias && ctx.opts.membresias[p.id]) return true;
     return !!(p.membresia && p.membresia.activa);
   }
-  // una oferta que exige membresía solo vale si la membresía de su proveedor está activa
-  function ofertaHabilitada(ctx, o) { return !o.requiereMembresia || membresiaActiva(ctx, proveedorDe(ctx, o)); }
+  // una oferta que exige membresía (ella o su campaña) solo vale si la membresía de su proveedor está activa
+  function ofertaHabilitada(ctx, o) {
+    if (o.requiereMembresia && !membresiaActiva(ctx, proveedorDe(ctx, o))) return false;
+    const e = campanaDe(ctx, o);
+    return !(e && e.c.requiereMembresia && !membresiaActiva(ctx, e.p));
+  }
 
   // estado de una promoción de despacho: vigente | programada | vencida | inactiva | usada (solo primera compra, ya usada) | sin-membresia
   function estadoPromo(ctx, p, pr) {
@@ -494,6 +517,163 @@ window.CLOUD = {
   function promoPrimeraUsada(ctx, p, pr) {
     if (!pr.soloPrimeraCompra) return false;
     return !!pr.usada || ((ctx.state && ctx.state.compras) || []).some(function (c) { return c.proveedorId === p.id; });
+  }
+
+  /* ---------- campañas de proveedores ---------- */
+  // Una campaña ("Barato a un click", "Todos los días $1.000, $2.000 y $3.000") reúne ofertas limitadas de un proveedor
+  // con las mismas fechas y condiciones (proveedor.campanas[]). Dos tipos:
+  //  - 'precio': cada producto trae su precio de campaña (cotización con oferta.campanaId); vale entre desde y hasta de la campaña.
+  //  - 'descuento': descuentoPct sobre el precio de las ofertas del proveedor en su alcance (todo | categorias | seleccionados = insumos[]).
+  // Acumulación: por defecto una campaña NO se suma a otras campañas ni a promos de producto (oferta temporal, por cantidad)
+  // y SÍ a las promociones de despacho. Se edita por campaña (acumula) y con excepciones puntuales (acumulaCon / noAcumulaCon,
+  // en cualquiera de las dos). Entre otras campañas cuenta por producto (si no se acumulan, gana la mejor); con el despacho,
+  // por pedido (si no se acumulan, la canasta compara "con la campaña" contra "con la promo de despacho").
+  const ACUMULA_DEF = { campanas: false, promosProducto: false, despacho: true };
+  function acumulaDe(c) { return Object.assign({}, ACUMULA_DEF, (c && c.acumula) || {}); }
+  function enLista(x, k, id) { return !!(x && id && (x[k] || []).indexOf(id) >= 0); }
+  // ¿la campaña c se acumula con x? tipo: 'campana' (x otra campaña) | 'despacho' (x promo de despacho) | 'producto' (temporal o por cantidad)
+  function seAcumulan(c, x, tipo) {
+    const ac = acumulaDe(c);
+    if (tipo === 'producto') return !!ac.promosProducto;
+    const xid = x && x.id;
+    if (enLista(c, 'noAcumulaCon', xid) || enLista(x, 'noAcumulaCon', c.id)) return false;
+    if (enLista(c, 'acumulaCon', xid) || enLista(x, 'acumulaCon', c.id)) return true;
+    if (tipo === 'despacho') return ac.despacho !== false && !!x && x.acumulaCampanas !== false;
+    return !!ac.campanas && !!acumulaDe(x).campanas;
+  }
+  // vigente | programada | vencida | inactiva | sin-membresia | excluida (simulación sin ella, o "precio normal")
+  function estadoCampana(ctx, p, c) {
+    const hoy = hoyISO(ctx.p);
+    if (ctx.opts.sinPromos || ctx.excluidas.has(c.id)) return 'excluida';
+    if (c.activa === false || (p && p.activo === false)) return 'inactiva';
+    if (c.desde && c.desde > hoy) return 'programada';
+    if (c.hasta && c.hasta < hoy) return 'vencida';
+    if (c.requiereMembresia && !membresiaActiva(ctx, p)) return 'sin-membresia';
+    return 'vigente';
+  }
+  function campanaDe(ctx, o) { return o && o.campanaId ? ctx.campanas.get(o.campanaId) || null : null; }
+  function campanaVigente(ctx, e) { return !!e && estadoCampana(ctx, e.p, e.c) === 'vigente'; }
+  // ofertas temporales: las con fecha propia (temporal.hasta) y las de una campaña
+  function esTemporal(o) { return !!(o && (o.temporal || o.campanaId)); }
+  function hastaOferta(ctx, o) { const e = campanaDe(ctx, o); return e ? e.c.hasta || null : (o && o.temporal && o.temporal.hasta) || null; }
+  function esSoloOnline(ctx, o) { const e = campanaDe(ctx, o); return !!(o && (o.soloOnline || (e && e.c.canal === 'online'))); }
+  // ¿un descuento de campaña alcanza a esta oferta?
+  function alcanzaA(c, o, ins) {
+    if (c.alcance === 'categorias') return !!ins && (c.categorias || []).some(function (k) { return normNombre(k) === normNombre(ins.categoria); });
+    if (c.alcance === 'seleccionados') return (c.insumos || []).indexOf(o.insumoId) >= 0;
+    return true;
+  }
+  // campañas de descuento vigentes del proveedor que alcanzan a la oferta (paraCostos: solo las que se usan en los costos)
+  function descuentosDeOferta(ctx, o, paraCostos) {
+    const p = proveedorDe(ctx, o), lista = p ? ctx.descuentosPorProv.get(p.id) : null;
+    if (!lista) return [];
+    const ins = ctx.insumos.get(o.insumoId);
+    return lista.filter(function (e) {
+      return o.campanaId !== e.c.id && estadoCampana(ctx, e.p, e.c) === 'vigente' && !(paraCostos && e.c.usarEnCostos === false) && alcanzaA(e.c, o, ins);
+    });
+  }
+  // precio de un formato con todas las promociones que le aplican, respetando qué se acumula con qué:
+  // { precio, base, descuentos: [{ tipo: 'cantidad'|'campana', id, nombre, monto }], campanas: [ids], sinFactura, online, soloTienda }
+  function infoPrecio(ctx, o, packs, paraCostos) {
+    const k = o.id + '|' + (packs || 0) + '|' + (paraCostos ? 1 : 0);
+    if (ctx.memoPrecio.has(k)) return ctx.memoPrecio.get(k);
+    const ligada = campanaDe(ctx, o), cl = ligada && campanaVigente(ctx, ligada) ? ligada.c : null;
+    const res = { precio: o.precio, base: o.precio, descuentos: [], campanas: cl ? [cl.id] : [], sinFactura: !!(cl && cl.excluyeFactura),
+      online: !!(o.soloOnline || (cl && cl.canal === 'online')), soloTienda: !!(cl && cl.canal === 'tienda') };
+    const ov = ctx.opts.precios && ctx.opts.precios[o.id];
+    if (ov != null) { res.precio = res.base = ov; ctx.memoPrecio.set(k, res); return res; }
+    const pc = promoCantidadVigente(ctx, o);
+    const conPC = !!(pc && packs >= Number(pc.minimo) && (!cl || acumulaDe(cl).promosProducto));
+    const ds = descuentosDeOferta(ctx, o, paraCostos);
+    // mejor combinación de descuentos que se acumulan entre sí y con la promoción propia de la oferta
+    const evaluar = function (precio0, usaPC) {
+      const propia = function (e) { return cl ? seAcumulan(e.c, cl, 'campana') : (o.temporal || usaPC) ? seAcumulan(e.c, null, 'producto') : true; };
+      const eleg = ds.filter(propia).slice(0, 5);
+      let mejor = { precio: precio0, set: [] };
+      for (let m = 1; m < (1 << eleg.length); m++) {
+        const set = eleg.filter(function (_, i) { return m & (1 << i); });
+        let ok = true;
+        for (let i = 0; i < set.length && ok; i++) for (let j = i + 1; j < set.length && ok; j++) ok = seAcumulan(set[i].c, set[j].c, 'campana');
+        if (!ok) continue;
+        const pr = set.reduce(function (x, e) { return x * (1 - Number(e.c.descuentoPct) / 100); }, precio0);
+        if (pr < mejor.precio - 1e-9) mejor = { precio: pr, set: set };
+      }
+      return { precio: mejor.precio, set: mejor.set, usaPC: usaPC, precio0: precio0 };
+    };
+    let r = evaluar(conPC ? Number(pc.precio) : o.precio, conPC);
+    if (conPC && ds.length) { const r2 = evaluar(o.precio, false); if (r2.precio < r.precio - 1e-9) r = r2; }   // el descuento sin la promo por cantidad puede ganar
+    res.precio = r.precio;
+    if (r.usaPC) res.descuentos.push({ tipo: 'cantidad', id: null, nombre: 'Llevando ' + pc.minimo + ' o más', monto: o.precio - r.precio0 });
+    let corrido = r.precio0;
+    r.set.forEach(function (e) {
+      const d = corrido * Number(e.c.descuentoPct) / 100;
+      corrido -= d;
+      res.descuentos.push({ tipo: 'campana', id: e.c.id, nombre: e.c.nombre || 'campaña', pct: Number(e.c.descuentoPct), monto: d });
+      res.campanas.push(e.c.id);
+      if (e.c.excluyeFactura) res.sinFactura = true;
+      if (e.c.canal === 'online') res.online = true;
+      if (e.c.canal === 'tienda') res.soloTienda = true;
+    });
+    ctx.memoPrecio.set(k, res);
+    return res;
+  }
+
+  // Formas de armar el pedido a un proveedor según qué promociones se usan. Si una campaña no se acumula con una promo de
+  // despacho, excluye la factura o restringe el canal, se prueba también el pedido sin ella (sus productos al precio que
+  // quede en ese proveedor) y gana el total más barato. items = compras (compraConOferta + insumoId, usable).
+  // opts.todas: prueba sin cada campaña usada (para el comparador), no solo las que estorban.
+  function opcionesPromoGrupo(ctx, p, items, opts) {
+    opts = opts || {};
+    const usadas = new Map();
+    items.forEach(function (it) { (it.campanas || []).forEach(function (id) { const e = ctx.campanas.get(id); if (e) usadas.set(id, e); }); });
+    const promosD = (p.promosDespacho || []).filter(function (pr) { return estadoPromo(ctx, p, pr) === 'vigente'; });
+    const estorba = function (e) {
+      return opts.todas || promosD.some(function (pr) { return !seAcumulan(e.c, pr, 'despacho'); }) ||
+        (e.c.excluyeFactura && ivaAplica(ctx) && daFactura(p)) || (e.c.canal && e.c.canal !== 'todos');
+    };
+    const conflictivas = Array.from(usadas.values()).filter(estorba).slice(0, 4).map(function (e) { return e.c.id; });
+    const opciones = [];
+    for (let mask = 0; mask < (1 << conflictivas.length); mask++) {
+      const excl = conflictivas.filter(function (_, i) { return mask & (1 << i); });
+      const cx = excl.length ? variante(ctx, { campanasExcluidas: excl }) : ctx;
+      let ok = true;
+      const its = [];
+      items.forEach(function (it) {
+        if (!ok) return;
+        const o = ctx.ofertas.get(it.ofertaId);
+        let c = it;
+        if (excl.length && o && o.campanaId && excl.indexOf(o.campanaId) >= 0) {
+          // sin esa campaña: la mejor otra oferta del mismo proveedor
+          c = null;
+          ofertasDisponibles(cx, it.insumoId).forEach(function (x) {
+            if (!(x.formatoQty > 0) || !(x.precio > 0)) return;
+            const px = proveedorDe(cx, x);
+            if (!px || px.id !== p.id) return;
+            const cc = compraConOferta(cx, x, it.usable);
+            if (!c || cc.bruto < c.bruto) c = cc;
+          });
+          if (!c) { ok = false; return; }
+        } else if (excl.length && o) c = compraConOferta(cx, o, it.usable);
+        its.push(Object.assign({}, it, c));
+      });
+      if (!ok) continue;
+      const vivas = [];
+      its.forEach(function (it) { (it.campanas || []).forEach(function (id) { if (vivas.indexOf(id) < 0) vivas.push(id); }); });
+      const sinFactura = its.some(function (it) { return it.sinFactura; }), soloTienda = its.some(function (it) { return it.soloTienda; });
+      let bruto = 0, costo = 0;
+      its.forEach(function (it) { bruto += it.bruto; costo += sinFactura ? it.bruto : it.costo; });
+      const online = pedidoOnline(cx, its), brutoSel = brutoSeleccionado(cx, its);
+      const admite = function (cond) { return !cond.promo || vivas.every(function (id) { const e = ctx.campanas.get(id); return !e || seAcumulan(e.c, cond.promo, 'despacho'); }); };
+      const lg = logistica(cx, p, bruto, online, brutoSel, { admite: admite, sinFactura: sinFactura, soloTienda: soloTienda });
+      opciones.push({ excluidas: excl, items: its, bruto: bruto, costo: costo, brutoSel: brutoSel, online: online, soloTienda: soloTienda, sinFactura: sinFactura,
+        campanas: vivas, logistica: lg, viable: !!lg, total: costo + (lg ? lg.costo : 0) });
+    }
+    const mejor = opciones.reduce(function (a, x) {
+      if (!a) return x;
+      if (x.viable !== a.viable) return x.viable ? x : a;
+      return x.total < a.total - 0.5 ? x : a;
+    }, null);
+    return { opciones: opciones, mejor: mejor, conflictivas: conflictivas };
   }
 
   /* Radar de promociones de despacho: para cada promoción que vale hoy o empieza pronto, cuánto de tu compra semanal
@@ -514,16 +694,20 @@ window.CLOUD = {
         const costoNormal = d.ofrece ? Number(d.costo) || 0 : null;
         const costoPromo = cp != null && !(gd > 0 && cp === 0) ? cp : costoNormal;
         const umbral = gd > 0 ? gd : minimo;
+        // con esta promo no valen las campañas del proveedor que no se acumulan con ella
+        const incompat = [];
+        ctx.campanas.forEach(function (e) { if (e.p.id === prov.id && !seAcumulan(e.c, pr, 'despacho')) incompat.push(e.c.id); });
+        const cx = incompat.length ? variante(ctx, { campanasExcluidas: incompat }) : ctx;
         let cesta = 0, ahorroProductos = 0;
         const productos = [];
         filas.forEach(function (f) {
           const aqui = f.proveedorId === prov.id;
           let mejor = null;
-          (ctx.ofertasPorInsumo.get(f.insumoId) || []).forEach(function (o) {
-            if (o.disponible === false || o.pendiente || ofertaVencida(ctx, o) || !ofertaHabilitada(ctx, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
-            const pv = proveedorDe(ctx, o);
+          (cx.ofertasPorInsumo.get(f.insumoId) || []).forEach(function (o) {
+            if (o.disponible === false || o.pendiente || fueraDeVigencia(cx, o) || !ofertaHabilitada(cx, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
+            const pv = proveedorDe(cx, o);
             if (!pv || pv.id !== prov.id) return;
-            const c = compraConOferta(ctx, o, f.usable);
+            const c = compraConOferta(cx, o, f.usable);
             if (!mejor || c.bruto < mejor.bruto) mejor = c;
           });
           if (aqui) { cesta += f.costo; productos.push({ nombre: f.nombre, bruto: f.costo, ahorro: 0, yaAqui: true }); }
@@ -557,10 +741,10 @@ window.CLOUD = {
       alcance: 'todo', plazoDias: num(d.plazoDias), horaCorte: d.horaCorte || '' };
     if (d.ofrece) out.push(normal);
     (p.promosDespacho || []).forEach(function (pr) {
-      if (estadoPromo(ctx, p, pr) !== 'vigente') return;
+      if (ctx.opts.sinPromos || estadoPromo(ctx, p, pr) !== 'vigente') return;
       // "gratis desde X" con costo 0 o vacío: bajo X se paga el despacho normal
       const gd = Number(pr.gratisDesde) || 0, cp = num(pr.costo);
-      out.push({ nombre: pr.nombre || 'promoción', costo: cp != null && !(gd > 0 && cp === 0) ? cp : normal.costo, gratisDesde: gd,
+      out.push({ nombre: pr.nombre || 'promoción', id: pr.id || null, promo: pr, costo: cp != null && !(gd > 0 && cp === 0) ? cp : normal.costo, gratisDesde: gd,
         minimoPedido: Number(pr.minimoPedido) || 0, hasta: pr.hasta || null, alcance: pr.alcance === 'seleccionados' ? 'seleccionados' : 'todo',
         plazoDias: num(pr.plazoDias) != null ? num(pr.plazoDias) : normal.plazoDias, horaCorte: pr.horaCorte || (num(pr.plazoDias) != null ? '' : normal.horaCorte) });
     });
@@ -584,18 +768,13 @@ window.CLOUD = {
   // promoción por cantidad ("lleva 2 o más a $X c/u"): vale entre desde y hasta; después vuelve el precio de lista
   function promoCantidadVigente(ctx, o) {
     const pc = o.promoCantidad;
-    if (!pc || !(Number(pc.minimo) > 1) || !(Number(pc.precio) > 0)) return null;
+    if (ctx.opts.sinPromos || !pc || !(Number(pc.minimo) > 1) || !(Number(pc.precio) > 0)) return null;
     const hoy = hoyISO(ctx.p);
     if ((pc.desde && pc.desde > hoy) || (pc.hasta && pc.hasta < hoy)) return null;
     return pc;
   }
-  // precio de un formato comprando `packs` unidades (aplica la promo por cantidad si se alcanza el mínimo)
-  function precioPorPack(ctx, o, packs) {
-    const ov = ctx.opts.precios && ctx.opts.precios[o.id];
-    if (ov != null) return ov;
-    const pc = promoCantidadVigente(ctx, o);
-    return pc && packs >= Number(pc.minimo) ? Number(pc.precio) : o.precio;
-  }
+  // precio de un formato comprando `packs` unidades (promo por cantidad si se alcanza el mínimo y descuentos de campaña)
+  function precioPorPack(ctx, o, packs) { return infoPrecio(ctx, o, packs, false).precio; }
   // formatos que compras de esta oferta en una semana (para saber si alcanzas la promo por cantidad)
   function packsSemanales(ctx, o) {
     if (!(o.formatoQty > 0)) return 0;
@@ -604,12 +783,10 @@ window.CLOUD = {
     const uso = usoSemanalInsumos(ctx).uso.get(o.insumoId) || 0;
     return uso > 0 ? Math.ceil(uso / (rend || 1) / o.formatoQty - 1e-9) : 0;
   }
-  // precio que usan los costos: el de promo por cantidad solo si tu compra semanal alcanza el mínimo
-  function precioOferta(ctx, o) {
-    const ov = ctx.opts.precios && ctx.opts.precios[o.id];
-    if (ov != null) return ov;
-    return promoCantidadVigente(ctx, o) ? precioPorPack(ctx, o, packsSemanales(ctx, o)) : o.precio;
-  }
+  // precio que usan los costos: el de promo por cantidad solo si tu compra semanal alcanza el mínimo;
+  // los descuentos de campaña solo si la campaña se usa en los costos
+  function infoCostos(ctx, o) { return infoPrecio(ctx, o, promoCantidadVigente(ctx, o) ? packsSemanales(ctx, o) : 0, true); }
+  function precioOferta(ctx, o) { return infoCostos(ctx, o).precio; }
 
   // costo por unidad base utilizable de una oferta, tal como se paga (IVA incluido si lo trae)
   function costoBrutoOferta(ctx, o) {
@@ -619,23 +796,45 @@ window.CLOUD = {
     return denom > 0 ? precioOferta(ctx, o) / denom : 0;
   }
 
-  // costo neto (después de merma y, si el negocio recupera IVA y el proveedor da factura, sin IVA) por unidad base
+  // costo neto (después de merma y, si el negocio recupera IVA y el proveedor da factura, sin IVA) por unidad base.
+  // Una campaña que excluye las compras con factura no da crédito fiscal: se costea con IVA.
   function costoNetoOferta(ctx, o) {
-    return costoBrutoOferta(ctx, o) / divisorIva(ctx, proveedorDe(ctx, o));
+    return costoBrutoOferta(ctx, o) / (infoCostos(ctx, o).sinFactura ? 1 : divisorIva(ctx, proveedorDe(ctx, o)));
+  }
+  // precio de lista por unidad base utilizable (sin promociones; para comparar campañas)
+  function unitLista(ctx, o) {
+    const ins = ctx.insumos.get(o.insumoId);
+    const rend = o.rendimiento != null ? o.rendimiento : (ins && ins.rendimiento != null ? ins.rendimiento : 1);
+    const denom = (o.formatoQty || 0) * (rend || 1);
+    return denom > 0 && o.precio > 0 ? o.precio / denom : null;
   }
 
   // ofertas utilizables: disponibles y ya revisadas (una cotización "pendiente" no entra a los costos hasta aprobarla)
-  // ofertas temporales: valen hasta temporal.hasta (inclusive); vencidas no entran a los costos (quedan en el historial)
-  function ofertaVencida(ctx, o) { return !!(o.temporal && o.temporal.hasta && o.temporal.hasta < hoyISO(ctx.p)); }
-  function diasParaVencer(ctx, o) { return o.temporal && o.temporal.hasta ? diasEntre(hoyISO(ctx.p), o.temporal.hasta) : null; }
-  // oferta temporal que el administrador decidió usar mientras dure
+  // ofertas temporales: valen hasta temporal.hasta (inclusive) o, si son de una campaña, hasta el fin de la campaña;
+  // vencidas no entran a los costos (quedan en el historial). Una campaña borrada deja vencidas sus ofertas.
+  function ofertaVencida(ctx, o) {
+    if (o.campanaId) { const e = campanaDe(ctx, o); return !e || !!(e.c.hasta && e.c.hasta < hoyISO(ctx.p)); }
+    return !!(o.temporal && o.temporal.hasta && o.temporal.hasta < hoyISO(ctx.p));
+  }
+  // no vale hoy: vencida, de una campaña que aún no empieza o desactivada, o excluida en una simulación
+  function fueraDeVigencia(ctx, o) {
+    if (ofertaVencida(ctx, o)) return true;
+    const e = campanaDe(ctx, o);
+    return !!e && ['programada', 'inactiva', 'excluida'].indexOf(estadoCampana(ctx, e.p, e.c)) >= 0;
+  }
+  function diasParaVencer(ctx, o) { const h = hastaOferta(ctx, o); return h ? diasEntre(hoyISO(ctx.p), h) : null; }
+  // oferta temporal que el administrador decidió usar mientras dure; las de campaña siguen a su campaña
+  // (usarEnCostos), salvo que en la oferta se haya decidido otra cosa (usarMientrasDure true/false)
   function oportunidadActiva(ctx, o) {
-    return !!(o.temporal && o.usarMientrasDure && !o.pendiente && o.disponible !== false && !ofertaVencida(ctx, o) && ofertaHabilitada(ctx, o));
+    if (!esTemporal(o) || o.pendiente || o.disponible === false || fueraDeVigencia(ctx, o) || !ofertaHabilitada(ctx, o)) return false;
+    const e = campanaDe(ctx, o);
+    if (e) return o.usarMientrasDure != null ? !!o.usarMientrasDure : e.c.usarEnCostos !== false;
+    return !!o.usarMientrasDure;
   }
 
   function ofertasDisponibles(ctx, insumoId) {
     return (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) {
-      return o.disponible !== false && !o.pendiente && !ofertaVencida(ctx, o) && !(ctx.opts.sinOportunidades && o.temporal) && ofertaHabilitada(ctx, o);
+      return o.disponible !== false && !o.pendiente && !fueraDeVigencia(ctx, o) && !((ctx.opts.sinOportunidades || ctx.opts.sinPromos) && esTemporal(o)) && ofertaHabilitada(ctx, o);
     });
   }
 
@@ -645,9 +844,9 @@ window.CLOUD = {
     let res = { unit: 0, oferta: null, missing: true, modo: ctx.p.modoOferta };
     const pin = ctx.opts.ofertaElegida && ctx.opts.ofertaElegida[insumoId];
     let lista = ofertasDisponibles(ctx, insumoId);
-    if (!lista.length) lista = (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return !o.pendiente && !o.temporal && ofertaHabilitada(ctx, o); });
-    // escenario (simulación) > oferta temporal en uso mientras dure > modo normal
-    const oport = ctx.opts.sinOportunidades ? [] : (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return oportunidadActiva(ctx, o); })
+    if (!lista.length) lista = (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return !o.pendiente && !esTemporal(o) && ofertaHabilitada(ctx, o); });
+    // escenario (simulación) > oferta temporal o de campaña en uso mientras dure > modo normal
+    const oport = ctx.opts.sinOportunidades || ctx.opts.sinPromos ? [] : (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return oportunidadActiva(ctx, o); })
       .map(function (o) { return { o: o, c: costoNetoOferta(ctx, o) }; }).filter(function (x) { return x.c > 0; });
     if (pin && ctx.ofertas.get(pin)) {
       const o = ctx.ofertas.get(pin);
@@ -1049,8 +1248,24 @@ window.CLOUD = {
         formatoQty: formato, packs: packs, precioPack: o ? precioPorPack(ctx, o, packs) : 0,
         costo: formato > 0 ? packs * precioPorPack(ctx, o, packs) : usable * c.unit, costoTeorico: usable * c.unit, missing: c.missing,
         promoCantidad: o ? promoCantidadVigente(ctx, o) : null,
-        necesario: necesario, cubiertoStock: cubierto, oportunidad: c.modo === 'oportunidad' ? o.temporal.hasta : null });
+        necesario: necesario, cubiertoStock: cubierto, oportunidad: c.modo === 'oportunidad' ? hastaOferta(ctx, o) : null });
     });
+    // descuentos a la vista: lo mismo a precio normal (sin campañas, ofertas temporales ni promos) y qué promociones bajan el precio
+    if (!ctx.opts.sinPromos) {
+      const normal = variante(ctx, { sinPromos: true });
+      filas.forEach(function (f) {
+        const o = f.ofertaId ? ctx.ofertas.get(f.ofertaId) : null;
+        const n = costoInsumo(normal, f.insumoId), on = n.oferta;
+        f.costoNormal = on && on.formatoQty > 0 ? compraConOferta(normal, on, f.usable).bruto : (n.missing ? null : f.usable * n.unit);
+        f.ahorroPromo = f.costoNormal != null && f.costoNormal > f.costo + 0.5 ? f.costoNormal - f.costo : 0;
+        f.promos = [];
+        if (!o) return;
+        const e = campanaDe(ctx, o);
+        if (e) f.promos.push({ tipo: 'campana', id: e.c.id, nombre: e.c.nombre || 'campaña', hasta: e.c.hasta || null });
+        else if (o.temporal) f.promos.push({ tipo: 'temporal', id: null, nombre: 'oferta temporal', hasta: o.temporal.hasta || null });
+        infoPrecio(ctx, o, f.packs, false).descuentos.forEach(function (d) { f.promos.push({ tipo: d.tipo, id: d.id, nombre: d.nombre, monto: d.monto * f.packs }); });
+      });
+    }
     filas.sort(function (a, b) { return a.lugar === b.lugar ? a.nombre.localeCompare(b.nombre) : a.lugar.localeCompare(b.lugar); });
     return filas;
   }
@@ -1066,7 +1281,7 @@ window.CLOUD = {
       let ahorroMes = 0;
       u.uso.forEach(function (q, id) {
         if (!(q > 0)) return;
-        const ofs = (ctx.ofertasPorInsumo.get(id) || []).filter(function (o) { return o.requiereMembresia && !o.pendiente && o.disponible !== false && !ofertaVencida(ctx, o) && proveedorDe(ctx, o) === p; });
+        const ofs = (ctx.ofertasPorInsumo.get(id) || []).filter(function (o) { return o.requiereMembresia && !o.pendiente && o.disponible !== false && !fueraDeVigencia(ctx, o) && proveedorDe(ctx, o) === p; });
         if (!ofs.length) return;
         const hoy = activa ? costoInsumo(makeCtx(ctx.state, Object.assign({}, ctx.opts, { sinMembresia: p.id })), id) : costoInsumo(ctx, id);
         const mejor = ofs.map(function (o) { return { o: o, c: costoNetoOferta(conM, o) }; }).filter(function (x) { return x.c > 0; })
@@ -1092,15 +1307,19 @@ window.CLOUD = {
     const normalTotal = c0.oferta ? compraConOferta(ctx, c0.oferta, usable).bruto : null;
     const out = [];
     (ctx.ofertasPorInsumo.get(insumoId) || []).forEach(function (o) {
-      if (o.disponible === false || ofertaVencida(ctx, o) || !ofertaHabilitada(ctx, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
+      if (o.disponible === false || fueraDeVigencia(ctx, o) || !ofertaHabilitada(ctx, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
       const p = proveedorDe(ctx, o);
       if (!p || p.activo === false) return;
-      const c = compraConOferta(ctx, o, usable), div = divisorIva(ctx, p);
+      const c = compraConOferta(ctx, o, usable), div = c.sinFactura ? 1 : divisorIva(ctx, p);
       const base = { oferta: o, proveedor: p, packs: c.packs, bruto: c.bruto, porRevisar: !!o.pendiente };
-      if (p.retiro !== false && (!o.soloOnline || p.retiroOnline !== false)) {
-        out.push(Object.assign({ modo: o.soloOnline ? 'retirar pedido online' : 'ir a comprar', promo: null, plazoDias: 0, horaCorte: '', logBruto: 0, logCosto: Number(p.costoVisita) || 0, faltaMinimo: 0 }, base));
+      if (p.retiro !== false && (!c.online || p.retiroOnline !== false)) {
+        out.push(Object.assign({ modo: c.online ? 'retirar pedido online' : 'ir a comprar', promo: null, plazoDias: 0, horaCorte: '', logBruto: 0, logCosto: Number(p.costoVisita) || 0, faltaMinimo: 0 }, base));
       }
-      condicionesDespacho(ctx, p).forEach(function (cd) {
+      if (c.soloTienda) return;   // precio de campaña solo en tienda: no se despacha
+      // promos de despacho que no se acumulan con la campaña de este precio no valen aquí
+      condicionesDespacho(ctx, p).filter(function (cd) {
+        return !cd.promo || c.campanas.every(function (id) { const e = ctx.campanas.get(id); return !e || seAcumulan(e.c, cd.promo, 'despacho'); });
+      }).forEach(function (cd) {
         const m = cd.alcance === 'seleccionados' ? (o.promoSeleccionado ? c.bruto : 0) : c.bruto;
         const gratis = cd.gratisDesde > 0 && m >= cd.gratisDesde, b = gratis ? 0 : cd.costo;
         out.push(Object.assign({ modo: 'despacho', promo: cd.nombre, plazoDias: plazoEntrega(ctx, cd), horaCorte: cd.horaCorte || '', logBruto: b, logCosto: b / div,
@@ -1186,8 +1405,8 @@ window.CLOUD = {
 
   // ofertas temporales vigentes (por revisar, en uso o como alternativa), ordenadas por vencimiento
   function ofertasTemporales(ctx) {
-    return (ctx.state.ofertas || []).filter(function (o) { return o.temporal && !ofertaVencida(ctx, o); })
-      .sort(function (a, b) { return (a.temporal.hasta || '').localeCompare(b.temporal.hasta || ''); });
+    return (ctx.state.ofertas || []).filter(function (o) { return esTemporal(o) && !ofertaVencida(ctx, o); })
+      .sort(function (a, b) { return (hastaOferta(ctx, a) || '9999').localeCompare(hastaOferta(ctx, b) || '9999'); });
   }
 
   /* ---------- evolución de precios ---------- */
@@ -1361,7 +1580,7 @@ window.CLOUD = {
       if (c.missing || !o) return;
       const prov = proveedorDe(ctx, o), bruto = costoBrutoOferta(ctx, o);
       const gastoMes = q * bruto * SEMANAS_MES, iva = gastoMes - gastoMes / f;
-      const fila = { insumoId: id, nombre: ins.nombre, oferta: o, proveedor: prov, gastoMes: gastoMes, iva: iva, conFactura: daFactura(prov) };
+      const fila = { insumoId: id, nombre: ins.nombre, oferta: o, proveedor: prov, gastoMes: gastoMes, iva: iva, conFactura: daFactura(prov) && !infoCostos(ctx, o).sinFactura };
       if (fila.conFactura) { credito += iva; gastoCon += gastoMes; }
       else {
         perdido += iva; gastoSin += gastoMes;
@@ -1369,7 +1588,7 @@ window.CLOUD = {
         let mejor = null;
         ofertasDisponibles(ctx, id).forEach(function (x) {
           const px = proveedorDe(ctx, x);
-          if (x.id === o.id || !daFactura(px)) return;
+          if (x.id === o.id || !daFactura(px) || infoCostos(ctx, x).sinFactura) return;
           const cb = costoBrutoOferta(ctx, x);
           if (!(cb > 0)) return;
           if (!mejor || cb < mejor.bruto) mejor = { oferta: x, proveedor: px, bruto: cb, neto: cb / f };
@@ -1432,15 +1651,17 @@ window.CLOUD = {
     return acc;
   }
 
-  // cubrir `usable` con una oferta, en formatos enteros
+  // cubrir `usable` con una oferta, en formatos enteros (con las promociones que le aplican y sus condiciones)
   function compraConOferta(ctx, o, usable) {
     const ins = ctx.insumos.get(o.insumoId);
     const rend = o.rendimiento != null ? o.rendimiento : (ins && ins.rendimiento != null ? ins.rendimiento : 1);
     const base = rend > 0 ? usable / rend : usable;
     const packs = o.formatoQty > 0 ? Math.ceil(base / o.formatoQty - 1e-9) : 0;
-    const bruto = packs * precioPorPack(ctx, o, packs);
+    const info = infoPrecio(ctx, o, packs, false), bruto = packs * info.precio;
     const prov = proveedorDe(ctx, o);
-    return { ofertaId: o.id, proveedorId: prov ? prov.id : null, packs: packs, bruto: bruto, costo: bruto / divisorIva(ctx, prov) };
+    return { ofertaId: o.id, proveedorId: prov ? prov.id : null, packs: packs, bruto: bruto, costo: bruto / (info.sinFactura ? 1 : divisorIva(ctx, prov)),
+      campanas: info.campanas, descuentos: info.descuentos.map(function (d) { return Object.assign({}, d, { monto: d.monto * packs }); }),
+      sinFactura: info.sinFactura, online: info.online, soloTienda: info.soloTienda };
   }
 
   // cómo llega la compra de un proveedor y cuánto cuesta (despacho, despacho gratis o ir a buscar); null = imposible
@@ -1448,8 +1669,13 @@ window.CLOUD = {
   // solo con despacho o retirando el pedido online (si el proveedor lo permite)
   // brutoSel = monto de los productos marcados para promociones (cuenta en las condiciones de alcance 'seleccionados')
   // ctx.opts.plazoMax = días máximos de espera: descarta los despachos que llegarían después (ir a buscar = hoy)
-  function logistica(ctx, prov, bruto, online, brutoSel) {
-    const conds = condicionesDespacho(ctx, prov), ops = [], max = ctx.opts.plazoMax;
+  // extra: { admite(condición) → false si una campaña del pedido no se acumula con esa promo de despacho,
+  //          sinFactura (una campaña la excluye: sin crédito fiscal), soloTienda (precio de campaña solo en tienda: no se despacha) }
+  function logistica(ctx, prov, bruto, online, brutoSel, extra) {
+    extra = extra || {};
+    if (online && extra.soloTienda) return null;   // parte solo online y parte solo en tienda: no hay un pedido que sirva
+    const conds = extra.soloTienda ? [] : condicionesDespacho(ctx, prov).filter(function (c) { return !extra.admite || extra.admite(c); });
+    const ops = [], max = ctx.opts.plazoMax, div = extra.sinFactura ? 1 : divisorIva(ctx, prov);
     const base = function (c) { return c.alcance === 'seleccionados' ? (Number(brutoSel) || 0) : bruto; };
     conds.forEach(function (c) {
       const m = base(c), dias = plazoEntrega(ctx, c);
@@ -1457,7 +1683,7 @@ window.CLOUD = {
       if (max != null && dias != null && dias > max) return;
       const gratis = c.gratisDesde > 0 && m >= c.gratisDesde;
       const b = gratis ? 0 : c.costo;
-      ops.push({ modo: gratis || b === 0 ? 'despacho gratis' : 'despacho', bruto: b, costo: b / divisorIva(ctx, prov), promo: c.nombre, plazoDias: dias, horaCorte: c.horaCorte || '' });
+      ops.push({ modo: gratis || b === 0 ? 'despacho gratis' : 'despacho', bruto: b, costo: b / div, promo: c.nombre, promoId: c.id || null, plazoDias: dias, horaCorte: c.horaCorte || '' });
     });
     if (prov.retiro !== false && (!online || prov.retiroOnline !== false)) ops.push({ modo: online ? 'retiro pedido online' : 'retiro', bruto: 0, costo: Number(prov.costoVisita) || 0, promo: null, plazoDias: 0 });
     if (!ops.length) return null;
@@ -1483,9 +1709,10 @@ window.CLOUD = {
   function brutoSeleccionado(ctx, items) {
     return items.reduce(function (t, it) { const o = ctx.ofertas.get(it.ofertaId); return t + (o && o.promoSeleccionado ? (Number(it.bruto != null ? it.bruto : it.costo) || 0) : 0); }, 0);
   }
-  function pedidoOnline(ctx, items) { return items.some(function (it) { const o = ctx.ofertas.get(it.ofertaId); return !!(o && o.soloOnline); }); }
+  function pedidoOnline(ctx, items) { return items.some(function (it) { return !!(it.online || esSoloOnline(ctx, ctx.ofertas.get(it.ofertaId))); }); }
 
-  // arma un plan de compra a partir de la elección insumo → compra
+  // arma un plan de compra a partir de la elección insumo → compra. Por proveedor elige qué promociones usar
+  // (opcionesPromoGrupo): una campaña que no se acumula con la promo de despacho se compara contra el pedido sin ella.
   function armarPlan(ctx, nec, eleccion) {
     const grupos = new Map(), f = factorIva(ctx);
     let totalItems = 0, totalLog = 0, credito = 0, bruto = 0, viable = true;
@@ -1494,19 +1721,27 @@ window.CLOUD = {
       if (!grupos.has(k)) grupos.set(k, { proveedor: p, nombre: p ? p.nombre : (o.lugar || 'Sin proveedor'), items: [], bruto: 0, costo: 0 });
       const g = grupos.get(k);
       g.items.push(Object.assign({ insumoId: insId, usable: nec.get(insId) }, e));
-      g.bruto += e.bruto; g.costo += e.costo; totalItems += e.costo;
+      g.bruto += e.bruto; g.costo += e.costo;
     });
     grupos.forEach(function (g) {
-      g.online = pedidoOnline(ctx, g.items);
-      g.brutoSel = brutoSeleccionado(ctx, g.items);
-      g.logistica = g.proveedor ? logistica(ctx, g.proveedor, g.bruto, g.online, g.brutoSel) : { modo: '—', bruto: 0, costo: 0, faltaGratis: 0, faltaMinimo: 0 };
+      if (g.proveedor) {
+        const ev = opcionesPromoGrupo(ctx, g.proveedor, g.items), m = ev.mejor;
+        Object.assign(g, { items: m.items, bruto: m.bruto, costo: m.costo, online: m.online, brutoSel: m.brutoSel, sinFactura: m.sinFactura,
+          campanas: m.campanas, campanasDescartadas: m.excluidas, opcionesPromo: ev.opciones.length > 1 ? ev.opciones : null, logistica: m.logistica });
+      } else {
+        g.online = pedidoOnline(ctx, g.items);
+        g.brutoSel = brutoSeleccionado(ctx, g.items);
+        g.campanas = []; g.campanasDescartadas = [];
+        g.logistica = { modo: '—', bruto: 0, costo: 0, faltaGratis: 0, faltaMinimo: 0 };
+      }
       if (!g.logistica) {
         viable = false;
         g.logistica = { modo: 'bajo el mínimo', bruto: 0, costo: 0, faltaGratis: 0, faltaMinimo: faltaMinimoDespacho(ctx, g.proveedor, g.bruto, g.brutoSel), online: g.online };
       }
+      totalItems += g.costo;
       totalLog += g.logistica.costo;
       bruto += g.bruto + g.logistica.bruto;
-      if (g.proveedor && daFactura(g.proveedor)) credito += (g.bruto + g.logistica.bruto) * (1 - 1 / f);
+      if (g.proveedor && daFactura(g.proveedor) && !g.sinFactura) credito += (g.bruto + g.logistica.bruto) * (1 - 1 / f);
     });
     const proveedores = Array.from(grupos.values()).sort(function (a, b) { return b.bruto - a.bruto; });
     return { proveedores: proveedores, nProveedores: proveedores.length, totalItems: totalItems, totalLogistica: totalLog,
@@ -1620,6 +1855,244 @@ window.CLOUD = {
       porItem: elBarato ? Object.assign({ eleccion: elBarato }, armarPlan(ctx, nec, elBarato)) : null,
       sinOferta: sinOferta, necesidades: nec, combinaciones: vistos.size, proveedoresConsiderados: obligatorios.size + n
     };
+  }
+
+  /* ---------- campañas: reconocer, proponer, listar y planificar compras ---------- */
+  function clp(n) { return '$' + String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
+
+  // ¿a qué campaña vigente pertenece una cotización? d = { proveedorId | lugar, precio, precioNormal, titulo, descripcion, textos[], fecha }
+  // Pistas: la página nombra la campaña o una de sus claves (fuerte), el precio es uno de sus precios fijos (fuerte),
+  // o es la única campaña de precios vigente y la página muestra un precio rebajado (media).
+  function reconocerCampana(ctx, d) {
+    d = d || {};
+    const p = (d.proveedorId && ctx.proveedores.get(d.proveedorId)) || ctx.provPorNombre.get(normNombre(d.lugar)) || null;
+    if (!p) return { proveedor: null, sugerida: null, candidatas: [], vigentes: [] };
+    const cx = d.fecha ? variante(ctx, { params: { hoy: d.fecha } }) : ctx;
+    const texto = ' ' + normNombre([d.titulo, d.descripcion].concat(d.textos || []).join(' ')) + ' ';
+    const precio = Math.round(Number(d.precio) || 0), rebajado = Number(d.precioNormal) > Number(d.precio);
+    const cands = (p.campanas || []).map(function (c) { return { campana: c, proveedor: p, estado: estadoCampana(cx, p, c), puntaje: 0, motivos: [] }; })
+      .filter(function (x) { return x.estado === 'vigente' || x.estado === 'sin-membresia'; });
+    cands.forEach(function (x) {
+      const c = x.campana;
+      const frases = (c.claves || []).concat(c.nombre ? [c.nombre] : []).map(normNombre).filter(function (k) { return k.length >= 3; });
+      const hit = frases.find(function (k) { return texto.indexOf(' ' + k + ' ') >= 0; });
+      if (hit) { x.puntaje += 3; x.motivos.push('la página dice “' + hit + '”'); }
+      if (precio > 0 && (c.preciosFijos || []).some(function (v) { return Math.round(Number(v)) === precio; })) { x.puntaje += 2; x.motivos.push('cuesta ' + clp(precio) + ', uno de los precios de la campaña'); }
+    });
+    const dePrecio = cands.filter(function (x) { return x.campana.tipo !== 'descuento'; });
+    if (rebajado && dePrecio.length === 1 && !cands.some(function (x) { return x.puntaje > 0; })) {
+      dePrecio[0].puntaje = 1; dePrecio[0].motivos.push('es la única campaña vigente y la página muestra un precio rebajado');
+    }
+    const lista = cands.filter(function (x) { return x.puntaje > 0; }).sort(function (a, b) { return b.puntaje - a.puntaje; });
+    lista.forEach(function (x) { x.confianza = x.puntaje >= 2 ? 'alta' : 'media'; });
+    return { proveedor: p, sugerida: lista[0] || null, candidatas: lista, vigentes: cands.map(function (x) { return x.campana; }) };
+  }
+
+  // cotizaciones que el equipo marcó como "parte de una campaña" que aún no existe: agrupadas por proveedor + nombre
+  function campanasPropuestas(ctx) {
+    const g = new Map();
+    (ctx.state.ofertas || []).forEach(function (o) {
+      if (!o.campanaPropuesta || o.campanaId) return;
+      const p = proveedorDe(ctx, o), nom = String(o.campanaPropuesta.nombre || '').trim();
+      const k = (p ? p.id : 'L:' + normNombre(o.lugar)) + '|' + normNombre(nom);
+      if (!g.has(k)) g.set(k, { clave: k, proveedor: p, lugar: p ? p.nombre : (o.lugar || ''), nombre: nom, ofertas: [], autores: [], desde: null, hasta: null });
+      const x = g.get(k);
+      x.ofertas.push(o);
+      if (o.autor && x.autores.indexOf(o.autor) < 0) x.autores.push(o.autor);
+      if (o.fecha && (!x.desde || o.fecha < x.desde)) x.desde = o.fecha;
+      const h = o.temporal && !o.hastaPorConfirmar ? o.temporal.hasta : null;
+      if (h && (!x.hasta || h > x.hasta)) x.hasta = h;
+    });
+    return Array.from(g.values()).map(function (x) { x.nInsumos = new Set(x.ofertas.map(function (o) { return o.insumoId; })).size; return x; })
+      .sort(function (a, b) { return (b.desde || '').localeCompare(a.desde || ''); });
+  }
+
+  // ahorro semanal estimado de una campaña: lo que usas cada semana, a su precio frente al precio normal (sin promociones)
+  function ahorroCampana(ctx, e) {
+    const normal = variante(ctx, { sinPromos: true }), uso = usoSemanalInsumos(ctx).uso, insumos = [];
+    let semana = 0;
+    uso.forEach(function (q, id) {
+      if (!(q > 0)) return;
+      const n = costoInsumo(normal, id);
+      if (n.missing || !n.oferta) return;
+      const ref = unitLista(normal, n.oferta), ins = ctx.insumos.get(id);
+      if (ref == null) return;
+      let mejor = null;
+      (ctx.ofertasPorInsumo.get(id) || []).forEach(function (o) {
+        if (o.pendiente || o.disponible === false) return;
+        const pv = proveedorDe(ctx, o);
+        if (!pv || pv.id !== e.p.id) return;
+        const u = unitLista(ctx, o);
+        if (u == null) return;
+        let v = null;
+        if (o.campanaId === e.c.id) v = u;
+        else if (e.c.tipo === 'descuento' && !esTemporal(o) && alcanzaA(e.c, o, ins)) v = u * (1 - (Number(e.c.descuentoPct) || 0) / 100);
+        if (v != null && (mejor == null || v < mejor)) mejor = v;
+      });
+      if (mejor != null && mejor < ref) { semana += (ref - mejor) * q; insumos.push({ insumoId: id, ahorroSemana: (ref - mejor) * q, pct: (1 - mejor / ref) * 100 }); }
+    });
+    return { semana: semana, insumos: insumos.sort(function (a, b) { return b.ahorroSemana - a.ahorroSemana; }) };
+  }
+
+  // todas las campañas (de un proveedor o de todos) con su estado, productos vinculados y ahorro estimado
+  function listaCampanas(ctx, proveedorId) {
+    const out = [], hoy = hoyISO(ctx.p), porCamp = new Map();
+    (ctx.state.ofertas || []).forEach(function (o) { if (o.campanaId) { if (!porCamp.has(o.campanaId)) porCamp.set(o.campanaId, []); porCamp.get(o.campanaId).push(o); } });
+    ctx.campanas.forEach(function (e) {
+      if (proveedorId && e.p.id !== proveedorId) return;
+      const ofs = porCamp.get(e.c.id) || [], est = estadoCampana(ctx, e.p, e.c);
+      const ah = est === 'vigente' || est === 'programada' || est === 'sin-membresia' ? ahorroCampana(ctx, e) : { semana: 0, insumos: [] };
+      out.push({ campana: e.c, proveedor: e.p, estado: est, ofertas: ofs, nOfertas: ofs.filter(function (o) { return !o.pendiente; }).length,
+        nPendientes: ofs.filter(function (o) { return o.pendiente; }).length, ahorroSemana: ah.semana, insumosAhorro: ah.insumos,
+        diasRestantes: e.c.hasta ? diasEntre(hoy, e.c.hasta) : null, diasParaEmpezar: e.c.desde && e.c.desde > hoy ? diasEntre(hoy, e.c.desde) : 0 });
+    });
+    const orden = { vigente: 0, 'sin-membresia': 1, programada: 2, inactiva: 3, vencida: 4, excluida: 5 };
+    return out.sort(function (a, b) { return orden[a.estado] - orden[b.estado] || (a.campana.hasta || '9999').localeCompare(b.campana.hasta || '9999'); });
+  }
+
+  // en qué campañas apareció un insumo y a qué precio frente al normal (para aprender cuándo conviene comprar)
+  function historialCampanas(ctx, insumoId) {
+    const normal = variante(ctx, { sinPromos: true }), n = costoInsumo(normal, insumoId);
+    const ref = n.oferta ? unitLista(normal, n.oferta) : null;
+    return (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return o.campanaId && !o.pendiente && ctx.campanas.has(o.campanaId); }).map(function (o) {
+      const e = ctx.campanas.get(o.campanaId), u = unitLista(ctx, o);
+      return { oferta: o, campana: e.c, proveedor: e.p, desde: e.c.desde || null, hasta: e.c.hasta || null, estado: estadoCampana(ctx, e.p, e.c),
+        unit: u, normal: ref, descuentoPct: ref && u != null ? (1 - u / ref) * 100 : null };
+    }).sort(function (a, b) { return (b.desde || '').localeCompare(a.desde || ''); });
+  }
+
+  // Planificar compras: para las próximas semanas, en qué proveedor y cuándo conviene comprar parte del plan aprovechando
+  // campañas y promociones de despacho, respetando qué se acumula con qué. items = plan semanal [{recetaId, porciones}].
+  // Devuelve propuestas (ventanas de fechas con la mejor combinación y su ahorro desglosado), los eventos para dibujar
+  // la línea de tiempo (con qué se acumula cada uno) y el ahorro posible por día.
+  function planCompras(ctx, items, opts) {
+    opts = opts || {};
+    const dias = opts.dias || 21, hoy = hoyISO(ctx.p), fin = fechaMenos(hoy, -(dias - 1));
+    const dentro = function (f) { return !!f && f > hoy && f <= fin; };
+    const cortes = new Set([hoy]), eventos = [];
+    (ctx.state.proveedores || []).forEach(function (p) {
+      if (p.activo === false) return;
+      const reg = function (x, tipo, i) {
+        if (x.activa === false || (x.hasta && x.hasta < hoy) || (x.desde && x.desde > fin)) return;
+        if (tipo === 'despacho' && promoPrimeraUsada(ctx, p, x)) return;
+        if (dentro(x.desde)) cortes.add(x.desde);
+        if (x.hasta && dentro(fechaMenos(x.hasta, -1))) cortes.add(fechaMenos(x.hasta, -1));
+        eventos.push({ clave: x.id || (p.id + ':' + tipo + ':' + i), id: x.id || null, tipo: tipo, nombre: x.nombre || (tipo === 'despacho' ? 'Promo de despacho' : 'Campaña'),
+          proveedor: p, desde: x.desde && x.desde > hoy ? x.desde : hoy, hasta: x.hasta && x.hasta < fin ? x.hasta : fin, sinFin: !x.hasta, obj: x });
+      };
+      (p.campanas || []).forEach(function (c, i) { reg(c, 'campana', i); });
+      (p.promosDespacho || []).forEach(function (pr, i) { reg(pr, 'despacho', i); });
+    });
+    // qué se acumula con qué (mismo proveedor): para dibujar enlaces y tramas
+    eventos.forEach(function (a) {
+      a.seAcumulaCon = []; a.noSeAcumulaCon = [];
+      eventos.forEach(function (b) {
+        if (a === b || a.proveedor.id !== b.proveedor.id || (a.tipo === 'despacho' && b.tipo === 'despacho')) return;
+        const c = a.tipo === 'campana' ? a.obj : b.obj, x = a.tipo === 'campana' ? b.obj : a.obj;
+        (seAcumulan(c, x, a.tipo === 'despacho' || b.tipo === 'despacho' ? 'despacho' : 'campana') ? a.seAcumulaCon : a.noSeAcumulaCon).push(b.clave);
+      });
+    });
+
+    // referencia: el plan comprado a precio normal (sin campañas, ofertas temporales ni promos)
+    const filasBase = listaCompras(variante(ctx, { sinPromos: true }), items).filter(function (f) { return f.usable > 0 && !f.missing; });
+    const fechas = Array.from(cortes).sort(), crudas = [];
+    fechas.forEach(function (d, i) {
+      const hasta = i + 1 < fechas.length ? fechaMenos(fechas[i + 1], 1) : fin;
+      const cd = d === hoy ? ctx : variante(ctx, { params: { hoy: d } });
+      (ctx.state.proveedores || []).forEach(function (p) {
+        if (p.activo === false) return;
+        const hayCamp = (p.campanas || []).some(function (c) { return estadoCampana(cd, p, c) === 'vigente'; });
+        const hayDesp = (p.promosDespacho || []).some(function (pr) { return estadoPromo(cd, p, pr) === 'vigente'; });
+        if (!hayCamp && !hayDesp) return;
+        const compras = [];
+        filasBase.forEach(function (f) {
+          let mejor = null;
+          (cd.ofertasPorInsumo.get(f.insumoId) || []).forEach(function (o) {
+            if (o.disponible === false || o.pendiente || fueraDeVigencia(cd, o) || !ofertaHabilitada(cd, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
+            const pv = proveedorDe(cd, o);
+            if (!pv || pv.id !== p.id) return;
+            const c = compraConOferta(cd, o, f.usable);
+            if (!mejor || c.bruto < mejor.bruto) mejor = c;
+          });
+          if (!mejor) return;
+          const aqui = f.proveedorId === p.id;
+          if (aqui || mejor.bruto < f.costo - 1) compras.push(Object.assign({ insumoId: f.insumoId, nombre: f.nombre, usable: f.usable, normal: f.costo, yaAqui: aqui }, mejor));
+        });
+        if (!compras.length) return;
+        const ev = opcionesPromoGrupo(cd, p, compras, { todas: true }), m = ev.mejor;
+        if (!m || !m.viable) return;
+        const normalItems = m.items.reduce(function (t, it) { return t + it.normal; }, 0);
+        const ahorroProductos = m.items.reduce(function (t, it) { return t + Math.max(0, it.normal - it.bruto); }, 0);
+        const lgNormal = logistica(variante(cd, { sinPromos: true }), p, m.bruto, m.online, m.brutoSel, { soloTienda: m.soloTienda });
+        const ahorroDespacho = lgNormal ? Math.max(0, lgNormal.costo - m.logistica.costo) : 0;
+        const ahorroTotal = ahorroProductos + ahorroDespacho;
+        if (!(ahorroTotal > 0.5)) return;
+        // de dónde sale el ahorro: cada campaña, promo por cantidad, ofertas sueltas, precio más bajo, despacho
+        const origen = new Map();
+        const sumar = function (k, nombre, tipo, monto) { if (!(monto > 0.5)) return; const x = origen.get(k) || { clave: k, nombre: nombre, tipo: tipo, monto: 0 }; x.monto += monto; origen.set(k, x); };
+        m.items.forEach(function (it) {
+          let resto = it.normal - it.bruto;
+          if (!(resto > 0)) return;
+          (it.descuentos || []).forEach(function (dd) { const v = Math.min(resto, dd.monto); sumar(dd.id || 'cantidad', dd.nombre, dd.tipo, v); resto -= v; });
+          const o = cd.ofertas.get(it.ofertaId), e = campanaDe(cd, o);
+          if (e) sumar(e.c.id, e.c.nombre || 'Campaña', 'campana', resto);
+          else if (o && o.temporal) sumar('temporal', 'Ofertas temporales', 'temporal', resto);
+          else sumar('precio', 'Precio más bajo aquí', 'precio', resto);
+        });
+        sumar('despacho', m.logistica.promo || 'Despacho', 'despacho', ahorroDespacho);
+        const usadas = m.campanas.map(function (id) { return ctx.campanas.get(id); }).filter(Boolean);
+        const avisos = [];
+        if (m.sinFactura) avisos.push('Sin factura: ' + usadas.filter(function (e) { return e.c.excluyeFactura; }).map(function (e) { return e.c.nombre; }).join(', ') + ' excluye las compras con factura');
+        if (m.online) avisos.push('Solo comprando online (app o web)');
+        if (m.soloTienda) avisos.push('Solo comprando en la tienda');
+        if (usadas.some(function (e) { return e.c.hastaAgotarStock; })) avisos.push('Hasta agotar stock');
+        // combinaciones que no se permiten (para el comparador)
+        const noPermitidas = [];
+        const vigentes = (p.campanas || []).filter(function (c) { return estadoCampana(cd, p, c) === 'vigente'; });
+        vigentes.forEach(function (c, ci) {
+          (p.promosDespacho || []).filter(function (pr) { return estadoPromo(cd, p, pr) === 'vigente' && !seAcumulan(c, pr, 'despacho'); })
+            .forEach(function (pr) { noPermitidas.push({ a: c.nombre || 'Campaña', b: pr.nombre || 'Promo de despacho', motivo: 'no se acumulan: el pedido usa una o la otra' }); });
+          vigentes.slice(ci + 1).forEach(function (c2) {
+            if (!seAcumulan(c, c2, 'campana')) noPermitidas.push({ a: c.nombre || 'Campaña', b: c2.nombre || 'Campaña', motivo: 'no se acumulan: en un mismo producto vale solo la mejor' });
+          });
+        });
+        const nombreCamp = function (id) { const e = ctx.campanas.get(id); return e ? e.c.nombre || 'Campaña' : id; };
+        crudas.push({ proveedor: p, desde: d, hasta: hasta,
+          firma: p.id + '|' + m.campanas.slice().sort().join(',') + '|' + (m.logistica.promo || '') + '|' + m.items.map(function (it) { return it.ofertaId; }).sort().join(','),
+          campanas: m.campanas.map(function (id) { return { id: id, nombre: nombreCamp(id) }; }), despacho: m.logistica.promo || null, logistica: m.logistica,
+          productos: m.items.map(function (it) { return { insumoId: it.insumoId, nombre: it.nombre, ofertaId: it.ofertaId, packs: it.packs, bruto: it.bruto, normal: it.normal, ahorro: Math.max(0, it.normal - it.bruto), yaAqui: it.yaAqui }; })
+            .sort(function (a, b) { return b.ahorro - a.ahorro; }),
+          cesta: m.bruto, normal: normalItems, ahorroProductos: ahorroProductos, ahorroDespacho: ahorroDespacho, ahorroTotal: ahorroTotal, total: m.total,
+          totalBruto: m.bruto + m.logistica.bruto, descuentos: Array.from(origen.values()).sort(function (a, b) { return b.monto - a.monto; }), avisos: avisos,
+          sinFactura: m.sinFactura, online: m.online, noPermitidas: noPermitidas,
+          opciones: ev.opciones.map(function (op) {
+            return { campanas: op.campanas.map(nombreCamp), sin: op.excluidas.map(nombreCamp), despacho: op.logistica ? op.logistica.promo || null : null,
+              modo: op.logistica ? op.logistica.modo : 'no alcanza el mínimo', productos: op.bruto, logistica: op.logistica ? op.logistica.bruto : null,
+              total: op.total, totalBruto: op.bruto + (op.logistica ? op.logistica.bruto : 0), viable: op.viable, elegida: op === m };
+          }).sort(function (a, b) { return (b.viable - a.viable) || (a.total - b.total); }) });
+      });
+    });
+    // tramos seguidos con la misma combinación y los mismos productos = una sola propuesta
+    const propuestas = [];
+    crudas.sort(function (a, b) { return a.proveedor.id.localeCompare(b.proveedor.id) || a.desde.localeCompare(b.desde); }).forEach(function (x) {
+      const prev = propuestas[propuestas.length - 1];
+      if (prev && prev.firma === x.firma && fechaMenos(prev.hasta, -1) === x.desde) { prev.hasta = x.hasta; return; }
+      propuestas.push(x);
+    });
+    propuestas.forEach(function (x) {
+      x.estado = x.desde === hoy ? 'vigente' : 'programada';
+      x.diasParaEmpezar = diasEntre(hoy, x.desde);
+      x.diasRestantes = diasEntre(hoy, x.hasta);
+    });
+    propuestas.sort(function (a, b) { return b.ahorroTotal - a.ahorroTotal || a.desde.localeCompare(b.desde); });
+    // ahorro posible cada día (la mejor propuesta que lo cubre)
+    const porDia = [];
+    for (let k = 0; k < dias; k++) {
+      const f = fechaMenos(hoy, -k);
+      const best = propuestas.filter(function (x) { return x.desde <= f && x.hasta >= f; }).reduce(function (a, x) { return !a || x.ahorroTotal > a.ahorroTotal ? x : a; }, null);
+      porDia.push({ fecha: f, ahorro: best ? best.ahorroTotal : 0, propuesta: best ? propuestas.indexOf(best) : -1 });
+    }
+    return { desde: hoy, hasta: fin, dias: dias, propuestas: propuestas, eventos: eventos, porDia: porDia };
   }
 
   /* ---------- combos, precio de línea y menú del día ---------- */
@@ -1872,7 +2345,11 @@ window.CLOUD = {
     tieneMembresia: tieneMembresia, membresiaActiva: membresiaActiva, ofertaHabilitada: ofertaHabilitada, estadoPromo: estadoPromo,
     condicionesDespacho: condicionesDespacho, radarPromosDespacho: radarPromosDespacho, promoPrimeraUsada: promoPrimeraUsada, pedidoOnline: pedidoOnline, plazoEntrega: plazoEntrega, brutoSeleccionado: brutoSeleccionado, evaluarMembresias: evaluarMembresias,
     promoCantidadVigente: promoCantidadVigente, precioPorPack: precioPorPack, opcionesUrgencia: opcionesUrgencia, quiebresProximos: quiebresProximos,
-    ofertaVencida: ofertaVencida, diasParaVencer: diasParaVencer, oportunidadActiva: oportunidadActiva,
+    ofertaVencida: ofertaVencida, diasParaVencer: diasParaVencer, oportunidadActiva: oportunidadActiva, fueraDeVigencia: fueraDeVigencia,
+    variante: variante, ACUMULA_DEF: ACUMULA_DEF, acumulaDe: acumulaDe, seAcumulan: seAcumulan, estadoCampana: estadoCampana, campanaDe: campanaDe,
+    esTemporal: esTemporal, hastaOferta: hastaOferta, esSoloOnline: esSoloOnline, infoPrecio: infoPrecio, descuentosDeOferta: descuentosDeOferta, unitLista: unitLista,
+    opcionesPromoGrupo: opcionesPromoGrupo, reconocerCampana: reconocerCampana, campanasPropuestas: campanasPropuestas, listaCampanas: listaCampanas,
+    ahorroCampana: ahorroCampana, historialCampanas: historialCampanas, planCompras: planCompras,
     sobrestockVigente: sobrestockVigente, sugerenciaOportunidad: sugerenciaOportunidad, ofertasTemporales: ofertasTemporales,
     TIPOS_DOC: TIPOS_DOC, validarRut: validarRut, formatearRut: formatearRut, tipoDocCompra: tipoDocCompra, esFactura: esFactura,
     montosCompra: montosCompra, libroCompras: libroCompras, ivaCompras: ivaCompras, proyeccionIva: proyeccionIva, evaluarProveedores: evaluarProveedores,
@@ -2321,6 +2798,17 @@ window.CLOUD = {
       if (!modal && (yRef == null || re2.top + scrollY - yRef < -350 || re2.top + scrollY - yRef > 40)) return false;
       out.soloWeb = true; return true;
     });
+    // etiquetas cortas junto al producto ("Barato a un click", "Cyber"; también imágenes con texto alternativo): sirven para reconocer la campaña
+    out.etiquetas = [];
+    [].some.call((modal || d).querySelectorAll('span,div,p,b,strong,em,small,a,li,label,img[alt]'), function (e) {
+      if (e.children.length) return false;
+      var t = limpio(e.tagName === 'IMG' ? e.getAttribute('alt') : e.textContent, 60);
+      if (t.length < 4 || t.length > 40 || esPrecio.test(t) || !/[a-záéíóúñ]{3}/i.test(t) || out.etiquetas.indexOf(t) >= 0) return false;
+      var re3 = e.getBoundingClientRect();
+      if (!re3.width || !re3.height || (corte && (corte.compareDocumentPosition(e) & 4))) return false;
+      if (!modal && (yRef == null || re3.top + scrollY - yRef < -400 || re3.top + scrollY - yRef > 300)) return false;
+      out.etiquetas.push(t); return out.etiquetas.length >= 25;
+    });
     // frases útiles: compra mínima, precio por kilo/litro, formato del envase
     var texto = limpio(modal ? modal.innerText.split(/productos similares|tambi[eé]n te podr/i)[0] : d.body.innerText, 20000), re = /(compra m[ií]nima[^\n.]{0,30}|m[ií]nimo de \d+[^\n.]{0,20}|\$\s?[\d.]+(?:,\d+)?\s*(?:x|por|\/)\s*(?:kg|kilo|lt|l|litro|un|unidad|100\s?g|100\s?ml)\b|llev[aá]\s*\d+[^\n.]{0,40}|\d+\s*x\s*\$\s?[\d.]+)/gi, m;
     while ((m = re.exec(texto)) && out.textos.length < 10) out.textos.push(limpio(m[1], 80));
@@ -2626,7 +3114,7 @@ window.CLOUD = {
       url: raw.url || '', host: raw.host || '', nombre: nombre, tituloOriginal: String(ld.nombre || quitarSitio(og.title) || raw.h1 || quitarSitio(raw.titulo) || raw.nombre || '').replace(/\s+/g, ' ').trim(), nombreLimpio: limpio.nombre || nombre, extras: limpio.extras || [], variedad: limpio.variedad || [],
       etiquetas: etiquetas([nombre, raw.h1, og.description, ld.descripcion]), dieta: dietaSugerida(nombre), marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
-      soloWeb: !!raw.soloWeb, formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
+      soloWeb: !!raw.soloWeb, etiquetasPromo: (raw.etiquetas || []).slice(0, 25), formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
       insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
     };
   }
@@ -2914,7 +3402,7 @@ window.CLOUD = {
     return h('header', { class: 'top' },
       h('div', { class: 'brand' }, h('span', { class: 'logo' }, '🍲'), h('div', null, h('b', null, 'Colaciones Cerro Jiménez'), h('small', null, 'Costeo, recetas y compras'))),
       h('nav', { class: 'tabs', role: 'tablist' }, NAV.filter(function (n) { return App.puedeVer(n[0]); }).map(function (n) {
-        const pend = n[0] === 'cotizaciones' && App.cotizacionesPendientes ? App.cotizacionesPendientes() : n[0] === 'proveedores' && App.urgenciasAbiertas ? App.urgenciasAbiertas() : 0;
+        const pend = n[0] === 'cotizaciones' && App.cotizacionesPendientes ? App.cotizacionesPendientes() : n[0] === 'proveedores' && App.urgenciasAbiertas ? App.urgenciasAbiertas() + (App.campanasPorCompletar ? App.campanasPorCompletar() : 0) : 0;
         return h('a', { href: '#/' + n[0], class: 'tab' + (App.route.name === n[0] ? ' on' : ''), role: 'tab' }, n[1], pend ? h('span', { class: 'count' }, pend) : null);
       })),
       h('div', { class: 'tools' },
@@ -4194,8 +4682,11 @@ window.CLOUD = {
                 : null;
             })()),
           promoCantidadUI(o, upO, ins),
-          o.temporal ? h('div', { class: 'row gap wrap' }, App.badgeTemporal(o), !o.pendiente && !E.ofertaVencida(ctx, o)
-            ? App.btn(o.usarMientrasDure ? 'Dejar de usar' : 'Usar mientras dure', function () { upO(o, function (x) { x.usarMientrasDure = !x.usarMientrasDure; }); }, 'small') : null) : null),
+          E.esTemporal(o) ? h('div', { class: 'row gap wrap' }, App.badgeTemporal(o), !o.pendiente && !E.ofertaVencida(ctx, o)
+            ? (function () {
+              const activa = E.oportunidadActiva(ctx, o);   // las de campaña siguen a su campaña hasta que aquí se decida otra cosa
+              return App.btn(activa ? 'Dejar de usar' : 'Usar mientras dure', function () { upO(o, function (x) { x.usarMientrasDure = !activa; }); }, 'small');
+            })() : null) : null),
         h('td', null, App.textInput({ fk: 'o-fl-' + o.id, cls: 'w90', value: o.formatoLabel, ph: 'ej. saco 25 kg', onChange: function (v) { upO(o, function (x) { x.formatoLabel = v; }, 'fl' + o.id); } })),
         h('td', null, App.numInput({ fk: 'o-fq-' + o.id, cls: 'w70', value: o.formatoQty, title: 'Cantidad por formato en ' + ins.unidad + ' (ej. 1 kg = 1000 g)',
           onChange: function (n) { if (n > 0) upO(o, function (x) { x.formatoQty = n; }, 'fq' + o.id); } }), h('small', null, ' ' + ins.unidad)),
@@ -5159,6 +5650,12 @@ window.CLOUD = {
     if (stock.size) alertas.push(alerta('📦', stock.size + ' insumo(s) con sobrestock de compras de oportunidad: la lista de compras ya los descuenta', 'info', function () { App.go('proveedores', 'oportunidades'); }));
     const pendCot = App.cotizacionesPendientes ? App.cotizacionesPendientes() : 0;
     if (pendCot) alertas.unshift(alerta('📥', pendCot + ' cotización(es) nueva(s) por revisar', 'info', function () { App.go('cotizaciones'); }));
+    const pendCamp = App.campanasPorCompletar ? App.campanasPorCompletar() : 0;
+    if (pendCamp) alertas.unshift(alerta('🎯', pendCamp + ' campaña(s) marcada(s) por el equipo: complétalas', 'warn', function () { App.go('proveedores', 'campanas'); }));
+    if (App.esStaff()) {
+      const terminan = E.listaCampanas(ctx).filter(function (x) { return x.estado === 'vigente' && x.diasRestantes != null && x.diasRestantes <= 3 && x.nOfertas > 0; });
+      if (terminan.length) alertas.push(alerta('🎯', terminan.map(function (x) { return x.campana.nombre || 'Campaña'; }).join(', ') + (terminan.length > 1 ? ' terminan' : ' termina') + ' en ' + Math.min.apply(null, terminan.map(function (x) { return x.diasRestantes; })) + ' día(s): aprovecha antes de que vuelva el precio normal', 'warn', function () { App.go('proveedores', 'campanas'); }));
+    }
     if (!alertas.length) alertas.push(alerta('✅', 'Todo en orden.', 'good'));
 
     return h('div', { class: 'stack' },
@@ -5410,15 +5907,64 @@ window.CLOUD = {
     return { id: 'local', nombre: 'Yo' };
   }
   App.fechaCorta = function (iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : ''; };
-  // 🔥 hasta 12/10 · en uso / vencida
+  // 🔥 hasta 12/10 · en uso / vencida — o, si es de una campaña: 🎯 Barato a un click · hasta 11/10
   App.badgeTemporal = function (o) {
-    if (!o || !o.temporal) return null;
-    const ctx = App.ctx();
-    if (E.ofertaVencida(ctx, o)) return App.badge('oferta vencida ' + App.fechaCorta(o.temporal.hasta), '');
+    if (!o || !E.esTemporal(o)) return null;
+    const ctx = App.ctx(), e = E.campanaDe(ctx, o), hasta = E.hastaOferta(ctx, o);
+    if (o.campanaId && !e) return App.badge('🎯 campaña borrada', '');
+    const pre = e ? '🎯 ' + (e.c.nombre || 'campaña') + ' · ' : '🔥 ';
+    if (E.ofertaVencida(ctx, o)) return App.badge((e ? pre + 'terminó ' : 'oferta vencida ') + App.fechaCorta(hasta), '');
+    if (e) {
+      const est = E.estadoCampana(ctx, e.p, e.c);
+      if (est === 'programada') return App.badge(pre + 'empieza ' + App.fechaCorta(e.c.desde), 'info');
+      if (est === 'inactiva') return App.badge(pre + 'desactivada', '');
+    }
     const d = E.diasParaVencer(ctx, o);
-    const cuando = d === 0 ? 'vence hoy' : d === 1 ? 'vence mañana' : 'hasta ' + App.fechaCorta(o.temporal.hasta);
-    return App.badge('🔥 ' + cuando + (E.oportunidadActiva(ctx, o) ? ' · en uso' : ''), d <= 1 ? 'warn' : 'good');
+    const cuando = d == null ? 'sin fecha de término' : d === 0 ? 'vence hoy' : d === 1 ? 'vence mañana' : 'hasta ' + App.fechaCorta(hasta);
+    return App.badge(pre + cuando + (E.oportunidadActiva(ctx, o) ? ' · en uso' : ''), d != null && d <= 1 ? 'warn' : 'good');
   };
+  // 🎯 campaña por completar: la marcó el equipo y aún no existe
+  App.badgeCampanaPropuesta = function (o) {
+    if (!o || !o.campanaPropuesta || o.campanaId) return null;
+    return h('a', { href: '#/proveedores/campanas', class: 'badge warn', title: 'Créala o únela a una existente en Proveedores → Campañas' },
+      '🎯 campaña por completar' + (o.campanaPropuesta.nombre ? ': ' + o.campanaPropuesta.nombre : ''));
+  };
+
+  /* ---------- campaña de una cotización (formulario y captura) ---------- */
+  const CAMP_NUEVA = '__nueva';
+  // Selector "¿Es de una campaña?": sugiere la campaña reconocida (nombre en la página, precio fijo o la única vigente
+  // con precio rebajado) y deja marcar una que aún no existe. F guarda campana ('' | id | CAMP_NUEVA), campanaNueva y campanaTocada.
+  // d = { lugar, precio, precioNormal, titulo, textos, fk }
+  App.campoCampana = function (F, d) {
+    const rec = E.reconocerCampana(App.ctx(), { lugar: d.lugar, precio: d.precio, precioNormal: d.precioNormal, titulo: d.titulo, textos: d.textos });
+    const clave = (d.lugar || '') + '|' + (d.precio || '');
+    if (!F.campanaTocada && F.campanaClave !== clave) {   // sugerencia nueva solo si cambian tienda o precio y la persona no eligió
+      F.campanaClave = clave;
+      F.campana = rec.sugerida ? rec.sugerida.campana.id : '';
+    }
+    if (F.campana && F.campana !== CAMP_NUEVA && !rec.vigentes.some(function (c) { return c.id === F.campana; })) F.campana = '';
+    const opciones = [['', 'No es de una campaña']].concat(rec.vigentes.map(function (c) { return [c.id, '🎯 ' + (c.nombre || 'Campaña sin nombre')]; }))
+      .concat([[CAMP_NUEVA, 'Es de otra campaña (nueva)…']]);
+    const elegida = rec.vigentes.find(function (c) { return c.id === F.campana; });
+    const sug = rec.sugerida && F.campana === rec.sugerida.campana.id ? rec.sugerida : null;
+    return h('div', { class: 'stack' },
+      h('label', { class: 'block' }, '🎯 ¿Es de una campaña?',
+        App.select({ fk: d.fk + '-camp', value: F.campana || '', options: opciones, onChange: function (v) { F.campana = v; F.campanaTocada = true; App.render(); } })),
+      sug ? h('small', { class: sug.confianza === 'alta' ? 'good-t' : 'mut' }, (sug.confianza === 'alta' ? '✓ Reconocida: ' : '¿Es esta? ') + sug.motivos.join(' · ')) : null,
+      elegida ? h('small', { class: 'mut' }, 'Vale ' + (elegida.hasta ? 'hasta el ' + App.fechaCorta(elegida.hasta) : 'sin fecha de término') +
+        (elegida.canal === 'online' ? ' · solo online' : elegida.canal === 'tienda' ? ' · solo en tienda' : '') + (elegida.excluyeFactura ? ' · sin factura' : '') +
+        (elegida.hastaAgotarStock ? ' · hasta agotar stock' : '') + '. La fecha la pone la campaña.') : null,
+      F.campana === CAMP_NUEVA ? h('label', { class: 'row gap wrap indent' }, h('span', { class: 'mut' }, 'Nombre (si lo sabes)'),
+        App.textInput({ fk: d.fk + '-campn', value: F.campanaNueva || '', ph: 'ej. Barato a un click, Cyber', onChange: function (v) { F.campanaNueva = v; } }),
+        h('small', { class: 'mut' }, 'El gerente completa sus fechas y condiciones.')) : null);
+  };
+  // datos de campaña para guardar en la oferta: { campanaId } o { campanaPropuesta }
+  App.datosCampana = function (F) {
+    if (!F.campana) return {};
+    if (F.campana === CAMP_NUEVA) return { campanaPropuesta: { nombre: (F.campanaNueva || '').trim() } };
+    return { campanaId: F.campana };
+  };
+  App.CAMP_NUEVA = CAMP_NUEVA;
   // 🌐 solo online · ⭐ requiere membresía (avisa si está inactiva: así no entra a los costos)
   App.badgesCanal = function (o) {
     if (!o || (!o.soloOnline && !o.requiereMembresia && !o.promoCantidad)) return null;
@@ -5432,6 +5978,8 @@ window.CLOUD = {
   App.cotizacionesPendientes = function () {
     return App.esStaff() ? Store.get().ofertas.filter(function (o) { return o.pendiente; }).length : 0;
   };
+  // campañas que el equipo marcó y aún no existen (agrupadas por proveedor y nombre)
+  App.campanasPorCompletar = function () { return App.esStaff() ? E.campanasPropuestas(App.ctx()).length : 0; };
   function precioPorBase(precio, qty, unidad) {
     if (!(precio > 0) || !(qty > 0)) return '—';
     const u = precio / qty;
@@ -5453,7 +6001,8 @@ window.CLOUD = {
       if (!(F.precio > 0)) { App.toast('Ingresa el precio'); return; }
       if (!(F.fq > 0)) { App.toast('Indica cuánto trae el formato'); return; }
       if (!(F.lugar || '').trim()) { App.toast('Indica dónde lo viste (lugar)'); return; }
-      if (F.temporal && !(F.hasta >= App.hoy())) { App.toast('La oferta debe valer al menos hasta hoy'); return; }
+      const camp = App.datosCampana(F);
+      if (F.temporal && !camp.campanaId && !(F.hasta >= App.hoy())) { App.toast('La oferta debe valer al menos hasta hoy'); return; }
       if (F.porCantidad && (!((F.pcMin || 2) >= 2) || !(F.pcPrecio > 0) || !(F.pcPrecio < F.precio))) { App.toast('Promo por cantidad: indica desde cuántas unidades y un precio por unidad menor al normal'); return; }
       const u = yo();
       Store.mutate(function (st) {
@@ -5461,11 +6010,15 @@ window.CLOUD = {
         const prov = null;
         st.ofertas.push({ id: Store.uid('OF-'), insumoId: ins.id, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(), formatoLabel: F.fl || ins.unidad,
           formatoQty: F.fq, precio: F.precio, rendimiento: null, fecha: App.hoy(), fuente: 'cotizacion', disponible: true, preferida: false,
-          pendiente: true, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim(), temporal: F.temporal ? { hasta: F.hasta } : undefined,
+          pendiente: true, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim(),
+          // de una campaña existente: la fecha la pone la campaña; de una campaña nueva: temporal (sin fecha, la confirma el gerente)
+          temporal: camp.campanaId ? undefined : F.temporal ? { hasta: F.hasta } : camp.campanaPropuesta ? { hasta: enUnaSemana() } : undefined,
+          hastaPorConfirmar: camp.campanaPropuesta && !F.temporal ? true : undefined,
+          campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta,
           soloOnline: F.online || undefined, requiereMembresia: F.membresia || undefined,
           promoCantidad: F.porCantidad ? { minimo: F.pcMin || 2, precio: F.pcPrecio, desde: App.hoy(), hasta: F.pcHasta || enUnaSemana() } : undefined });
       });
-      App.toast(F.temporal ? 'Oferta temporal enviada a revisión 🔥' : 'Cotización enviada a revisión');
+      App.toast(camp.campanaId || camp.campanaPropuesta ? 'Cotización de campaña enviada a revisión 🎯' : F.temporal ? 'Oferta temporal enviada a revisión 🔥' : 'Cotización enviada a revisión');
       App.ui.cot = { insumo: '', lugar: F.lugar, marca: '', fl: '', fq: null, precio: null, nota: '', temporal: false, hasta: enUnaSemana(), online: false, membresia: false, porCantidad: false, pcMin: 2, pcPrecio: null, pcHasta: null };
       App.render();
     };
@@ -5476,7 +6029,7 @@ window.CLOUD = {
       h('div', { class: 'form-grid' },
         h('label', null, 'Insumo', App.textInput({ fk: 'cot-ins', value: F.insumo, list: 'dl-cot-ins', ph: 'Escribe y elige de la lista…',
           onChange: function (v) { F.insumo = v; F.fl = ''; F.fq = null; App.render(); } })),
-        h('label', null, 'Lugar', App.textInput({ fk: 'cot-lugar', value: F.lugar, list: 'dl-cot-lugar', ph: 'ej. Feria Playa Ancha', onChange: function (v) { F.lugar = v; } })),
+        h('label', null, 'Lugar', App.textInput({ fk: 'cot-lugar', value: F.lugar, list: 'dl-cot-lugar', ph: 'ej. Feria Playa Ancha', onChange: function (v) { F.lugar = v; }, onCommit: function () { App.render(); } })),
         h('label', null, 'Marca / detalle (opcional)', App.textInput({ fk: 'cot-marca', value: F.marca, ph: 'ej. Super Pollo, granel', onChange: function (v) { F.marca = v; } })),
         h('label', null, 'Precio (CLP)', App.numInput({ fk: 'cot-precio', value: F.precio, ph: 'ej. 4500', onChange: function (n) { F.precio = n; App.render(); }, onEmpty: function () { F.precio = null; } }))),
       ins ? h('div', { class: 'stack' },
@@ -5486,8 +6039,10 @@ window.CLOUD = {
           App.textInput({ fk: 'cot-fl', cls: 'w90', value: F.fl, ph: 'nombre', onChange: function (v) { F.fl = v; } }),
           App.numInput({ fk: 'cot-fq', cls: 'w80', value: F.fq, ph: 'cantidad', onChange: function (n) { F.fq = n; App.render(); } }), h('small', null, ins.unidad)),
         h('div', { class: 'help' }, 'Equivale a ', h('b', null, precioPorBase(F.precio, F.fq, ins.unidad)), ' (precio de compra, antes de mermas).')) : null,
+      (F.lugar || '').trim() ? App.campoCampana(F, { lugar: F.lugar, precio: F.precio, titulo: F.marca, fk: 'cot' }) : null,
       h('div', { class: 'row gap wrap' },
-        h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.temporal, onchange: function (ev) { F.temporal = ev.target.checked; App.render(); } }), ' Es oferta temporal 🔥'),
+        F.campana && F.campana !== App.CAMP_NUEVA ? null :
+          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.temporal, onchange: function (ev) { F.temporal = ev.target.checked; App.render(); } }), ' Es oferta temporal 🔥'),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.online, onchange: function (ev) { F.online = ev.target.checked; } }), ' Precio solo comprando online 🌐'),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.membresia, onchange: function (ev) { F.membresia = ev.target.checked; App.render(); } }), ' Requiere membresía ⭐'),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.porCantidad, onchange: function (ev) { F.porCantidad = ev.target.checked; App.render(); } }), ' Promo por cantidad 🏷️'),
@@ -5495,7 +6050,7 @@ window.CLOUD = {
           App.numInput({ fk: 'cot-pcm', cls: 'w60', value: F.pcMin || 2, onChange: function (n) { F.pcMin = n; } }), h('span', { class: 'mut' }, 'o más, c/u a'),
           App.numInput({ fk: 'cot-pcp', cls: 'w80', value: F.pcPrecio, ph: '$', onChange: function (n) { F.pcPrecio = n; } }), h('span', { class: 'mut' }, 'hasta'),
           h('input', { type: 'date', value: F.pcHasta || enUnaSemana(), min: App.hoy(), 'data-fk': 'cot-pch', onchange: function (ev) { F.pcHasta = ev.target.value; } })) : null,
-        F.temporal ? h('span', { class: 'row gap' }, h('span', { class: 'mut' }, 'válida hasta'),
+        F.temporal && !(F.campana && F.campana !== App.CAMP_NUEVA) ? h('span', { class: 'row gap' }, h('span', { class: 'mut' }, 'válida hasta'),
           h('input', { type: 'date', value: F.hasta, min: App.hoy(), 'data-fk': 'cot-hasta', onchange: function (ev) { F.hasta = ev.target.value; } })) : null),
       h('label', { class: 'block' }, 'Nota (opcional)', App.textInput({ fk: 'cot-nota', value: F.nota, ph: 'ej. precio de oferta, calidad, solo los sábados…', onChange: function (v) { F.nota = v; } })),
       h('div', null, App.btn('Enviar cotización', enviar, 'primary')),
@@ -5573,7 +6128,30 @@ window.CLOUD = {
       if (incompleta(o)) return;
       if (o.hastaPorConfirmar) { App.toast('Primero confirma hasta cuándo dura la oferta (fecha en la fila)'); return; }
       Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = true; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
-      App.toast('Se usará hasta el ' + App.fechaCorta(o.temporal.hasta) + '; después los costos vuelven solos al precio normal');
+      App.toast('Se usará hasta el ' + App.fechaCorta(E.hastaOferta(ctx, o)) + '; después los costos vuelven solos al precio normal');
+    };
+    // de una campaña: al aprobarla, la campaña decide si entra a los costos y hasta cuándo
+    const aprobarCampana = function (o) {
+      if (incompleta(o)) return;
+      const e = E.campanaDe(ctx, o);
+      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
+      App.toast(e && e.c.usarEnCostos === false ? 'Aprobada: la campaña no se usa en los costos (sí al planificar compras)'
+        : 'Aprobada: se usa en los costos ' + (e && e.c.hasta ? 'hasta el ' + App.fechaCorta(e.c.hasta) : 'mientras dure la campaña'));
+    };
+    // unir la cotización a una campaña del proveedor (o soltarla): la fecha pasa a ser la de la campaña
+    const selCampana = function (o) {
+      const p = E.proveedorDe(ctx, o);
+      const camps = p ? E.listaCampanas(ctx, p.id).filter(function (x) { return x.estado !== 'vencida' || x.campana.id === o.campanaId; }) : [];
+      if (!camps.length) return null;
+      return App.select({ fk: 'bj-camp-' + o.id, cls: 'w200', value: o.campanaId || '',
+        options: [['', o.campanaPropuesta ? 'Unir a una campaña…' : 'Sin campaña']].concat(camps.map(function (x) { return [x.campana.id, '🎯 ' + (x.campana.nombre || 'Campaña')]; })),
+        onChange: function (v) {
+          Store.mutate(function (st) {
+            const y = st.ofertas.find(function (x) { return x.id === o.id; });
+            if (v) { y.campanaId = v; delete y.campanaPropuesta; delete y.hastaPorConfirmar; }
+            else if (y.campanaId) { delete y.campanaId; if (!y.temporal) { y.temporal = { hasta: enUnaSemana() }; y.hastaPorConfirmar = true; } }
+          });
+        } });
     };
     const descartar = function (o) {
       App.confirm('¿Descartar la cotización de ' + (o.lugar || '') + '?', function () { Store.mutate(function (st) { st.ofertas = st.ofertas.filter(function (x) { return x.id !== o.id; }); }); }, 'Descartar', true);
@@ -5589,8 +6167,8 @@ window.CLOUD = {
         const mes = actual.missing || sinDatos ? null : (nuevo - actual.unit) * (uso.get(o.insumoId) || 0) * 4.33;
         return h('tr', null,
           h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(o.insumoId) }, ins.nombre), h('div', null, h('small', null, (App.usoMap().get(o.insumoId) || []).length + ' platos'))),
-          h('td', null, badgesWeb(o, ins, s), o.temporal ? h('div', null, App.badgeTemporal(o)) : null,
-            App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca && E.normNombre(o.marca) !== E.normNombre(o.lugar) ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
+          h('td', null, badgesWeb(o, ins, s), E.esTemporal(o) ? h('div', null, App.badgeTemporal(o)) : null,
+            App.badgeCampanaPropuesta(o), selCampana(o), App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca && E.normNombre(o.marca) !== E.normNombre(o.lugar) ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
           h('td', null, o.precioPorConfirmar || o.formatoPorConfirmar ? h('div', { class: 'stack' },
               o.precioPorConfirmar ? h('label', { class: 'row gap' }, h('small', { class: 'mut' }, 'precio $'), App.numInput({ fk: 'pc-p-' + o.id, cls: 'w80', ph: 'precio',
                 onBlur: function (ev) { const n = App.parseNum(ev.target.value); if (n > 0) completar(function (y) { y.precio = n; delete y.precioPorConfirmar; }); } })) : h('span', null, App.clp(o.precio)),
@@ -5601,6 +6179,7 @@ window.CLOUD = {
             actual.oferta ? h('div', null, h('small', { class: 'mut' }, 'hoy ' + App.costoVisible(actual.unit, ins.unidad))) : null),
           h('td', { class: 'r ' + (mes == null ? '' : mes < 0 ? 'good-t' : 'bad-t') }, mes == null ? '—' : App.sg(mes)),
           h('td', { class: 'nowrap' }, ins.propuesto ? App.btn('Completar producto', function () { App.go('insumos', ins.id); }, 'small primary', 'Es un producto nuevo: revisa su categoría, unidad y rendimiento y valídalo antes de usar esta cotización')
+            : o.campanaId ? App.btn('Aprobar', function () { aprobarCampana(o); }, 'small primary', 'Es de una campaña: se usa en los costos mientras dure, si la campaña lo indica')
             : o.temporal ? App.btn('Usar mientras dure', function () { usarMientrasDure(o); }, 'small primary', 'Se usa en los costos hasta su fecha de término')
             : App.btn('Usar esta', function () { usar(o); }, 'small primary'), App.btn('Alternativa', function () { alternativa(o); }, 'small', 'Aprobar sin usarla todavía (queda para comparar)'),
             App.btn('✕', function () { descartar(o); }, 'small ghost', 'Descartar')));
@@ -5724,6 +6303,8 @@ window.CLOUD = {
     const conNormal = F.oferta && F.precioNormal > F.precio;
     const notas = [r.compraMinima ? 'Compra mínima ' + r.compraMinima + ' un' : '', (F.nota || '').trim(), 'Cotizado en ' + F.lugar.trim()].filter(Boolean).join(' · ');
     const hasta = F.hasta || masDias(7);
+    // de una campaña existente: la fecha la pone la campaña; de una nueva: queda temporal y el gerente la completa
+    const camp = App.datosCampana(F), temporal = !camp.campanaId && (F.oferta || !!camp.campanaPropuesta);
     let insumoId = F.insumoId, ids = [];
     Store.mutate(function (st) {
       if (nuevo) {
@@ -5742,7 +6323,8 @@ window.CLOUD = {
       // oferta con precio normal visible: se guardan las dos (la normal es el precio de reposición)
       if (conNormal) lista.push(Object.assign({}, base, { precio: F.precioNormal, promoCantidad: promo }));
       lista.push(Object.assign({}, base, { precio: sinPrecio ? null : F.precio, promoCantidad: F.oferta ? undefined : promo,
-        temporal: F.oferta ? { hasta: hasta } : undefined, hastaPorConfirmar: F.oferta && !F.hasta ? true : undefined,
+        temporal: temporal ? { hasta: hasta } : undefined, hastaPorConfirmar: temporal && !F.hasta ? true : undefined,
+        campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta,
         soloOnline: F.online || undefined }));   // el precio exclusivo de la web va en la cotización que se paga (la normal, si hay, no lo es)
       lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); });
     });
@@ -5840,7 +6422,7 @@ window.CLOUD = {
           h('label', null, F.oferta ? 'Precio de oferta (lo que se paga)' : 'Precio (lo que se paga)',
             App.numInput({ fk: 'cap-precio', cls: 'grande', value: F.precio, ph: 'ej. 2990', onChange: function (n) { F.precio = n; App.render(); }, onEmpty: function () { F.precio = null; } }),
             r.fuentePrecio === 'visible' || !r.precio ? null : h('small', { class: 'mut' }, 'Revisa que sea el precio que muestra la página.')),
-          h('label', null, 'Tienda o proveedor', App.textInput({ fk: 'cap-lugar', value: F.lugar, onChange: function (v) { F.lugar = v; } }),
+          h('label', null, 'Tienda o proveedor', App.textInput({ fk: 'cap-lugar', value: F.lugar, onChange: function (v) { F.lugar = v; }, onCommit: function () { App.render(); } }),
             !r.proveedor && F.lugar ? h('small', { class: 'mut' }, '🏪 Proveedor nuevo: basta el nombre, el gerente completa el resto.') : null),
           h('label', null, 'Marca (opcional)', App.textInput({ fk: 'cap-marca', value: F.marca, onChange: function (v) { F.marca = v; } }))),
 
@@ -5857,11 +6439,13 @@ window.CLOUD = {
           h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.online, onchange: function (ev) { F.online = ev.target.checked; } }), ' 🌐 Precio solo comprando online',
             r.soloWeb ? h('small', { class: 'good-t' }, ' (la página lo marca como exclusivo web)') : null),
           h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.oferta, onchange: function (ev) { F.oferta = ev.target.checked; App.render(); } }), ' 🔥 Está en oferta'),
+          App.campoCampana(F, { lugar: F.lugar, precio: F.precio, precioNormal: F.oferta ? F.precioNormal : null, titulo: r.tituloOriginal || r.nombre,
+            textos: (U.raw.textos || []).concat(r.etiquetasPromo || []), fk: 'cap' }),
           F.oferta ? h('div', { class: 'stack indent' },
             h('label', { class: 'row gap wrap' }, h('span', { class: 'mut' }, 'Precio normal (sin oferta)'),
               App.numInput({ fk: 'cap-normal', cls: 'w100', value: F.precioNormal, ph: 'si lo sabes', onChange: function (n) { F.precioNormal = n; App.render(); }, onEmpty: function () { F.precioNormal = null; } })),
             F.precioNormal > F.precio ? h('small', { class: 'mut' }, 'Se guardan los dos: la oferta y el precio normal, que es al que vuelve cuando la oferta termina.') : null,
-            h('div', { class: 'row gap wrap' }, h('span', { class: 'mut' }, 'Dura hasta'),
+            F.campana && F.campana !== App.CAMP_NUEVA ? null : h('div', { class: 'row gap wrap' }, h('span', { class: 'mut' }, 'Dura hasta'),
               h('div', { class: 'chips' },
                 [['', 'no sé'], [App.hoy(), 'hoy'], [domingo(), 'domingo'], [finDeMes(), 'fin de mes']].map(function (c) {
                   return App.chip(c[1], F.hasta === c[0], function () { F.hasta = c[0]; App.render(); });
@@ -6076,7 +6660,7 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
-  const TABS = [['directorio', 'Directorio'], ['urgencias', '🚨 Urgencias'], ['calidad', '⭐ Opiniones de cocina'], ['compras', 'Compras'], ['promos', '🚚 Promos de despacho'], ['oportunidades', 'Ofertas y sobrestock'], ['evolucion', 'Evolución de precios'], ['iva', 'IVA y crédito fiscal'], ['canasta', 'Evaluación y canasta óptima']];
+  const TABS = [['directorio', 'Directorio'], ['urgencias', '🚨 Urgencias'], ['calidad', '⭐ Opiniones de cocina'], ['compras', 'Compras'], ['campanas', '🎯 Campañas'], ['promos', '🚚 Promos de despacho'], ['oportunidades', 'Ofertas y sobrestock'], ['evolucion', 'Evolución de precios'], ['iva', 'IVA y crédito fiscal'], ['canasta', 'Evaluación y canasta óptima']];
   const TIPOS = [['supermercado', 'Supermercado'], ['mayorista', 'Mayorista'], ['feria', 'Feria / mercado'], ['carniceria', 'Carnicería / especialista'], ['distribuidora', 'Distribuidora'], ['otro', 'Otro']];
   const FACTURA = [['si', 'Da factura'], ['a_pedido', 'Factura a pedido'], ['no', 'Sin factura']];
 
@@ -6291,7 +6875,7 @@ window.CLOUD = {
         h('p', { class: 'help' }, 'Los precios marcados "solo online" obligan a pedir online a este proveedor: se reciben con despacho o, si lo permite, retirando el pedido.'),
         h('h4', null, 'Promociones de despacho'),
         promos.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
-          h('thead', null, h('tr', null, ['Promoción', 'Activa', 'Desde', 'Hasta', 'Costo', 'Gratis desde', 'Compra mínima', 'Cuenta', 'Llega en (días)', 'Corte', 'Socio', 'Solo 1ª compra', 'Estado', ''].map(function (t) { return h('th', null, t); }))),
+          h('thead', null, h('tr', null, ['Promoción', 'Activa', 'Desde', 'Hasta', 'Costo', 'Gratis desde', 'Compra mínima', 'Cuenta', 'Llega en (días)', 'Corte', 'Socio', 'Solo 1ª compra', 'Se suma a campañas', 'Estado', ''].map(function (t) { return h('th', null, t); }))),
           h('tbody', null, promos.map(function (pr, i) {
             const est = ESTADO_PROMO[E.estadoPromo(App.ctx(), p, pr)];
             return h('tr', null,
@@ -6308,10 +6892,20 @@ window.CLOUD = {
               h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: !!pr.requiereMembresia, title: 'Exige la membresía activa', onchange: function (e) { setP(i, 'requiereMembresia', e.target.checked); } })),
               h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: !!pr.soloPrimeraCompra, title: 'Vale solo en la primera compra a este proveedor', onchange: function (e) { setP(i, 'soloPrimeraCompra', e.target.checked); } }),
                 pr.soloPrimeraCompra ? h('div', null, h('label', { class: 'chk', title: 'Márcala si ya compraste y no lo registraste' }, h('input', { type: 'checkbox', checked: !!pr.usada, onchange: function (e) { setP(i, 'usada', e.target.checked); } }), h('small', null, ' ya usada'))) : null),
+              h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: pr.acumulaCampanas !== false, title: 'Desmárcala si sus condiciones excluyen otras promociones: la canasta comparará pedir con la campaña o con este despacho',
+                onchange: function (e) { setP(i, 'acumulaCampanas', e.target.checked); } })),
               h('td', null, App.badge(est[0], est[1])),
               h('td', null, App.btn('✕', function () { upd(p, function (x) { x.promosDespacho.splice(i, 1); }); }, 'small ghost', 'Eliminar promoción')));
           })))) : h('p', { class: 'help' }, 'Sin promociones. Las condiciones normales son las de la columna Despacho; una promoción vigente se usa en vez de ellas cuando sale más barata o llega antes. Si la promoción cuenta solo "productos seleccionados", marca esos productos en sus ofertas (Insumos y compras).'),
-        h('div', null, App.btn('+ Agregar promoción de despacho', nuevaPromo, 'small')));
+        h('div', null, App.btn('+ Agregar promoción de despacho', nuevaPromo, 'small')),
+        h('h4', null, 'Campañas'),
+        (function () {
+          const cs = E.listaCampanas(App.ctx(), p.id).filter(function (x) { return x.estado !== 'vencida'; });
+          return h('div', { class: 'row gap wrap' },
+            cs.length ? cs.map(function (x) { const est = ESTADO_PROMO[x.estado] || [x.estado, '']; return App.badge('🎯 ' + (x.campana.nombre || 'Campaña') + ' · ' + est[0], est[1]); })
+              : h('small', { class: 'mut' }, 'Sin campañas vigentes.'),
+            App.btn(cs.length ? 'Ver campañas' : '+ Agregar campaña', function () { if (cs.length) App.go('proveedores', 'campanas'); else App.crearCampana(p.id); }, 'small'));
+        })());
     };
 
     const exportar = function () {
@@ -6498,6 +7092,11 @@ window.CLOUD = {
           F.montos.manual ? App.btn('Recalcular desde el total', function () { F.montos = { manual: false }; App.render(); }, 'small ghost') : h('small', { class: 'mut' }, 'calculados desde el total; corrígelos para que coincidan con la factura'),
           F.tipoDoc === '33' ? h('span', { class: 'good-t' }, 'crédito fiscal ' + App.clp(F.montos.iva)) : null),
         Math.abs(descuadre) > 2 ? h('small', { class: 'bad-t' }, 'Neto + exento + IVA no cuadra con el total pagado: diferencia ' + App.clp(descuadre)) : null) : null,
+      (function () {
+        // productos de una campaña que excluye las compras con factura: con factura no vale ese precio
+        const sinF = factura ? Array.from(new Set(F.lineas.map(function (l) { const e = l.ofertaId ? E.campanaDe(ctx, ctx.ofertas.get(l.ofertaId)) : null; return e && e.c.excluyeFactura ? e.c.nombre || 'una campaña' : null; }).filter(Boolean))) : [];
+        return sinF.length ? h('div', { class: 'alert warn' }, h('span', null, '⚠'), h('span', null, sinF.join(', ') + ' excluye las compras con factura: con factura esos productos no tienen el precio de campaña. Revisa el precio pagado o registra la compra sin factura.')) : null;
+      })(),
       F.oportunidad ? h('div', { class: 'alert info' }, h('span', null, '📦'), excesos.length
         ? h('span', null, 'Quedará como sobrestock: ' + excesos.map(function (x) { return x.insumo.nombre + ' ' + App.cantidad(x.cantidad, x.insumo.unidad) + (x.semanas ? ' (~' + App.num(x.semanas, 1) + ' semanas de consumo, incluida esta)' : ''); }).join(' · ') +
           '. Se descuenta solo cada día según tu consumo y la lista de compras no te lo pedirá mientras dure.')
@@ -6835,7 +7434,7 @@ window.CLOUD = {
     const temps = E.ofertasTemporales(ctx), stock = E.sobrestockVigente(ctx);
     const activar = function (o, si) {
       Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.usarMientrasDure = si; if (si) y.pendiente = false; });
-      App.toast(si ? 'Se usa en los costos hasta el ' + App.fechaCorta(o.temporal.hasta) : 'Los costos vuelven al precio normal');
+      App.toast(si ? 'Se usa en los costos hasta el ' + App.fechaCorta(E.hastaOferta(App.ctx(), o)) : 'Los costos vuelven al precio normal');
     };
     const unidadTxt = function (u) { return u === 'g' ? 'kg' : u === 'ml' ? 'L' : 'un'; };
 
@@ -7127,6 +7726,237 @@ window.CLOUD = {
       membTabla, evTabla);
   }
 
+  /* ================= Campañas (ofertas limitadas con fechas y condiciones comunes) ================= */
+  const CANALES = [['todos', 'Tienda y online'], ['online', 'Solo online (web o app)'], ['tienda', 'Solo en tienda']];
+  const TIPOS_CAMP = [['precio', 'Precios de campaña (cada producto trae su precio)'], ['descuento', '% de descuento sobre el precio normal']];
+  function nuevaCampana(extra) {
+    return Object.assign({ id: Store.uid('CAM-'), nombre: '', tipo: 'precio', activa: true, desde: App.hoy(), hasta: null, canal: 'todos', alcance: 'seleccionados',
+      usarEnCostos: true, excluyeFactura: false, hastaAgotarStock: false, requiereMembresia: false, acumula: Object.assign({}, E.ACUMULA_DEF),
+      acumulaCon: [], noAcumulaCon: [], preciosFijos: [], claves: [], url: '', condiciones: '' }, extra || {});
+  }
+  // dentro de Store.mutate: une ofertas a una campaña (su fecha pasa a ser la de la campaña)
+  function vincularOfertas(st, c, p, ids) {
+    (ids || []).forEach(function (oid) {
+      const o = st.ofertas.find(function (x) { return x.id === oid; });
+      if (!o) return;
+      o.campanaId = c.id; delete o.campanaPropuesta; delete o.hastaPorConfirmar;
+      if (!o.proveedorId) { o.proveedorId = p.id; o.lugar = p.nombre; }
+    });
+  }
+  // crea una campaña (en un proveedor existente o en el que corresponda al nombre `lugar`) y la deja abierta para completarla
+  App.crearCampana = function (provId, extra, ofertaIds, lugar) {
+    let id = null;
+    Store.mutate(function (st) {
+      const p = provId ? st.proveedores.find(function (x) { return x.id === provId; }) : App.vincularProveedor(st, lugar);
+      if (!p) return;
+      const c = nuevaCampana(extra);
+      p.campanas = (p.campanas || []).concat([c]);
+      vincularOfertas(st, c, p, ofertaIds);
+      id = c.id;
+    });
+    if (id) { App.ui.campAbierta = id; App.go('proveedores', 'campanas'); App.render(); }
+    return id;
+  };
+  const listaTxt = function (a) { return (a || []).join(', '); };
+  const aNumeros = function (t) { return String(t || '').split(/[;,\s]+/).map(function (x) { return Number(x.replace(/[$.]/g, '')); }).filter(function (n) { return n > 0; }); };
+  const aTextos = function (t) { return String(t || '').split(/[;,]+/).map(function (x) { return x.trim(); }).filter(Boolean); };
+
+  function campanas() {
+    const s = Store.get(), ctx = App.ctx();
+    const updC = function (pid, cid, fn, key) {
+      Store.mutate(function (st) {
+        const p = st.proveedores.find(function (x) { return x.id === pid; }), c = p && (p.campanas || []).find(function (x) { return x.id === cid; });
+        if (c) fn(c, p, st);
+      }, key);
+    };
+    const lista = E.listaCampanas(ctx);
+    const activas = lista.filter(function (x) { return x.estado !== 'vencida' && x.estado !== 'inactiva'; });
+    const terminadas = lista.filter(function (x) { return x.estado === 'vencida' || x.estado === 'inactiva'; });
+    const props = E.campanasPropuestas(ctx);
+
+    const vigencia = function (x) {
+      const c = x.campana;
+      if (x.estado === 'programada') return 'empieza ' + App.fechaCorta(c.desde) + ' (en ' + x.diasParaEmpezar + ' d)';
+      if (x.estado === 'vencida') return 'terminó ' + App.fechaCorta(c.hasta);
+      return c.hasta ? 'hasta ' + App.fechaCorta(c.hasta) + (x.diasRestantes <= 0 ? ' · último día' : ' · quedan ' + x.diasRestantes + ' d') : 'sin fecha de término';
+    };
+    // con qué se suma: otras campañas y promos de despacho del mismo proveedor
+    const otrosDe = function (p, c) {
+      return (p.campanas || []).filter(function (x) { return x.id !== c.id; }).map(function (x) { return { obj: x, tipo: 'campana', nombre: '🎯 ' + (x.nombre || 'Campaña') }; })
+        .concat((p.promosDespacho || []).filter(function (pr) { return pr.id; }).map(function (pr) { return { obj: pr, tipo: 'despacho', nombre: '🚚 ' + (pr.nombre || 'Promo de despacho') }; }));
+    };
+    const resumenAcumula = function (p, c) {
+      const ac = E.acumulaDe(c);
+      const partes = [ac.despacho ? 'se suma al despacho en promoción' : 'no se suma al despacho en promoción',
+        ac.campanas ? 'se suma a otras campañas' : 'no se suma a otras campañas', ac.promosProducto ? 'se suma a ofertas y "lleva N"' : 'no se suma a ofertas ni "lleva N"'];
+      const exc = otrosDe(p, c).filter(function (x) {
+        const def = x.tipo === 'despacho' ? ac.despacho && x.obj.acumulaCampanas !== false : ac.campanas && E.acumulaDe(x.obj).campanas;
+        return E.seAcumulan(c, x.obj, x.tipo) !== def;
+      }).map(function (x) { return (E.seAcumulan(c, x.obj, x.tipo) ? 'sí con ' : 'no con ') + x.nombre; });
+      return partes.join(' · ') + (exc.length ? ' · excepciones: ' + exc.join(', ') : '');
+    };
+
+    const editor = function (x) {
+      const c = x.campana, p = x.proveedor, pid = p.id, cid = c.id, fk = 'cp-' + cid + '-';
+      const set = function (k, v, key) { updC(pid, cid, function (y) { y[k] = v; }, key); };
+      const chk = function (k, label, title, def) {
+        return h('label', { class: 'chk', title: title || '' }, h('input', { type: 'checkbox', checked: c[k] != null ? !!c[k] : !!def, onchange: function (e) { set(k, e.target.checked); } }), ' ' + label);
+      };
+      const fecha = function (k) { return h('input', { type: 'date', class: 'w-fecha', value: c[k] || '', 'data-fk': fk + k, onchange: function (e) { set(k, e.target.value || null); } }); };
+      const ac = E.acumulaDe(c);
+      const setAc = function (k, v) { updC(pid, cid, function (y) { y.acumula = Object.assign({}, E.ACUMULA_DEF, y.acumula || {}); y.acumula[k] = v; }); };
+      // excepción con otra campaña o promo: un toque invierte lo que diga la regla; otro toque vuelve a la regla
+      const esExcepcion = function (o) {
+        const id = o.obj.id;
+        return (c.acumulaCon || []).indexOf(id) >= 0 || (c.noAcumulaCon || []).indexOf(id) >= 0 || (o.obj.acumulaCon || []).indexOf(cid) >= 0 || (o.obj.noAcumulaCon || []).indexOf(cid) >= 0;
+      };
+      const ciclo = function (o) {
+        const id = o.obj.id, habia = esExcepcion(o), seSumaba = E.seAcumulan(c, o.obj, o.tipo);
+        updC(pid, cid, function (y, pp) {
+          const otra = o.tipo === 'campana' ? (pp.campanas || []).find(function (z) { return z.id === id; }) : (pp.promosDespacho || []).find(function (z) { return z.id === id; });
+          const quitar = function (obj, k, v) { if (obj && obj[k]) obj[k] = obj[k].filter(function (z) { return z !== v; }); };
+          // la excepción queda en esta campaña; se borran las anteriores (de ambos lados) para que no se contradigan
+          quitar(y, 'acumulaCon', id); quitar(y, 'noAcumulaCon', id); quitar(otra, 'acumulaCon', cid); quitar(otra, 'noAcumulaCon', cid);
+          if (!habia) { const k = seSumaba ? 'noAcumulaCon' : 'acumulaCon'; y[k] = (y[k] || []).concat([id]); }
+        });
+      };
+      const cats = Array.from(new Set(s.insumos.map(function (i) { return i.categoria; }).filter(Boolean))).sort(function (a, b) { return a.localeCompare(b, 'es'); });
+      const insSel = (c.insumos || []).map(function (id) { return App.insumo(id); }).filter(Boolean);
+      const ofs = x.ofertas.slice().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
+      return h('div', { class: 'stack' },
+        h('div', { class: 'form-grid' },
+          h('label', null, 'Nombre', App.textInput({ fk: fk + 'n', value: c.nombre || '', ph: 'ej. Barato a un click', onChange: function (v) { set('nombre', v, 'cpn' + cid); } })),
+          h('label', null, 'Tipo', App.select({ fk: fk + 't', value: c.tipo || 'precio', options: TIPOS_CAMP, onChange: function (v) { set('tipo', v); } })),
+          c.tipo === 'descuento' ? h('label', null, 'Descuento (%)', App.numInput({ fk: fk + 'pct', cls: 'w70', value: c.descuentoPct, ph: 'ej. 20', onChange: function (n) { set('descuentoPct', n, 'cpp' + cid); }, onEmpty: function () { set('descuentoPct', null); } })) : null,
+          h('label', null, 'Desde', fecha('desde')),
+          h('label', null, 'Hasta (inclusive)', fecha('hasta')),
+          h('label', null, 'Dónde vale', App.select({ fk: fk + 'can', value: c.canal || 'todos', options: CANALES, onChange: function (v) { set('canal', v); } })),
+          h('label', null, 'Qué productos', App.select({ fk: fk + 'alc', value: c.alcance || (c.tipo === 'descuento' ? 'todo' : 'seleccionados'),
+            options: c.tipo === 'descuento' ? [['todo', 'Toda la tienda'], ['categorias', 'Algunas categorías'], ['seleccionados', 'Productos elegidos']] : [['seleccionados', 'Productos seleccionados'], ['todo', 'Toda la tienda']],
+            onChange: function (v) { set('alcance', v); } }))),
+        c.tipo === 'descuento' && c.alcance === 'categorias' ? h('div', { class: 'chips' }, cats.map(function (k) {
+          const on = (c.categorias || []).some(function (z) { return E.normNombre(z) === E.normNombre(k); });
+          return App.chip((on ? '✓ ' : '') + k, on, function () { updC(pid, cid, function (y) { y.categorias = on ? (y.categorias || []).filter(function (z) { return E.normNombre(z) !== E.normNombre(k); }) : (y.categorias || []).concat([k]); }); });
+        })) : null,
+        c.tipo === 'descuento' && c.alcance === 'seleccionados' ? h('div', { class: 'row gap wrap' },
+          insSel.map(function (i) { return App.chip(i.nombre + ' ✕', true, function () { updC(pid, cid, function (y) { y.insumos = (y.insumos || []).filter(function (z) { return z !== i.id; }); }); }); }),
+          h('select', { 'data-fk': fk + 'ins', onchange: function (e) { const v = e.target.value; if (v) updC(pid, cid, function (y) { y.insumos = (y.insumos || []).concat([v]); }); } },
+            h('option', { value: '' }, '+ agregar producto…'), s.insumos.filter(function (i) { return (c.insumos || []).indexOf(i.id) < 0; }).slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); })
+              .map(function (i) { return h('option', { value: i.id }, i.nombre); }))) : null,
+        h('div', { class: 'row gap wrap' },
+          chk('activa', 'Activa', 'Desmárcala para pausarla sin borrarla', true),
+          chk('usarEnCostos', 'Usar en los costos mientras dure', 'Sus precios entran a los costos de los platos; al terminar vuelven solos al precio normal', true),
+          chk('excluyeFactura', 'Excluye compras con factura', 'Sin crédito fiscal: se costea con IVA'),
+          chk('hastaAgotarStock', 'Hasta agotar stock'),
+          chk('requiereMembresia', 'Requiere membresía', 'Solo vale con la membresía del proveedor activa')),
+        h('div', { class: 'stack' },
+          h('small', { class: 'mut' }, 'Se suma con… (por defecto no se suma a otras promociones, salvo al despacho)'),
+          h('div', { class: 'row gap wrap' },
+            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: ac.despacho, onchange: function (e) { setAc('despacho', e.target.checked); } }), ' promociones de despacho'),
+            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: ac.campanas, onchange: function (e) { setAc('campanas', e.target.checked); } }), ' otras campañas'),
+            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: ac.promosProducto, onchange: function (e) { setAc('promosProducto', e.target.checked); } }), ' ofertas sueltas y "lleva N"')),
+          otrosDe(p, c).length ? h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'Excepciones (toca para cambiar):'),
+            otrosDe(p, c).map(function (o) {
+              const si = E.seAcumulan(c, o.obj, o.tipo), exc = esExcepcion(o);
+              return App.chip(o.nombre + (si ? ': ✓ se suma' : ': ✗ no se suma') + (exc ? ' (excepción)' : ''), exc, function () { ciclo(o); });
+            })) : null),
+        h('div', { class: 'form-grid' },
+          c.tipo !== 'descuento' ? h('label', null, 'Precios fijos (opcional)', App.textInput({ fk: fk + 'pf', value: listaTxt(c.preciosFijos), ph: 'ej. 1000, 2000, 3000',
+            title: 'Si un producto de este proveedor cuesta uno de estos precios, se sugiere la campaña', onChange: function () {}, onCommit: function (v) { set('preciosFijos', aNumeros(v)); } })) : null,
+          h('label', null, 'Palabras para reconocerla', App.textInput({ fk: fk + 'cl', value: listaTxt(c.claves), ph: 'ej. barato a un click, cyber',
+            title: 'Si la página del producto muestra alguna, se sugiere la campaña (también sirve su nombre)', onChange: function () {}, onCommit: function (v) { set('claves', aTextos(v)); } })),
+          h('label', null, 'Página de condiciones', App.textInput({ fk: fk + 'url', value: c.url || '', ph: 'https://…', onChange: function (v) { set('url', v.trim(), 'cpu' + cid); } }))),
+        h('label', { class: 'block' }, 'Condiciones (notas)', App.textInput({ fk: fk + 'cond', value: c.condiciones || '', ph: 'ej. válido en locales seleccionados, máximo 6 unidades por cliente',
+          onChange: function (v) { set('condiciones', v, 'cpc' + cid); } })),
+        h('div', { class: 'stack' },
+          h('small', { class: 'mut' }, ofs.length ? 'Productos en esta campaña (' + ofs.length + ')' : 'Aún no hay productos: se suman al cotizar eligiendo esta campaña, o desde la bandeja de Cotizaciones.'),
+          ofs.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' }, h('tbody', null, ofs.map(function (o) {
+            const ins = App.insumo(o.insumoId) || { nombre: '?' };
+            return h('tr', null, h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(o.insumoId) }, ins.nombre)), h('td', { class: 'r' }, App.clp(o.precio) + ' / ' + (o.formatoLabel || '')),
+              h('td', null, o.pendiente ? App.badge('por revisar', 'warn') : E.oportunidadActiva(ctx, o) ? App.badge('en uso', 'good') : null),
+              h('td', null, App.btn('Quitar', function () {
+                Store.mutate(function (st) { const y = st.ofertas.find(function (z) { return z.id === o.id; }); delete y.campanaId; y.temporal = { hasta: c.hasta || App.hoy() }; });
+              }, 'small ghost', 'Sacarla de la campaña (queda como oferta temporal con la misma fecha)')));
+          })))) : null),
+        h('div', { class: 'row gap wrap' },
+          c.url ? h('a', { href: c.url, target: '_blank', rel: 'noopener', class: 'btn small' }, 'Ver condiciones ↗') : null,
+          App.btn('Listo', function () { App.ui.campAbierta = null; App.render(); }, 'small primary'),
+          App.btn('Eliminar campaña', function () {
+            App.confirm('¿Eliminar "' + (c.nombre || 'la campaña') + '"?' + (ofs.length ? ' Sus ' + ofs.length + ' producto(s) quedan como ofertas terminadas. Para pausarla, mejor desmarca "Activa".' : ''), function () {
+              Store.mutate(function (st) {
+                const pp = st.proveedores.find(function (z) { return z.id === pid; });
+                pp.campanas = (pp.campanas || []).filter(function (z) { return z.id !== cid; });
+                st.ofertas.forEach(function (o) { if (o.campanaId === cid) { delete o.campanaId; o.temporal = { hasta: E.fechaMenos(App.hoy(), 1) }; } });
+              });
+            }, 'Eliminar', true);
+          }, 'small ghost')));
+    };
+
+    const tarjeta = function (x) {
+      const c = x.campana, p = x.proveedor, abierta = App.ui.campAbierta === c.id, est = ESTADO_PROMO[x.estado] || [x.estado, ''];
+      const titulo = h('span', null, '🎯 ' + (c.nombre || 'Campaña sin nombre') + ' · ', h('span', { class: 'mut' }, p.nombre));
+      return App.card(titulo, abierta ? editor(x) : h('div', { class: 'stack' },
+        h('div', { class: 'row gap wrap' }, App.badge(est[0], est[1]), App.badge(vigencia(x), x.estado === 'vigente' && x.diasRestantes != null && x.diasRestantes <= 3 ? 'warn' : 'info'),
+          c.tipo === 'descuento' ? App.badge('−' + App.num(Number(c.descuentoPct) || 0, 0) + '%', 'good') : null,
+          c.canal === 'online' ? App.badge('🌐 solo online', 'info') : c.canal === 'tienda' ? App.badge('🏬 solo en tienda', 'info') : null,
+          c.excluyeFactura ? App.badge('sin factura', 'warn') : null, c.hastaAgotarStock ? App.badge('hasta agotar stock', '') : null,
+          c.requiereMembresia ? App.badge('⭐ socio', 'info') : null, c.usarEnCostos === false ? App.badge('no entra a los costos', '') : null),
+        h('small', { class: 'mut' }, resumenAcumula(p, c)),
+        h('div', null, x.nOfertas + ' producto(s)' + (x.nPendientes ? ' · ' + x.nPendientes + ' por revisar' : ''),
+          x.ahorroSemana > 0 ? h('span', { class: 'good-t' }, ' · ahorro ~' + App.clp(x.ahorroSemana) + '/semana con tu consumo') : null),
+        c.condiciones ? h('small', { class: 'mut' }, '“' + c.condiciones + '”') : null), abierta ? 'abierta' : '',
+        abierta ? null : App.btn('Editar', function () { App.ui.campAbierta = c.id; App.render(); }, 'small'));
+    };
+
+    const tarjetaPropuesta = function (g) {
+      const camps = g.proveedor ? (g.proveedor.campanas || []) : [];
+      const crear = function () {
+        App.crearCampana(g.proveedor ? g.proveedor.id : null, { nombre: g.nombre, desde: g.desde || App.hoy(), hasta: g.hasta || null,
+          canal: g.ofertas.every(function (o) { return o.soloOnline; }) ? 'online' : 'todos', claves: g.nombre ? [g.nombre.toLowerCase()] : [] },
+          g.ofertas.map(function (o) { return o.id; }), g.lugar);
+        App.toast('Campaña creada con ' + g.ofertas.length + ' producto(s): revisa sus fechas y condiciones');
+      };
+      const unir = function (cid) {
+        if (!cid) return;
+        Store.mutate(function (st) {
+          const p = st.proveedores.find(function (x) { return x.id === g.proveedor.id; }), c = (p.campanas || []).find(function (x) { return x.id === cid; });
+          vincularOfertas(st, c, p, g.ofertas.map(function (o) { return o.id; }));
+        });
+        App.toast('Productos unidos a la campaña');
+      };
+      const descartar = function () {
+        Store.mutate(function (st) { g.ofertas.forEach(function (o) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); if (y) delete y.campanaPropuesta; }); });
+        App.toast('Quedan como ofertas sueltas');
+      };
+      return h('div', { class: 'card sub stack' },
+        h('div', null, h('b', null, '🎯 ' + (g.nombre || 'Campaña sin nombre')), ' · ', g.lugar || '—',
+          !g.proveedor ? App.badge('🏪 proveedor nuevo', 'warn') : null),
+        h('small', { class: 'mut' }, g.ofertas.length + ' cotización(es) de ' + g.nInsumos + ' producto(s) · marcada por ' + (g.autores.join(', ') || '—') +
+          (g.desde ? ' desde el ' + App.fechaCorta(g.desde) : '') + (g.hasta ? ' · ofertas hasta el ' + App.fechaCorta(g.hasta) : '')),
+        h('small', null, g.ofertas.map(function (o) { const i = App.insumo(o.insumoId); return (i ? i.nombre : '?') + ' ' + App.clp(o.precio || 0); }).join(' · ')),
+        h('div', { class: 'row gap wrap' },
+          App.btn('Crear campaña', crear, 'small primary', 'Crea la campaña con estos productos; luego completa fechas y condiciones'),
+          camps.length ? h('select', { 'data-fk': 'cpp-unir-' + g.clave, onchange: function (e) { unir(e.target.value); } },
+            h('option', { value: '' }, 'Unir a una existente…'), camps.map(function (c) { return h('option', { value: c.id }, c.nombre || 'Campaña'); })) : null,
+          App.btn('No es campaña', descartar, 'small ghost', 'Quitar la marca: quedan como ofertas sueltas')));
+    };
+
+    const activos = (s.proveedores || []).filter(function (p) { return p.activo !== false; }).sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); });
+    const selNueva = h('select', { 'data-fk': 'camp-nueva', onchange: function (ev) { if (ev.target.value) { App.crearCampana(ev.target.value); App.toast('Completa nombre, fechas y condiciones'); } } },
+      h('option', { value: '' }, '+ Agregar una campaña a…'), activos.map(function (p) { return h('option', { value: p.id }, p.nombre); }));
+
+    return h('div', { class: 'stack' },
+      props.length ? App.card('Marcadas por el equipo (' + props.length + ')', h('div', { class: 'stack' },
+        h('p', { class: 'help' }, 'Al cotizar, alguien indicó que el producto es de una campaña que aún no existe. Créala (queda con esos productos y sus fechas estimadas) o únelos a una que ya tengas.'),
+        props.map(tarjetaPropuesta))) : null,
+      App.card('🎯 Campañas vigentes y próximas (' + activas.length + ')', h('div', { class: 'stack' },
+        h('p', { class: 'help' }, 'Una campaña agrupa ofertas de un proveedor con las mismas fechas y condiciones (ej. "Barato a un click" de Acuenta). Sus productos se usan mientras dure y al terminar vuelven solos al precio normal. Por defecto no se suma a otras promociones, salvo a las de despacho; ajústalo según sus condiciones.'),
+        activas.length ? activas.map(tarjeta) : App.empty('Sin campañas vigentes. Agrégalas con el selector de abajo, o se proponen solas cuando el equipo marca una al cotizar.'),
+        h('div', null, selNueva))),
+      terminadas.length ? h('details', { class: 'card' }, h('summary', null, 'Terminadas o pausadas (' + terminadas.length + ')'),
+        h('div', { class: 'stack' }, terminadas.map(tarjeta))) : null);
+  }
+
   /* ================= Promos de despacho (radar para esperar el buen momento) ================= */
   function promosRadar() {
     const s = Store.get(), ctx = App.ctx();
@@ -7185,7 +8015,7 @@ window.CLOUD = {
 
   App.views.proveedores = function (arg) {
     const tab = TABS.some(function (t) { return t[0] === arg; }) ? arg : 'directorio';
-    const cuerpo = tab === 'directorio' ? directorio() : tab === 'compras' ? compras() : tab === 'promos' ? promosRadar() : tab === 'oportunidades' ? oportunidades() : tab === 'urgencias' ? urgencias() : tab === 'calidad' ? calidad() : tab === 'evolucion' ? evolucion() : tab === 'iva' ? iva() : canasta();
+    const cuerpo = tab === 'directorio' ? directorio() : tab === 'compras' ? compras() : tab === 'promos' ? promosRadar() : tab === 'campanas' ? campanas() : tab === 'oportunidades' ? oportunidades() : tab === 'urgencias' ? urgencias() : tab === 'calidad' ? calidad() : tab === 'evolucion' ? evolucion() : tab === 'iva' ? iva() : canasta();
     return h('div', { class: 'stack' }, avisoNube(),
       h('div', { class: 'chips big' }, TABS.map(function (t) { return App.chip(t[1], tab === t[0], function () { App.go('proveedores', t[0]); }); })), cuerpo);
   };
