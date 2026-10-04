@@ -263,9 +263,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T08:16:06Z">
+<meta name="build" content="2026-10-04T09:33:21Z">
 <script>
-window.BUILD = "2026-10-04T08:16:06Z";
+window.BUILD = "2026-10-04T09:33:21Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -4902,19 +4902,62 @@ window.CLOUD = {
     return h('div', { class: 'stack' }, cabecera, tOpin, tablaOfertas, impacto, tUsos, tHist);
   }
 
+  // saca el insumo del sistema; si `destinoId`, todo lo que lo usaba pasa a ese otro insumo (misma cantidad)
+  function quitarInsumo(s, id, destinoId) {
+    const cambia = function (v) { return v === id ? destinoId : v; };
+    const sinDup = function (arr, excluir) { return arr.filter(function (v, i) { return v !== excluir && arr.indexOf(v) === i; }); };
+    if (destinoId) {
+      s.recetas.forEach(function (r) {
+        (r.lineas || []).forEach(function (l) {
+          if (l.tipo !== 'insumo') return;
+          if (l.ref === id) l.ref = destinoId;
+          if (l.alternativas) l.alternativas = sinDup(l.alternativas.map(cambia), l.ref);
+        });
+        if (r.envaseId === id) r.envaseId = destinoId;
+      });
+      s.proveedores.forEach(function (p) { (p.campanas || []).forEach(function (c) { if ((c.insumos || []).indexOf(id) >= 0) c.insumos = sinDup(c.insumos.map(cambia)); }); });
+      s.escenarios.forEach(function (e) {
+        Object.keys(e.sust || {}).forEach(function (rid) { Object.keys(e.sust[rid]).forEach(function (idx) { e.sust[rid][idx] = cambia(e.sust[rid][idx]); }); });
+      });
+    }
+    s.escenarios.forEach(function (e) { if (e.ofertaElegida) delete e.ofertaElegida[id]; });
+    s.sobrestock = (s.sobrestock || []).filter(function (x) { return x.insumoId !== id; });
+    s.insumos = s.insumos.filter(function (i) { return i.id !== id; });
+    s.ofertas = s.ofertas.filter(function (o) { return o.insumoId !== id; });
+  }
+
   function eliminar(ins) {
-    const usos = App.usoMap().get(ins.id) || [];
-    const directo = Store.get().recetas.filter(function (r) { return r.lineas.some(function (l) { return l.tipo === 'insumo' && l.ref === ins.id; }) || r.envaseId === ins.id; });
-    if (directo.length) {
-      App.modal('No se puede eliminar', h('div', null, h('p', null, 'Este insumo está en ' + directo.length + ' receta(s). Quítalo de ellas o reemplázalo primero:'),
-        h('ul', null, directo.slice(0, 15).map(function (r) { return h('li', null, h('a', { href: '#/recetas/' + encodeURIComponent(r.id) }, r.nombre)); }))),
-        function (close) { return [App.btn('Cerrar', close, 'primary')]; });
+    const s = Store.get();
+    const directo = s.recetas.filter(function (r) { return r.lineas.some(function (l) { return l.tipo === 'insumo' && (l.ref === ins.id || (l.alternativas || []).indexOf(ins.id) >= 0); }) || r.envaseId === ins.id; });
+    const enCamp = s.proveedores.some(function (p) { return (p.campanas || []).some(function (c) { return (c.insumos || []).indexOf(ins.id) >= 0; }); });
+    const nOf = App.ofertasDe(ins.id).length;
+    const listo = function (msg) { App.go('insumos'); if (msg) App.toast(msg); };
+    if (!directo.length && !enCamp) {
+      App.confirm('¿Eliminar "' + ins.nombre + '" y sus ' + nOf + ' oferta(s)?', function () { Store.mutate(function (st) { quitarInsumo(st, ins.id, null); }); listo(); }, 'Eliminar', true);
       return;
     }
-    App.confirm('¿Eliminar "' + ins.nombre + '" y todas sus ofertas?', function () {
-      Store.mutate(function (s) { s.insumos = s.insumos.filter(function (i) { return i.id !== ins.id; }); s.ofertas = s.ofertas.filter(function (o) { return o.insumoId !== ins.id; }); });
-      App.go('insumos');
-    }, 'Eliminar', true);
+    let destino = '';
+    const otros = s.insumos.filter(function (i) { return i.id !== ins.id; }).sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); });
+    const aviso = h('div', { class: 'help' });
+    const btn = App.btn('Reemplazar y eliminar', function () {
+      if (!destino) return;
+      const d = otros.find(function (i) { return i.id === destino; });
+      close();
+      Store.mutate(function (st) { quitarInsumo(st, ins.id, destino); });
+      listo('"' + ins.nombre + '" eliminado: ahora se usa "' + d.nombre + '"');
+    }, 'danger');
+    btn.disabled = true;
+    const sel = h('select', { 'data-fk': 'ins-reemplazo', onchange: function (ev) {
+      destino = ev.target.value; btn.disabled = !destino;
+      const d = otros.find(function (i) { return i.id === destino; });
+      aviso.textContent = d && d.unidad !== ins.unidad ? 'Ojo: "' + ins.nombre + '" va en ' + ins.unidad + ' y "' + d.nombre + '" en ' + d.unidad + '. Las cantidades se copian tal cual: revísalas.' : '';
+    } }, h('option', { value: '' }, 'Elegir reemplazo…'), otros.map(function (i) { return h('option', { value: i.id }, i.nombre + ' (' + i.unidad + ')'); }));
+    const close = App.modal('Eliminar "' + ins.nombre + '"', h('div', { class: 'stack' },
+      directo.length ? h('p', null, 'Está en ' + directo.length + ' receta(s). Elige con qué insumo reemplazarlo, con la misma cantidad:') : h('p', null, 'Está en una campaña de proveedor. Elige con qué insumo reemplazarlo:'),
+      directo.length ? h('ul', null, directo.slice(0, 15).map(function (r) { return h('li', null, h('a', { href: '#/recetas/' + encodeURIComponent(r.id) }, r.nombre)); })) : null,
+      h('label', null, 'Reemplazar por', sel), aviso,
+      h('p', { class: 'help' }, 'Sus ' + nOf + ' oferta(s) se eliminan con él: son de este producto y no pasan al reemplazo.')),
+      function (c) { return [App.btn('Cancelar', c), btn]; });
   }
 
   App.views.insumos = function (arg) {
@@ -5038,21 +5081,48 @@ window.CLOUD = {
     });
   }
 
+  // saca la receta; si `destinoId`, lo que la usaba (sub-recetas, guarniciones, plan semanal) pasa a esa otra receta
+  function quitarReceta(s, id, destinoId) {
+    const cambia = function (v) { return v === id ? destinoId : v; };
+    const sinDup = function (arr) { return arr.filter(function (v, i) { return arr.indexOf(v) === i; }); };
+    if (destinoId) s.recetas.forEach(function (x) {
+      (x.lineas || []).forEach(function (l) { if (l.tipo === 'receta' && l.ref === id) l.ref = destinoId; });
+      if (x.guarnicionDefault === id) x.guarnicionDefault = destinoId;
+      if (x.guarnicionesPermitidas) x.guarnicionesPermitidas = sinDup(x.guarnicionesPermitidas.map(cambia));
+    });
+    s.recetas = s.recetas.filter(function (x) { return x.id !== id; });
+    s.plan && E.DIAS.forEach(function (d) {
+      s.plan[d] = (s.plan[d] || []).filter(function (i) { return i.recetaId !== id; });
+      const m = s.plan.menu && s.plan.menu[d];
+      if (m) Object.keys(m).forEach(function (t) { m[t] = destinoId ? sinDup(m[t].map(cambia)) : m[t].filter(function (v) { return v !== id; }); });
+    });
+  }
+
   function eliminar(r) {
     const usos = usosComoSub(r);
-    if (usos.length) {
-      App.modal('No se puede eliminar', h('div', null, h('p', null, 'Esta receta se usa en:'), h('ul', null, usos.slice(0, 15).map(function (x) { return h('li', null, h('a', { href: '#/recetas/' + encodeURIComponent(x.id) }, x.nombre)); }))),
-        function (close) { return [App.btn('Cerrar', close, 'primary')]; });
+    if (!usos.length) {
+      App.confirm('¿Eliminar la receta "' + r.nombre + '"?', function () { Store.mutate(function (s) { quitarReceta(s, r.id, null); }); App.go('recetas'); }, 'Eliminar', true);
       return;
     }
-    App.confirm('¿Eliminar la receta "' + r.nombre + '"?', function () {
-      Store.mutate(function (s) { s.recetas = s.recetas.filter(function (x) { return x.id !== r.id; }); s.plan && E.DIAS.forEach(function (d) {
-        s.plan[d] = (s.plan[d] || []).filter(function (i) { return i.recetaId !== r.id; });
-        const m = s.plan.menu && s.plan.menu[d];
-        if (m) Object.keys(m).forEach(function (t) { m[t] = m[t].filter(function (id) { return id !== r.id; }); });
-      }); });
-      App.go('recetas');
-    }, 'Eliminar', true);
+    const s = Store.get();
+    // un reemplazo que ya contiene a alguna de las recetas que usan esta crearía una referencia circular
+    const otras = s.recetas.filter(function (x) { return x.id !== r.id && !usos.some(function (u) { return usaReceta(s, x.id, u.id); }); })
+      .sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); });
+    let destino = '';
+    const btn = App.btn('Reemplazar y eliminar', function () {
+      if (!destino) return;
+      const d = otras.find(function (x) { return x.id === destino; });
+      close();
+      Store.mutate(function (st) { quitarReceta(st, r.id, destino); });
+      App.go('recetas'); App.toast('"' + r.nombre + '" eliminada: ahora se usa "' + d.nombre + '"');
+    }, 'danger');
+    btn.disabled = true;
+    const sel = h('select', { 'data-fk': 'rec-reemplazo', onchange: function (ev) { destino = ev.target.value; btn.disabled = !destino; } },
+      h('option', { value: '' }, 'Elegir reemplazo…'), otras.map(function (x) { return h('option', { value: x.id }, x.nombre); }));
+    const close = App.modal('Eliminar "' + r.nombre + '"', h('div', { class: 'stack' },
+      h('p', null, 'Esta receta se usa en ' + usos.length + ' receta(s). Elige con cuál reemplazarla (misma cantidad, también en guarniciones y plan semanal):'),
+      h('ul', null, usos.slice(0, 15).map(function (x) { return h('li', null, h('a', { href: '#/recetas/' + encodeURIComponent(x.id) }, x.nombre)); })),
+      h('label', null, 'Reemplazar por', sel)), function (c) { return [App.btn('Cancelar', c), btn]; });
   }
 
   function crearInsumoRapido(nombre, onCreated) {
@@ -6948,7 +7018,11 @@ window.CLOUD = {
       });
     };
     const eliminar = function (p) {
-      if (nOfertas.get(p.id) || nCompras.get(p.id)) { App.toast('Tiene ofertas o compras: fusiónalo con otro o márcalo inactivo'); return; }
+      if (nOfertas.get(p.id) || nCompras.get(p.id)) {
+        // con ofertas o compras no se borra a secas: sus datos pasan a otro proveedor elegido (fusionar) y este desaparece
+        if (lista.length < 2) { App.toast('No hay otro proveedor al que pasar sus ofertas y compras: crea uno primero'); return; }
+        fusionar(p); return;
+      }
       App.confirm('¿Eliminar el proveedor "' + p.nombre + '"?', function () { Store.mutate(function (st) { st.proveedores = st.proveedores.filter(function (x) { return x.id !== p.id; }); }); }, 'Eliminar', true);
     };
     const nuevo = function () {
