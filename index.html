@@ -255,6 +255,7 @@ ol.pasos li { margin: 6px 0; }
 .chart .hoy { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; } .chart .tl-bar:hover, .chart .tl-dia:hover { opacity: .8; }
 .comp-no td { color: var(--mut); text-decoration: line-through; }
 .chart-wrap.ancho { overflow-x: auto; } .chart-wrap.ancho .chart { min-width: 600px; }
+label.row { flex-direction: row; }
 
 </style>
 </head>
@@ -262,9 +263,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T07:22:14Z">
+<meta name="build" content="2026-10-04T07:33:28Z">
 <script>
-window.BUILD = "2026-10-04T07:22:14Z";
+window.BUILD = "2026-10-04T07:33:28Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2826,7 +2827,10 @@ window.CLOUD = {
       out.etiquetas.push(t); return out.etiquetas.length >= 25;
     });
     // frases útiles: compra mínima, precio por kilo/litro, formato del envase
-    var texto = limpio(modal ? modal.innerText.split(/productos similares|tambi[eé]n te podr/i)[0] : d.body.innerText, 20000), re = /(compra m[ií]nima[^\n.]{0,30}|m[ií]nimo de \d+[^\n.]{0,20}|\$\s?[\d.]+(?:,\d+)?\s*(?:x|por|\/)\s*(?:kg|kilo|lt|l|litro|un|unidad|100\s?g|100\s?ml)\b|llev[aá]\s*\d+[^\n.]{0,40}|\d+\s*x\s*\$\s?[\d.]+)/gi, m;
+    // solo el texto del producto: desde su título hasta antes de los productos similares (banners y otras tarjetas traen promos que no son de este producto)
+    var cortes = /productos similares|tambi[eé]n te podr|relacionad|recomendad|te puede interesar|otros clientes|m[aá]s vendidos/i, completo = modal ? modal.innerText : d.body.innerText, ini = 0;
+    if (!modal && h1 && h1.innerText) { var pos = completo.indexOf(limpio(h1.innerText, 80).slice(0, 40)); if (pos > 0) ini = pos; }
+    var texto = limpio(completo.slice(ini).split(cortes)[0].slice(0, 3500), 20000), re = /(compra m[ií]nima[^\n.]{0,30}|m[ií]nimo de \d+[^\n.]{0,20}|\$\s?[\d.]+(?:,\d+)?\s*(?:x|por|\/)\s*(?:kg|kilo|lt|l|litro|un|unidad|100\s?g|100\s?ml)\b|llev[aá]\s*\d+[^\n.]{0,40}|\d+\s*x\s*\$\s?[\d.]+)/gi, m;
     while ((m = re.exec(texto)) && out.textos.length < 10) out.textos.push(limpio(m[1], 80));
     // variante elegida en tiendas Shopify (ej. "Posta Paleta - 1 Kilo")
     try { (window.ShopifyAnalytics.meta.product.variants || []).slice(0, 5).forEach(function (v) { out.variantes.push({ nombre: limpio(v.name, 120), precio: v.price / 100 }); }); } catch (e) { /* no es Shopify */ }
