@@ -242,9 +242,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T01:14:13Z">
+<meta name="build" content="2026-10-04T01:47:09Z">
 <script>
-window.BUILD = "2026-10-04T01:14:13Z";
+window.BUILD = "2026-10-04T01:47:09Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -294,8 +294,9 @@ window.CLOUD = {
   const TIPOS_SUELTOS = ['entrada', 'ensalada', 'postre', 'bebestible'];   // se venden en combos o sueltos (con recargo)
   const DIAS = ['lun', 'mar', 'mie', 'jue', 'vie'];
   const LINEAS = ['Tradicional', 'Gourmet / Premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en Proteína'];
-  const DIETA_NIVEL = { vegano: 0, vegetariano: 1, omni: 2 };
-  const LINEA_NIVEL_MAX = { 'Vegano': 0, 'Vegetariano': 1 };
+  // vegano ⊂ vegetariano ⊂ pescetariano (+ pescados y mariscos) ⊂ omnívoro (+ carnes y aves)
+  const DIETA_NIVEL = { vegano: 0, vegetariano: 1, pescetariano: 2, omni: 3 };
+  const LINEA_NIVEL_MAX = { 'Vegano': 0, 'Vegetariano': 1, 'Pescetariano': 2 };
 
   function params(state, opts) {
     return Object.assign({}, DEFAULT_PARAMS, state.params || {}, (opts && opts.params) || {});
@@ -823,6 +824,13 @@ window.CLOUD = {
   }
 
   /* ---------- dieta ---------- */
+  // migración: los insumos de pescados y mariscos marcados "con carne/pescado" pasan a pescetariano (una sola vez)
+  function asegurarDietas(state) {
+    state.params = state.params || {};
+    if (state.params.dietasV2) return;
+    (state.insumos || []).forEach(function (i) { if (i.dieta === 'omni' && normNombre(i.categoria) === normNombre('Pescados y Mariscos')) i.dieta = 'pescetariano'; });
+    state.params.dietasV2 = true;
+  }
   function nivelDieta(ins) { return DIETA_NIVEL[ins && ins.dieta] != null ? DIETA_NIVEL[ins.dieta] : 0; }
 
   // insumos (directos o vía sub-recetas) que violan la línea dietaria de la receta
@@ -1793,7 +1801,7 @@ window.CLOUD = {
     costoNetoOferta: costoNetoOferta, ofertasDisponibles: ofertasDisponibles, costoInsumo: costoInsumo,
     costoReceta: costoReceta, costoPlato: costoPlato, calcularTodo: calcularTodo, esVendible: esVendible,
     opcionesGuarnicion: opcionesGuarnicion, explotar: explotar, explotarPlato: explotarPlato, usosDeInsumo: usosDeInsumo,
-    impacto: impacto, violacionesDieta: violacionesDieta, dietaCompatible: dietaCompatible,
+    impacto: impacto, violacionesDieta: violacionesDieta, dietaCompatible: dietaCompatible, asegurarDietas: asegurarDietas,
     alternativasReceta: alternativasReceta, volumenSemanal: volumenSemanal, usoSemanalInsumos: usoSemanalInsumos,
     ahorrosPosibles: ahorrosPosibles, pesoEnCosto: pesoEnCosto, listaCompras: listaCompras, chequeos: chequeos,
     puntoEquilibrio: puntoEquilibrio, SEMANAS_MES: SEMANAS_MES, fechaMenos: fechaMenos,
@@ -2063,6 +2071,7 @@ window.CLOUD = {
     s.urgencias = s.urgencias || [];
     if (window.Engine) {
       window.Engine.asegurarProveedores(s); window.Engine.unificarTextos(s);   // proveedores desde los "lugar"; familias/categorías sin variantes de mayúsculas
+      window.Engine.asegurarDietas(s);   // pescados y mariscos: de "con carne/pescado" a pescetariano (una vez)
       window.Engine.asegurarCombos(s);   // combos y precio por línea (la primera vez, desde el antiguo precio de la Trilogía)
     }
     return s;
@@ -2282,7 +2291,7 @@ window.CLOUD = {
   const MARCAS = ['Super Cerdo', 'Super Pollo', 'Agrosuper', 'Ariztía', 'Don Pollo', 'PF', 'San Jorge', 'La Preferida', 'Colun', 'Soprole', 'Loncoleche', 'Surlat', 'Quillayes',
     'Nestlé', 'Carozzi', 'Lucchetti', 'Luchetti', 'Don Vittorio', 'Maggi', 'Knorr', 'Watts', 'Iansa', 'Chef', 'Miraflores', 'Tucapel', 'Banquete', 'Belmont', 'Natura',
     'Cuisine & Co', 'Great Value', 'Acuenta', 'Lider', 'Jumbo', 'Smart Price', 'Frutos del Maipo', 'Minuto Verde', 'Coca-Cola', 'Calo', 'Dos Álamos', "Hellmann's",
-    'Traverso', 'Marco Polo', 'Castaño', 'Fruna', 'Costa', 'McKay', 'Pomarola', 'Malloa', 'Wasil', 'Aconcagua', 'Doña Carne', 'Las Perdices', 'Sopraval', 'Cintazul', 'Bresler', 'Savory'];
+    'Traverso', 'Marco Polo', 'Castaño', 'Fruna', 'Costa', 'McKay', 'Pomarola', 'Malloa', 'Wasil', 'Aconcagua', 'Doña Carne', 'Las Perdices', 'Sopraval', 'Cintazul', 'Bresler', 'Savory', 'Van Camps', 'San José', 'Robinson Crusoe', 'Angelmó', 'Eden', 'Colorado'];
   // quita una frase (sin importar mayúsculas ni tildes) de un texto, palabra por palabra
   function quitarFrase(texto, frase) {
     const kn = norm(frase).split(' ').filter(Boolean);
@@ -2301,6 +2310,7 @@ window.CLOUD = {
     let m = marca || '';
     const candidatas = [marca, sitio].concat(marcasConocidas || [], MARCAS).filter(Boolean).sort(function (a, b) { return b.length - a.length; });
     candidatas.forEach(function (c) { const r = quitarFrase(t, c); if (r.hubo) { t = r.texto; if (!m && c !== sitio) m = c; } });
+    const sv = sacarVariedades(t); t = sv.texto;
     // el grado sí importa (arroz grado 1, lentejas grado 2): se protege antes de quitar números y tamaños
     t = t.replace(/\bgrado\s*(\d)\b/gi, function (x, d) { return 'GRADO§' + d; }).replace(/\bg([1-3])\b/gi, function (x, d) { return 'GRADO§' + d; })
       .replace(/\b(\d+)\s*mm\b/gi, function (x, d) { return 'MM§' + d; });   // calibre de legumbres (lentejas 6 mm)
@@ -2315,9 +2325,44 @@ window.CLOUD = {
     for (let k = 0; k < 3; k++) t = t.replace(/^(de|con|en|y|para)\s+/i, '').replace(/\s+(de|con|en|y|sin|para|x)$/i, '').trim();
     t = t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : '';
     t = t.replace(/grado§(\d)/gi, function (x, d) { return 'grado ' + d; }).replace(/mm§(\d+)/gi, function (x, d) { return d + ' mm'; });
-    return { nombre: t, marca: m ? tituloBonito(m) : '', extras: extras };
+    return { nombre: t, marca: m ? tituloBonito(m) : '', extras: extras, variedad: sv.variedades };
   }
-  const VENTA = ['premium', 'gourmet', 'selecto', 'selecta', 'seleccion', 'select', 'deluxe', 'gold', 'oro', 'exclusivo', 'exclusiva', 'nuevo', 'nueva', 'oferta', 'promo', 'especialidad', 'superior', 'tradicional', 'clasico', 'clasica', 'original'];
+  const VENTA = ['premium', 'gourmet', 'selecto', 'selecta', 'seleccion', 'select', 'deluxe', 'gold', 'oro', 'exclusivo', 'exclusiva', 'nuevo', 'nueva', 'oferta', 'promo', 'especialidad', 'superior', 'clasico', 'clasica', 'original'];
+
+  // variedad: distingue presentaciones de un mismo insumo; sale del nombre y va a su propio campo (el admin la valida)
+  const VARIEDADES = ['a la chilena', 'en aceite', 'en agua', 'en conserva', 'al natural', 'con piel', 'sin piel', 'sin hueso', 'con hueso', 'sin espinas',
+    'deshuesada', 'deshuesado', 'deshuesadas', 'deshuesados', 'congelada', 'congelado', 'congeladas', 'congelados', 'iqf', 'a granel', 'granel',
+    'fresca', 'fresco', 'frescas', 'frescos', 'porcionada', 'porcionado', 'porcionadas', 'porcionados', 'tradicional', 'en trozos', 'en cubos',
+    'picada', 'picado', 'laminada', 'laminado', 'trozada', 'trozado', 'apanado', 'apanada', 'marinado', 'marinada', 'cocido', 'cocida', 'precocido', 'precocida'];
+  function sacarVariedades(t) {
+    const out = [];
+    VARIEDADES.slice().sort(function (a, b) { return b.length - a.length; }).forEach(function (v) {
+      let r = quitarFrase(t, v);
+      while (r.hubo) { if (out.indexOf(v) < 0) out.push(v === 'iqf' ? 'IQF' : v === 'a granel' ? 'granel' : v); t = r.texto; r = quitarFrase(t, v); }
+    });
+    return { texto: t, variedades: out };
+  }
+  // etiquetas: Sin gluten, Proteico (alto en proteínas), Orgánico
+  function etiquetas(textos) {
+    const t = norm([].concat(textos).filter(Boolean).join(' '));
+    const out = [];
+    if (/\b(sin gluten|libre de gluten|gluten free|celiac)/.test(t)) out.push('Sin gluten');
+    if (/\b(proteico|proteica|alto en proteina|alta en proteina|high protein|protein|whey)\b/.test(t)) out.push('Proteico');
+    if (/\b(organico|organica|organic|bio)\b/.test(t)) out.push('Orgánico');
+    return out;
+  }
+  // dieta sugerida por el nombre: pescados y mariscos → pescetariano; carnes y aves → omnívoro; lácteos/huevo/miel → vegetariano
+  const PESCA = /\b(pescado|merluza|reineta|salmon|atun|jurel|sardina|anchoa|congrio|corvina|tilapia|trucha|bacalao|lenguado|marisco|mariscos|camaron|camarones|chorito|choritos|almeja|almejas|calamar|pulpo|ostion|ostiones|machas|surimi|jaiba|locos?)\b/;
+  const CARNE = /\b(carne|carnes|vacuno|res|cerdo|chancho|pollo|pavo|cordero|cabrito|chuleta|posta|plateada|osobuco|asiento|sobrecostilla|tapapecho|lomo|filete|costillar|costilla|trutro|tuto|pechuga|alitas?|pulpa|molida|longaniza|choricillo|chorizo|tocino|jamon|salame|vienesa|vienesas|hamburguesa|prieta|panceta|higado|guata|charqui|pernil|malaya|abastero|huachalomo|punta de ganso|lomo vetado)\b/;
+  const LACTEO = /\b(leche|queso|quesillo|mantequilla|crema|yogur|yoghurt|manjar|huevo|huevos|miel|ricotta|parmesano|mozzarella|suero)\b/;
+  function dietaSugerida(nombre) {
+    const t = norm(nombre);
+    if (/\b(leche de coco|leche de almendra|leche de avena|leche de soya|vegano|vegana|plant based)\b/.test(t)) return 'vegano';
+    if (PESCA.test(t)) return 'pescetariano';
+    if (CARNE.test(t)) return 'omni';
+    if (LACTEO.test(t)) return 'vegetariano';
+    return null;
+  }
   const LIQUIDOS = /\b(aceite|leche|crema|vinagre|jugo|nectar|bebida|agua|vino|salsa de soya|gaseosa|refresco|cerveza|caldo liquido)\b/;
 
   /* formato del envase: "5 L", "6 x 350 ml", "400GR", "Bolsa 10 und", "1 Kilo" → {g|ml|un: {qty, label}} */
@@ -2479,7 +2524,8 @@ window.CLOUD = {
     const marcasConocidas = Array.from(new Set((state.ofertas || []).map(function (o) { return o.marca; }).filter(function (m) { return m && m.length >= 3; })));
     const limpio = limpiarNombre(nombre, marca, sitio, marcasConocidas);
     return {
-      url: raw.url || '', host: raw.host || '', nombre: nombre, nombreLimpio: limpio.nombre || nombre, extras: limpio.extras || [], marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
+      url: raw.url || '', host: raw.host || '', nombre: nombre, tituloOriginal: String(ld.nombre || quitarSitio(og.title) || raw.h1 || quitarSitio(raw.titulo) || raw.nombre || '').replace(/\s+/g, ' ').trim(), nombreLimpio: limpio.nombre || nombre, extras: limpio.extras || [], variedad: limpio.variedad || [],
+      etiquetas: etiquetas([nombre, raw.h1, og.description, ld.descripcion]), dieta: dietaSugerida(nombre), marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
       formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
       insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
@@ -2501,7 +2547,7 @@ window.CLOUD = {
     return { v: 1, url: u.href.split('#')[0], host: u.hostname, nombre: tituloBonito(nombre), ld: [], og: {}, precios: [], textos: [], variantes: [], soloEnlace: true };
   }
 
-  const Captura = { extraer: extraer, marcador: marcador, interpretar: interpretar, desdeUrl: desdeUrl, limpiarNombre: limpiarNombre, envase: envase, formatos: formatos, precios: precios, numero: numero,
+  const Captura = { extraer: extraer, marcador: marcador, interpretar: interpretar, desdeUrl: desdeUrl, limpiarNombre: limpiarNombre, envase: envase, etiquetas: etiquetas, dietaSugerida: dietaSugerida, VARIEDADES: VARIEDADES, formatos: formatos, precios: precios, numero: numero,
     nombreSitio: nombreSitio, dominio: dominio, sugerirInsumos: sugerirInsumos, claveUrl: claveUrl, precioPorUnidad: precioPorUnidad, compraMinima: compraMinima };
   if (typeof module !== 'undefined' && module.exports) module.exports = Captura;
   else root.Captura = Captura;
@@ -2854,7 +2900,11 @@ window.CLOUD = {
     ['ins-unidad', 'Unidad en que se usa en las recetas: g (gramos), ml (mililitros) o un (unidades). Todas las cantidades de receta van en esta unidad.'],
     ['ins-rend', 'Parte utilizable tras pelar o limpiar, en %. 100 = sin merma; 90 = pierdes un 10%. No incluyas la merma de cocción.'],
     ['ins-fam', 'Agrupa insumos equivalentes (ej. ave, pescado-blanco) para sugerir sustitutos. Elige una de la lista o crea una con "+ Nueva familia…". Sin familia = sin sustitutos.'],
-    ['ins-dieta', 'Tipo de dieta del insumo. Evita que un plato vegano o vegetariano sugiera carnes.'],
+    ['ins-dieta', 'Dieta del insumo: vegano, vegetariano (lácteos/huevo), pescetariano (pescados y mariscos) u omnívoro (carnes y aves). Evita que un plato vegano o vegetariano sugiera lo que no corresponde.'],
+    ['ins-variedad', 'Presentación que distingue a este insumo de otros parecidos: granel, deshuesada, en aceite, congelado, a la chilena… Ayuda a decidir qué cotizaciones unir.'],
+    ['ins-etiquetas', 'Marcas especiales del insumo: Sin gluten, Proteico (alto en proteínas) u Orgánico. Haz clic para activar o quitar.'],
+    ['cap-variedad', 'Presentación del producto (granel, deshuesada, en aceite…). Viene sugerida desde la página; el gerente la confirma al validar.'],
+    ['cap-nota', 'Trae el nombre completo tal como aparece en la página, para que el gerente sepa exactamente qué producto es. Puedes agregar lo que quieras.'],
     ['ins-q', 'Busca por parte del nombre o de la categoría.'],
     ['ins-cat', 'Muestra solo los insumos de una categoría.'],
     ['o-prov-', 'Proveedor donde se compra esta oferta. Define si da factura y cómo llega la compra. Los proveedores se administran en la pestaña Proveedores.'],
@@ -3763,7 +3813,9 @@ window.CLOUD = {
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
   const CATS = ['Carnes de Vacuno', 'Aves y Cerdo', 'Pescados y Mariscos', 'Legumbres y Granos', 'Abarrotes y Condimentos', 'Verduras y Frutas (Cardonal)', 'Lácteos y Huevos', 'Bebestibles', 'Envases'];
   const UNIDADES = [['g', 'gramos (g)'], ['ml', 'mililitros (ml)'], ['un', 'unidades (un)']];
-  const DIETAS = [['vegano', 'Vegano'], ['vegetariano', 'Vegetariano'], ['omni', 'Con carne/pescado']];
+  const DIETAS = [['vegano', 'Vegano'], ['vegetariano', 'Vegetariano (lácteos, huevo)'], ['pescetariano', 'Pescetariano (pescados y mariscos)'], ['omni', 'Omnívoro (carnes y aves)']];
+  const ETIQUETAS = ['Sin gluten', 'Proteico', 'Orgánico'];
+  const VARIEDADES_BASE = ['tradicional', 'granel', 'a la chilena', 'en aceite', 'en agua', 'deshuesada', 'con piel', 'sin piel', 'congelado', 'fresco', 'IQF', 'porcionada'];
   const FUENTES = [['estimado', 'Estimado'], ['comprado', 'Comprado'], ['cotizacion', 'Cotización'], ['ODEPA', 'ODEPA']];
 
   // mapa insumo → platos que lo usan (por 1 porción)
@@ -3861,7 +3913,7 @@ window.CLOUD = {
         const c = E.costoInsumo(ctx, i.id), ofs = App.ofertasDe(i.id), u = uso.get(i.id) || [];
         const viejo = ofs.some(function (o) { return precioViejo(o, p); });
         return h('tr', { class: i.id === sel ? 'on' : '', onclick: function () { App.go('insumos', i.id); } },
-          h('td', null, h('div', { class: 'nm' }, i.nombre), h('small', null, i.categoria, i.propuesto ? ' ' : null, i.propuesto ? App.badge('🆕 por validar', 'warn') : null, c.missing ? ' ' : null, c.missing ? App.badge('sin precio', 'bad') : null,
+          h('td', null, h('div', { class: 'nm' }, i.nombre), h('small', null, i.categoria, i.variedad ? ' · ' + i.variedad : null, i.propuesto ? ' ' : null, i.propuesto ? App.badge('🆕 por validar', 'warn') : null, (i.etiquetas || []).map(function (t) { return [' ', App.badge(t, 'info')]; }), c.missing ? ' ' : null, c.missing ? App.badge('sin precio', 'bad') : null,
             viejo ? App.badge('precio viejo', 'warn') : null, c.modo === 'oportunidad' ? App.badge('🔥 oferta', 'good') : null, ofs.some(function (o) { return o.pendiente; }) ? App.badge('cotización nueva', 'info') : null, ofs.length > 1 ? App.badge(ofs.length + ' ofertas', 'info') : null)),
           h('td', { class: 'r' }, c.missing ? '—' : App.costoVisible(c.unit, i.unidad)),
           h('td', null, c.oferta ? lugarTxt(c.oferta) : (c.modo === 'promedio' ? 'promedio' : '—')),
@@ -3907,7 +3959,7 @@ window.CLOUD = {
       if (ya) { App.toast('Ya existe el insumo "' + ya.nombre + '": te llevé a él'); App.go('insumos', ya.id); return; }
       const id = Store.uid('INS-');
       Store.mutate(function (s) {
-        s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: 'vegano' });
+        s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: (window.Captura && window.Captura.dietaSugerida(nombre)) || 'vegano' });
         s.ofertas.push({ id: Store.uid('OF-'), insumoId: id, lugar: '', marca: '', formatoLabel: 'kg', formatoQty: 1000, precio: 0, rendimiento: null,
           fecha: App.hoy(), fuente: 'estimado', disponible: true, preferida: true, nota: '' });
       });
@@ -3962,6 +4014,7 @@ window.CLOUD = {
         (ins.enlaces || []).length ? h('small', null, 'Visto en: ', ins.enlaces.map(function (e) { return h('a', { href: e.url, target: '_blank', rel: 'noopener' }, (e.host || 'página') + ' ↗ '); })) : null,
         App.esStaff() ? h('div', null, App.btn('✓ Validar producto', function () {
           if (ins.categoria === 'Por clasificar') { App.toast('Elige primero su categoría'); return; }
+          if (!ins.dieta) { App.toast('Elige primero su dieta'); return; }
           upd(function (x) { delete x.propuesto; x.validadoPor = (App.nube.perfil && App.nube.perfil.nombre) || 'admin'; });
           App.toast('Producto validado: ya puedes aprobar sus cotizaciones en Cotizaciones');
         }, 'small primary'), ' ', unirAExistente(ins)) : null) : null,
@@ -3980,7 +4033,14 @@ window.CLOUD = {
           ph: 'Ej.: ave, pescado-blanco', onSet: function (v) { upd(function (x) { x.familia = v || null; }); } })),
         h('label', null, 'Dura guardado (días)', App.numInput({ fk: 'ins-dura', value: ins.duracionDias, ph: 'ej. 365',
           onChange: function (n) { if (n >= 0) upd(function (x) { x.duracionDias = n || null; }, 'du' + ins.id); }, onEmpty: function () { upd(function (x) { x.duracionDias = null; }); } })),
-        h('label', null, 'Dieta', App.select({ fk: 'ins-dieta', value: ins.dieta || 'vegano', options: DIETAS, onChange: function (v) { upd(function (x) { x.dieta = v; }); } }))),
+        h('label', null, 'Dieta', App.select({ fk: 'ins-dieta', value: ins.dieta || '', options: (ins.dieta ? [] : [['', '— elegir —']]).concat(DIETAS), onChange: function (v) { upd(function (x) { x.dieta = v || null; }); } })),
+        h('label', null, 'Variedad (opcional)', App.textInput({ fk: 'ins-variedad', value: ins.variedad || '', list: 'dl-variedades', ph: 'ej. granel, deshuesada, en aceite',
+          onChange: function (v) { upd(function (x) { x.variedad = v.trim() || undefined; }, 'va' + ins.id); } }),
+          h('datalist', { id: 'dl-variedades' }, unicos(s.insumos.map(function (i) { return i.variedad; }).concat(VARIEDADES_BASE)).map(function (v) { return h('option', { value: v }); }))),
+        h('div', { class: 'block' }, h('small', { class: 'mut' }, 'Etiquetas'), h('div', { class: 'chips', 'data-fk': 'ins-etiquetas' }, ETIQUETAS.map(function (t) {
+          const on = (ins.etiquetas || []).indexOf(t) >= 0;
+          return App.chip((on ? '✓ ' : '') + t, on, function () { upd(function (x) { const e = (x.etiquetas || []).filter(function (y) { return y !== t; }); if (!on) e.push(t); x.etiquetas = e.length ? e : undefined; }); });
+        })))),
       h('div', { class: 'help' }, 'Cantidades en recetas = peso utilizable crudo/seco tal como se compra. El rendimiento solo descuenta limpieza o pelado, no la cocción.'));
 
     // ofertas
@@ -4263,7 +4323,7 @@ window.CLOUD = {
     App.confirm('"' + nombre + '" no existe en Insumos. ¿Crearlo ahora (podrás ponerle precio en Insumos y compras)?', function () {
       const id = Store.uid('INS-');
       Store.mutate(function (s) {
-        s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: 'vegano' });
+        s.insumos.push({ id: id, nombre: nombre, categoria: 'Abarrotes y Condimentos', unidad: 'g', rendimiento: 1, familia: null, dieta: (window.Captura && window.Captura.dietaSugerida(nombre)) || 'vegano' });
         s.ofertas.push({ id: Store.uid('OF-'), insumoId: id, lugar: '', marca: '', formatoLabel: 'kg', formatoQty: 1000, precio: 0, rendimiento: null, fecha: App.hoy(), fuente: 'estimado', disponible: true, preferida: true, nota: '' });
       });
       onCreated(id);
@@ -5498,7 +5558,8 @@ window.CLOUD = {
       // sin un insumo claro queda como producto nuevo (con nombre limpio): enviar nunca se bloquea; el admin lo une a uno existente si corresponde
       insumoId: r.insumo ? r.insumo.id : NUEVO, nombreNuevo: r.nombreLimpio || r.nombre, unidadNueva: r.unidadNueva,
       precio: r.precio, precioNormal: r.precioNormal, oferta: !!r.precioNormal, hasta: '',
-      promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: (r.extras || []).join(', '), fq: null, fl: ''
+      promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: r.tituloOriginal || r.nombre || '', fq: null, fl: '',
+      variedad: (r.variedad || []).join(', '), etiquetas: (r.etiquetas || []).slice(), dieta: r.dieta
     };
     elegirFormato(U);
   }
@@ -5540,14 +5601,16 @@ window.CLOUD = {
       if (nuevo) {
         insumoId = Store.uid('INS-');
         st.insumos.push({ id: insumoId, nombre: F.nombreNuevo.trim(), categoria: 'Por clasificar', unidad: unidad, rendimiento: 1, familia: null, dieta: null,
-          propuesto: true, autor: u.nombre, autorId: u.id, propuestoEl: hoy });
+          propuesto: true, autor: u.nombre, autorId: u.id, propuestoEl: hoy, variedad: (F.variedad || '').trim() || undefined,
+          etiquetas: F.etiquetas && F.etiquetas.length ? F.etiquetas.slice() : undefined });
+        if (F.dieta) st.insumos[st.insumos.length - 1].dieta = F.dieta;
       }
       const antes = (st.proveedores || []).length;
       const prov = staff ? App.vincularProveedor(st, F.lugar) : null;   // quien no es staff no edita proveedores: se vincula al revisar
       if (prov && (st.proveedores || []).length > antes) prov.porCompletar = true;
       const base = { insumoId: insumoId, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(),
         formatoLabel: F.fl || unidad, formatoQty: sinFormato ? null : F.fq, rendimiento: null, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
-        pendiente: !staff || sinPrecio || sinFormato, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
+        pendiente: !staff || sinPrecio || sinFormato, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, tituloWeb: r.tituloOriginal || r.nombre || undefined, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
       const promo = F.promo && r.promoCantidad ? { minimo: r.promoCantidad.minimo, precio: r.promoCantidad.precio, desde: hoy, hasta: masDias(7), hastaPorConfirmar: true } : undefined;
       const lista = [];
       // oferta con precio normal visible: se guardan las dos (la normal es el precio de reposición)
@@ -5639,6 +5702,11 @@ window.CLOUD = {
         F.insumoId === NUEVO ? h('div', { class: 'form-grid' },
           h('label', null, 'Nombre del producto nuevo', App.textInput({ fk: 'cap-nuevo', value: F.nombreNuevo, ph: 'ej. Pasta de choclo', onChange: function (v) { F.nombreNuevo = v; } })),
           h('label', null, 'Se mide en', App.select({ fk: 'cap-unidad', value: F.unidadNueva, options: UNIDADES, onChange: function (v) { F.unidadNueva = v; elegirFormato(U); App.render(); } })),
+          h('label', null, 'Variedad (opcional)', App.textInput({ fk: 'cap-variedad', value: F.variedad, ph: 'ej. granel, deshuesada, en aceite', onChange: function (v) { F.variedad = v; } })),
+          h('div', { class: 'block' }, h('small', { class: 'mut' }, 'Etiquetas'), h('div', { class: 'chips' }, ['Sin gluten', 'Proteico', 'Orgánico'].map(function (t) {
+            const on = F.etiquetas.indexOf(t) >= 0;
+            return App.chip((on ? '✓ ' : '') + t, on, function () { F.etiquetas = on ? F.etiquetas.filter(function (x) { return x !== t; }) : F.etiquetas.concat([t]); App.render(); });
+          }))),
           h('small', { class: 'help' }, 'Ya va sugerido: el gerente completa categoría y demás antes de usarlo en recetas.')) : null,
 
         h('div', { class: 'form-grid' },
@@ -5674,7 +5742,7 @@ window.CLOUD = {
             ' 🏷️ Promo: llevando ' + r.promoCantidad.minimo + ', ' + App.clp(r.promoCantidad.precio) + ' c/u') : null,
           r.compraMinima ? h('small', { class: 'mut' }, 'La página exige compra mínima de ' + r.compraMinima + ' unidades (queda anotado).') : null),
 
-        h('label', { class: 'block' }, 'Nota (opcional)', App.textInput({ fk: 'cap-nota', value: F.nota, ph: 'ej. buena calidad, solo despacho los martes…', onChange: function (v) { F.nota = v; } })),
+        h('label', { class: 'block' }, 'Nota (opcional) · trae el nombre tal como sale en la página', App.textInput({ fk: 'cap-nota', value: F.nota, ph: 'ej. buena calidad, solo despacho los martes…', onChange: function (v) { F.nota = v; } })),
         h('div', { class: 'row gap wrap' },
           App.btn(App.esStaff() ? 'Guardar cotización' : 'Enviar cotización', function () { enviar(U); }, 'primary grande'),
           !(F.precio > 0) || !(F.fq > 0) ? h('small', { class: 'mut' }, 'Puedes enviarla igual: lo que falte lo completa el gerente.') : null,
