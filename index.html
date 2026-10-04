@@ -237,9 +237,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-03T23:09:47Z">
+<meta name="build" content="2026-10-04T00:57:31Z">
 <script>
-window.BUILD = "2026-10-03T23:09:47Z";
+window.BUILD = "2026-10-04T00:57:31Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2264,6 +2264,46 @@ window.CLOUD = {
     return tituloBonito(dom.split('.')[0].replace(/-/g, ' '));
   }
 
+  /* envase, marca y nombre limpio para un insumo nuevo */
+  const ENVASES = ['bidon', 'bolsa', 'botella', 'caja', 'pack', 'sobre', 'malla', 'bandeja', 'frasco', 'lata', 'tarro', 'saco', 'paquete', 'display', 'pote', 'doypack', 'sachet', 'barra', 'atado', 'granel', 'envase', 'tetra', 'tetrapak', 'bidones', 'bolsas', 'botellas', 'cajas', 'latas'];
+  function envase(textos) {
+    for (const t of [].concat(textos).filter(Boolean)) {
+      const w = norm(t).split(' ').find(function (x) { return ENVASES.indexOf(x) >= 0; });
+      if (w) return w === 'bidon' ? 'bidón' : w === 'tetrapak' ? 'tetra' : w.replace(/(es|s)$/, '').replace(/^bid$/, 'bidón');
+    }
+    return '';
+  }
+  // marcas frecuentes en Chile (además de las que ya están en las cotizaciones guardadas)
+  const MARCAS = ['Super Cerdo', 'Super Pollo', 'Agrosuper', 'Ariztía', 'Don Pollo', 'PF', 'San Jorge', 'La Preferida', 'Colun', 'Soprole', 'Loncoleche', 'Surlat', 'Quillayes',
+    'Nestlé', 'Carozzi', 'Lucchetti', 'Luchetti', 'Don Vittorio', 'Maggi', 'Knorr', 'Watts', 'Iansa', 'Chef', 'Miraflores', 'Tucapel', 'Banquete', 'Belmont', 'Natura',
+    'Cuisine & Co', 'Great Value', 'Acuenta', 'Lider', 'Jumbo', 'Smart Price', 'Frutos del Maipo', 'Minuto Verde', 'Coca-Cola', 'Calo', 'Dos Álamos', "Hellmann's",
+    'Traverso', 'Marco Polo', 'Castaño', 'Fruna', 'Costa', 'McKay', 'Pomarola', 'Malloa', 'Wasil', 'Aconcagua', 'Doña Carne', 'Las Perdices', 'Sopraval', 'Cintazul', 'Bresler', 'Savory'];
+  // quita una frase (sin importar mayúsculas ni tildes) de un texto, palabra por palabra
+  function quitarFrase(texto, frase) {
+    const kn = norm(frase).split(' ').filter(Boolean);
+    if (!kn.length || kn.join('').length < 2) return { texto: texto, hubo: false };
+    const pal = String(texto).split(/\s+/).filter(Boolean);
+    for (let i = 0; i < pal.length; i++) {
+      for (let n = 1; n <= kn.length && i + n <= pal.length; n++) {   // "Coca-Cola" es una palabra con guion
+        if (pal.slice(i, i + n).map(norm).join(' ') === kn.join(' ')) { pal.splice(i, n); return { texto: pal.join(' '), hubo: true }; }
+      }
+    }
+    return { texto: texto, hubo: false };
+  }
+  // "Pulpa de Pierna Super Cerdo sin hueso 1 kg" → {nombre: 'Pulpa de pierna sin hueso', marca: 'Super Cerdo'}
+  function limpiarNombre(nombre, marca, sitio, marcasConocidas) {
+    let t = String(nombre || '').replace(/\([^)]*\)/g, ' ').replace(/[,;|]+/g, ' ');
+    let m = marca || '';
+    const candidatas = [marca, sitio].concat(marcasConocidas || [], MARCAS).filter(Boolean).sort(function (a, b) { return b.length - a.length; });
+    candidatas.forEach(function (c) { const r = quitarFrase(t, c); if (r.hubo) { t = r.texto; if (!m && c !== sitio) m = c; } });
+    t = t.replace(/(?:\d+\s*x\s*)?\d+(?:[.,]\d+)?\s*(kgs?|kilos?|k|grs?|gramos?|g|lts?|litros?|l|ml|cc|unidades?|unid|und|uds?|un|u)\b\.?/gi, ' ');
+    t = t.split(/\s+/).filter(function (w) { const n = norm(w); return n && ENVASES.indexOf(n) < 0 && n !== 'x' && !/^\d+$/.test(n); }).join(' ');
+    for (let k = 0; k < 3; k++) t = t.replace(/^(de|con|en|y|para)\s+/i, '').replace(/\s+(de|con|en|y|sin|para|x)$/i, '').trim();
+    t = t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : '';
+    return { nombre: t, marca: m ? tituloBonito(m) : '' };
+  }
+  const LIQUIDOS = /\b(aceite|leche|crema|vinagre|jugo|nectar|bebida|agua|vino|salsa de soya|gaseosa|refresco|cerveza|caldo liquido)\b/;
+
   /* formato del envase: "5 L", "6 x 350 ml", "400GR", "Bolsa 10 und", "1 Kilo" → {g|ml|un: {qty, label}} */
   const UNID = [
     [/^(kg|kgs|kilo|kilos|k)$/, 'g', 1000], [/^(g|gr|grs|gramos?)$/, 'g', 1], [/^(l|lt|lts|litros?)$/, 'ml', 1000], [/^(ml|cc)$/, 'ml', 1],
@@ -2409,12 +2449,21 @@ window.CLOUD = {
     }
     const prov = proveedorDe(state, raw.host, sitio);
     const conocido = insumoConocido(state, raw.url, ld.sku, raw.host);
-    const sug = sugerirInsumos(nombre, (state.insumos || []).filter(function (i) { return i.activo !== false; }), [marca, sitio]);
+    const sug = sugerirInsumos(nombre, (state.insumos || []).filter(function (i) { return i.activo !== false && !i.propuesto; }), [marca, sitio].concat(MARCAS));
     const mejor = sug[0], segundo = sug[1];
     const elegido = conocido || (mejor && mejor.puntaje >= 0.8 && mejor.cobProd >= 0.5 && (!segundo || segundo.puntaje < mejor.puntaje) ? mejor.insumo : null);
-    const unidadNueva = fmts.g ? 'g' : fmts.ml ? 'ml' : 'un';
+    // unidad de un producto nuevo: la del tamaño escrito en el nombre (5 L → ml); líquidos conocidos en ml
+    const enNombre = formatos([nombre, raw.nombre]);
+    const liquido = LIQUIDOS.test(norm(nombre));
+    const unidadNueva = liquido && (fmts.ml || !fmts.g) ? 'ml' : enNombre.g ? 'g' : enNombre.ml ? 'ml' : enNombre.un && !fmts.g && !fmts.ml ? 'un' : fmts.g ? 'g' : fmts.ml ? 'ml' : liquido ? 'ml' : fmts.un ? 'un' : 'g';
+    // envase en la etiqueta del formato ("bidón 5 L")
+    const env = envase([nombre, raw.h1, og.description]);
+    if (env) Object.keys(fmts).forEach(function (k) { if (norm(fmts[k].label).indexOf(norm(env)) < 0) fmts[k].label = env + ' ' + fmts[k].label; });
+    // nombre sugerido para un producto nuevo: sin marca, tienda, envase ni tamaño (la marca pasa a su campo)
+    const marcasConocidas = Array.from(new Set((state.ofertas || []).map(function (o) { return o.marca; }).filter(function (m) { return m && m.length >= 3; })));
+    const limpio = limpiarNombre(nombre, marca, sitio, marcasConocidas);
     return {
-      url: raw.url || '', host: raw.host || '', nombre: nombre, marca: marca, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
+      url: raw.url || '', host: raw.host || '', nombre: nombre, nombreLimpio: limpio.nombre || nombre, marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
       formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
       insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
@@ -2436,7 +2485,7 @@ window.CLOUD = {
     return { v: 1, url: u.href.split('#')[0], host: u.hostname, nombre: tituloBonito(nombre), ld: [], og: {}, precios: [], textos: [], variantes: [], soloEnlace: true };
   }
 
-  const Captura = { extraer: extraer, marcador: marcador, interpretar: interpretar, desdeUrl: desdeUrl, formatos: formatos, precios: precios, numero: numero,
+  const Captura = { extraer: extraer, marcador: marcador, interpretar: interpretar, desdeUrl: desdeUrl, limpiarNombre: limpiarNombre, envase: envase, formatos: formatos, precios: precios, numero: numero,
     nombreSitio: nombreSitio, dominio: dominio, sugerirInsumos: sugerirInsumos, claveUrl: claveUrl, precioPorUnidad: precioPorUnidad, compraMinima: compraMinima };
   if (typeof module !== 'undefined' && module.exports) module.exports = Captura;
   else root.Captura = Captura;
@@ -3850,6 +3899,35 @@ window.CLOUD = {
     }, 'Ej.: Pimentón amarillo', { sugerencias: nombres, usar: function (v, cerrar) { cerrar(); App.go('insumos', App.insumoPorNombre(v).id); App.toast('Ya existía "' + v + '": te llevé a ese insumo'); } });
   }
 
+  // producto propuesto que en realidad ya existía: sus cotizaciones y enlaces pasan al insumo elegido y el propuesto se elimina
+  function unirAExistente(ins) {
+    const s = Store.get(), otros = s.insumos.filter(function (i) { return i.id !== ins.id && !i.propuesto; });
+    const sug = window.Captura ? window.Captura.sugerirInsumos(ins.nombre, otros).slice(0, 5).map(function (x) { return x.insumo; }) : [];
+    const ids = new Set(sug.map(function (i) { return i.id; }));
+    const sel = h('select', { 'data-fk': 'ins-unir', onchange: function (ev) {
+      const destino = s.insumos.find(function (i) { return i.id === ev.target.value; });
+      ev.target.value = '';
+      if (!destino) return;
+      const n = App.ofertasDe(ins.id).length;
+      App.confirm('¿"' + ins.nombre + '" es lo mismo que "' + destino.nombre + '"? Sus ' + n + ' cotización(es) pasan a "' + destino.nombre + '" (revisa que el formato use ' + destino.unidad + ') y el producto nuevo se elimina.', function () {
+        Store.mutate(function (st) {
+          st.ofertas.forEach(function (o) { if (o.insumoId === ins.id) o.insumoId = destino.id; });
+          const d = st.insumos.find(function (i) { return i.id === destino.id; });
+          const viejo = st.insumos.find(function (i) { return i.id === ins.id; });
+          if (viejo && (viejo.enlaces || []).length) d.enlaces = (d.enlaces || []).concat(viejo.enlaces).slice(-12);
+          st.insumos = st.insumos.filter(function (i) { return i.id !== ins.id; });
+        });
+        App.go('insumos', destino.id);
+        App.toast('Unido a "' + destino.nombre + '"');
+      }, 'Unir');
+    } },
+      h('option', { value: '' }, 'Es lo mismo que…'),
+      sug.length ? h('optgroup', { label: 'Parecidos' }, sug.map(function (i) { return h('option', { value: i.id }, i.nombre); })) : null,
+      h('optgroup', { label: 'Todos' }, otros.filter(function (i) { return !ids.has(i.id); }).sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); })
+        .map(function (i) { return h('option', { value: i.id }, i.nombre); })));
+    return sel;
+  }
+
   function detalle(ins, ctx) {
     const s = Store.get(), esc = App.escenario(), p = ctx.p;
     const ofs = App.ofertasDe(ins.id);
@@ -3870,7 +3948,7 @@ window.CLOUD = {
           if (ins.categoria === 'Por clasificar') { App.toast('Elige primero su categoría'); return; }
           upd(function (x) { delete x.propuesto; x.validadoPor = (App.nube.perfil && App.nube.perfil.nombre) || 'admin'; });
           App.toast('Producto validado: ya puedes aprobar sus cotizaciones en Cotizaciones');
-        }, 'small primary')) : null) : null,
+        }, 'small primary'), ' ', unirAExistente(ins)) : null) : null,
       h('div', { class: 'form-grid' },
         h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); } }),
           (function () {
@@ -5245,14 +5323,22 @@ window.CLOUD = {
       o.fuente === 'web' && o.url ? h('a', { href: o.url, target: '_blank', rel: 'noopener', class: 'badge info' }, '🌐 desde web ↗') : null,
       ins && ins.propuesto ? App.badge('🆕 producto nuevo', 'warn') : null,
       provNuevo && o.lugar ? App.badge('🏪 proveedor nuevo', 'warn') : null,
-      o.hastaPorConfirmar ? App.badge('📅 fecha por confirmar', 'warn') : null);
+      o.hastaPorConfirmar ? App.badge('📅 fecha por confirmar', 'warn') : null,
+      o.precioPorConfirmar ? App.badge('💲 precio por confirmar', 'warn') : null,
+      o.formatoPorConfirmar ? App.badge('📦 formato por confirmar', 'warn') : null);
   }
 
   function bandeja() {
     const s = Store.get(), ctx = App.ctx();
     const pend = s.ofertas.filter(function (o) { return o.pendiente; }).sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
     const uso = E.usoSemanalInsumos(ctx).uso;
+    // una cotización sin precio o sin formato no se puede aprobar: primero se completa en la fila
+    const incompleta = function (o) {
+      if (o.precioPorConfirmar || o.formatoPorConfirmar) { App.toast('Primero completa ' + (o.precioPorConfirmar ? 'el precio' : 'el formato') + ' en la fila'); return true; }
+      return false;
+    };
     const usar = function (o) {
+      if (incompleta(o)) return;
       Store.mutate(function (st) {
         st.ofertas.forEach(function (x) { if (x.insumoId === o.insumoId) x.preferida = (x.id === o.id); });
         const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.revisadoPor = yo().nombre;
@@ -5261,11 +5347,13 @@ window.CLOUD = {
       App.toast('Ahora se usa la cotización de ' + (o.lugar || 'ese lugar'));
     };
     const alternativa = function (o) {
+      if (incompleta(o)) return;
       Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = false; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
       App.toast('Guardada como alternativa');
     };
     // oferta temporal: se usa en los costos hasta su fecha de término y luego vuelve sola al precio normal
     const usarMientrasDure = function (o) {
+      if (incompleta(o)) return;
       if (o.hastaPorConfirmar) { App.toast('Primero confirma hasta cuándo dura la oferta (fecha en la fila)'); return; }
       Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = true; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
       App.toast('Se usará hasta el ' + App.fechaCorta(o.temporal.hasta) + '; después los costos vuelven solos al precio normal');
@@ -5279,16 +5367,22 @@ window.CLOUD = {
         const ins = s.insumos.find(function (i) { return i.id === o.insumoId; }) || { nombre: '?', unidad: 'g' };
         const fijarHasta = function (v) { Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); if (v && y.temporal) { y.temporal.hasta = v; delete y.hastaPorConfirmar; } }); };
         const actual = E.costoInsumo(ctx, o.insumoId);
-        const nuevo = E.costoNetoOferta(ctx, o);
-        const dif = actual.missing ? null : (nuevo - actual.unit) / actual.unit * 100;
-        const mes = actual.missing ? null : (nuevo - actual.unit) * (uso.get(o.insumoId) || 0) * 4.33;
+        const completar = function (fn) { Store.mutate(function (st) { fn(st.ofertas.find(function (x) { return x.id === o.id; })); }); };
+        const nuevo = E.costoNetoOferta(ctx, o), sinDatos = o.precioPorConfirmar || o.formatoPorConfirmar;
+        const dif = actual.missing || sinDatos ? null : (nuevo - actual.unit) / actual.unit * 100;
+        const mes = actual.missing || sinDatos ? null : (nuevo - actual.unit) * (uso.get(o.insumoId) || 0) * 4.33;
         return h('tr', null,
           h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(o.insumoId) }, ins.nombre), h('div', null, h('small', null, (App.usoMap().get(o.insumoId) || []).length + ' platos'))),
           h('td', null, badgesWeb(o, ins, s), o.temporal ? h('div', null, App.badgeTemporal(o)) : null,
             o.hastaPorConfirmar ? h('div', { class: 'row gap' }, h('small', { class: 'mut' }, 'dura hasta'), h('input', { type: 'date', min: App.hoy(), 'data-fk': 'hasta-' + o.id, onchange: function (ev) { fijarHasta(ev.target.value); } })) : null,
             App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
-          h('td', null, App.clp(o.precio) + ' / ' + o.formatoLabel, h('div', null, h('small', null, App.costoVisible(nuevo, ins.unidad) + ' neto'))),
-          h('td', { class: 'r ' + (dif == null ? '' : dif < 0 ? 'good-t' : 'bad-t') }, dif == null ? 'sin precio actual' : (dif > 0 ? '+' : '') + App.num(dif, 0) + '%',
+          h('td', null, o.precioPorConfirmar || o.formatoPorConfirmar ? h('div', { class: 'stack' },
+              o.precioPorConfirmar ? h('label', { class: 'row gap' }, h('small', { class: 'mut' }, 'precio $'), App.numInput({ fk: 'pc-p-' + o.id, cls: 'w80', ph: 'precio',
+                onBlur: function (ev) { const n = App.parseNum(ev.target.value); if (n > 0) completar(function (y) { y.precio = n; delete y.precioPorConfirmar; }); } })) : h('span', null, App.clp(o.precio)),
+              o.formatoPorConfirmar ? h('label', { class: 'row gap' }, h('small', { class: 'mut' }, 'trae'), App.numInput({ fk: 'pc-f-' + o.id, cls: 'w70', ph: ins.unidad,
+                onBlur: function (ev) { const n = App.parseNum(ev.target.value); if (n > 0) completar(function (y) { y.formatoQty = n; if (!y.formatoLabel || y.formatoLabel === ins.unidad) y.formatoLabel = App.cantidad(n, ins.unidad); delete y.formatoPorConfirmar; }); } }), h('small', null, ins.unidad)) : h('small', null, o.formatoLabel))
+            : [App.clp(o.precio) + ' / ' + o.formatoLabel, h('div', null, h('small', null, App.costoVisible(nuevo, ins.unidad) + ' neto'))]),
+          h('td', { class: 'r ' + (dif == null ? '' : dif < 0 ? 'good-t' : 'bad-t') }, sinDatos ? '—' : dif == null ? 'sin precio actual' : (dif > 0 ? '+' : '') + App.num(dif, 0) + '%',
             actual.oferta ? h('div', null, h('small', { class: 'mut' }, 'hoy ' + App.costoVisible(actual.unit, ins.unidad))) : null),
           h('td', { class: 'r ' + (mes == null ? '' : mes < 0 ? 'good-t' : 'bad-t') }, mes == null ? '—' : App.sg(mes)),
           h('td', { class: 'nowrap' }, ins.propuesto ? App.btn('Completar producto', function () { App.go('insumos', ins.id); }, 'small primary', 'Es un producto nuevo: revisa su categoría, unidad y rendimiento y valídalo antes de usar esta cotización')
@@ -5374,7 +5468,8 @@ window.CLOUD = {
     const s = Store.get(), r = C.interpretar(U.raw, s);
     U.r = r;
     U.F = {
-      insumoId: r.insumo ? r.insumo.id : '', nombreNuevo: r.nombre, unidadNueva: r.unidadNueva,
+      // sin un insumo claro queda como producto nuevo (con nombre limpio): enviar nunca se bloquea; el admin lo une a uno existente si corresponde
+      insumoId: r.insumo ? r.insumo.id : NUEVO, nombreNuevo: r.nombreLimpio || r.nombre, unidadNueva: r.unidadNueva,
       precio: r.precio, precioNormal: r.precioNormal, oferta: !!r.precioNormal, hasta: '',
       promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: '', fq: null, fl: ''
     };
@@ -5399,18 +5494,18 @@ window.CLOUD = {
 
   function enviar(U) {
     const F = U.F, r = U.r, staff = App.esStaff(), u = yo(), hoy = App.hoy();
-    const nuevo = F.insumoId === NUEVO;
-    if (!F.insumoId) { App.toast('Elige qué insumo es, o marca "Es un producto nuevo"'); return; }
-    if (nuevo && !(F.nombreNuevo || '').trim()) { App.toast('Escribe el nombre del producto nuevo'); return; }
-    if (nuevo) {
+    // nada bloquea el envío: lo que falte queda "por confirmar" y lo completa admin/gerente al revisar
+    if (!F.insumoId) F.insumoId = NUEVO;
+    if (F.insumoId === NUEVO) {
+      if (!(F.nombreNuevo || '').trim()) F.nombreNuevo = r.nombreLimpio || r.nombre || 'Producto sin nombre';
       const ya = App.insumoPorNombre(F.nombreNuevo);
-      if (ya) { App.toast('Ya existe "' + ya.nombre + '": lo dejé elegido'); F.insumoId = ya.id; elegirFormato(U); App.render(); return; }
+      if (ya) F.insumoId = ya.id;   // ya existía con ese nombre: se usa ese
     }
-    if (!(F.precio > 0)) { App.toast('Escribe el precio que se paga'); return; }
-    if (!(F.fq > 0)) { App.toast('Indica cuánto trae el envase (formato)'); return; }
-    if (!(F.lugar || '').trim()) { App.toast('Indica la tienda o proveedor'); return; }
-    if (F.oferta && F.precioNormal != null && !(F.precioNormal > F.precio)) { App.toast('El precio normal debe ser mayor que el de oferta'); return; }
+    const nuevo = F.insumoId === NUEVO;
+    if (!(F.lugar || '').trim()) F.lugar = r.sitio || 'Sin indicar';
     const unidad = unidadElegida(U);
+    const sinPrecio = !(F.precio > 0), sinFormato = !(F.fq > 0);
+    const conNormal = F.oferta && F.precioNormal > F.precio;
     const notas = [r.compraMinima ? 'Compra mínima ' + r.compraMinima + ' un' : '', (F.nota || '').trim()].filter(Boolean).join(' · ');
     const hasta = F.hasta || masDias(7);
     let insumoId = F.insumoId, ids = [];
@@ -5424,18 +5519,19 @@ window.CLOUD = {
       const prov = staff ? App.vincularProveedor(st, F.lugar) : null;   // quien no es staff no edita proveedores: se vincula al revisar
       if (prov && (st.proveedores || []).length > antes) prov.porCompletar = true;
       const base = { insumoId: insumoId, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(),
-        formatoLabel: F.fl || unidad, formatoQty: F.fq, rendimiento: null, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
-        pendiente: !staff, autor: u.nombre, autorId: u.id, nota: notas, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
+        formatoLabel: F.fl || unidad, formatoQty: sinFormato ? null : F.fq, rendimiento: null, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
+        pendiente: !staff || sinPrecio || sinFormato, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
       const promo = F.promo && r.promoCantidad ? { minimo: r.promoCantidad.minimo, precio: r.promoCantidad.precio, desde: hoy, hasta: masDias(7), hastaPorConfirmar: true } : undefined;
       const lista = [];
       // oferta con precio normal visible: se guardan las dos (la normal es el precio de reposición)
-      if (F.oferta && F.precioNormal > F.precio) lista.push(Object.assign({}, base, { precio: F.precioNormal, promoCantidad: promo }));
-      lista.push(Object.assign({}, base, { precio: F.precio, promoCantidad: F.oferta ? undefined : promo,
+      if (conNormal) lista.push(Object.assign({}, base, { precio: F.precioNormal, promoCantidad: promo }));
+      lista.push(Object.assign({}, base, { precio: sinPrecio ? null : F.precio, promoCantidad: F.oferta ? undefined : promo,
         temporal: F.oferta ? { hasta: hasta } : undefined, hastaPorConfirmar: F.oferta && !F.hasta ? true : undefined }));
       lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); if (staff) App.aprenderCotizacion(st, o); });
     });
     olvidar();
-    App.ui.cap = { enviado: { n: ids.length, nombre: nuevo ? F.nombreNuevo.trim() : (App.insumo(insumoId) || {}).nombre, nuevo: nuevo, staff: staff } };
+    App.ui.cap = { enviado: { n: ids.length, nombre: nuevo ? F.nombreNuevo.trim() : (App.insumo(insumoId) || {}).nombre, nuevo: nuevo, staff: staff && !sinPrecio && !sinFormato,
+      faltan: [sinPrecio ? 'el precio' : '', sinFormato ? 'el formato' : ''].filter(Boolean) } };
     App.render();
   }
 
@@ -5476,6 +5572,7 @@ window.CLOUD = {
     return App.card('✓ Cotización enviada', h('div', { class: 'stack' },
       h('p', null, e.n === 2 ? 'Se guardaron dos precios de ' : 'Se guardó el precio de ', h('b', null, e.nombre || 'el producto'),
         e.n === 2 ? ': la oferta 🔥 y el precio normal.' : '.'),
+      e.faltan && e.faltan.length ? h('p', { class: 'help' }, 'Faltó ' + e.faltan.join(' y ') + ': queda por confirmar en la bandeja de Cotizaciones.') : null,
       h('p', { class: 'help' }, e.staff ? 'Quedó como alternativa: para usarla en los costos márcala en Cotizaciones o en Insumos.'
         : 'El gerente la revisa y decide si se usa.' + (e.nuevo ? ' Como es un producto nuevo, también completará sus datos.' : '')),
       h('div', { class: 'row gap wrap' },
@@ -5510,11 +5607,12 @@ window.CLOUD = {
 
         h('label', { class: 'block' }, 'Insumo', selIns,
           U.r.recordado && ins ? h('small', { class: 'good-t' }, '✓ Ya se había cotizado este producto como "' + ins.nombre + '"') : null,
-          !F.insumoId && r.sugerencias.length ? h('small', { class: 'mut' }, 'Los más parecidos aparecen primero.') : null),
+          F.insumoId === NUEVO && r.sugerencias.length ? h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, '¿Es alguno de estos?'),
+            h('div', { class: 'chips' }, r.sugerencias.slice(0, 4).map(function (i) { return App.chip(i.nombre, false, function () { F.insumoId = i.id; elegirFormato(U); App.render(); }); }))) : null),
         F.insumoId === NUEVO ? h('div', { class: 'form-grid' },
           h('label', null, 'Nombre del producto nuevo', App.textInput({ fk: 'cap-nuevo', value: F.nombreNuevo, ph: 'ej. Pasta de choclo', onChange: function (v) { F.nombreNuevo = v; } })),
           h('label', null, 'Se mide en', App.select({ fk: 'cap-unidad', value: F.unidadNueva, options: UNIDADES, onChange: function (v) { F.unidadNueva = v; elegirFormato(U); App.render(); } })),
-          h('small', { class: 'help' }, 'Basta con el nombre: el gerente completa categoría y demás antes de usarlo en recetas.')) : null,
+          h('small', { class: 'help' }, 'Ya va sugerido: el gerente completa categoría y demás antes de usarlo en recetas.')) : null,
 
         h('div', { class: 'form-grid' },
           h('label', null, F.oferta ? 'Precio de oferta (lo que se paga)' : 'Precio (lo que se paga)',
@@ -5552,6 +5650,7 @@ window.CLOUD = {
         h('label', { class: 'block' }, 'Nota (opcional)', App.textInput({ fk: 'cap-nota', value: F.nota, ph: 'ej. buena calidad, solo despacho los martes…', onChange: function (v) { F.nota = v; } })),
         h('div', { class: 'row gap wrap' },
           App.btn(App.esStaff() ? 'Guardar cotización' : 'Enviar cotización', function () { enviar(U); }, 'primary grande'),
+          !(F.precio > 0) || !(F.fq > 0) ? h('small', { class: 'mut' }, 'Puedes enviarla igual: lo que falte lo completa el gerente.') : null,
           App.btn('Descartar', function () { olvidar(); App.ui.cap = {}; App.render(); }, 'ghost')))));
   }
 
