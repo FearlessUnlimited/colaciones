@@ -262,9 +262,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T06:59:43Z">
+<meta name="build" content="2026-10-04T07:22:14Z">
 <script>
-window.BUILD = "2026-10-04T06:59:43Z";
+window.BUILD = "2026-10-04T07:22:14Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -8002,7 +8002,30 @@ window.CLOUD = {
     const selNueva = h('select', { 'data-fk': 'camp-nueva', onchange: function (ev) { if (ev.target.value) { App.crearCampana(ev.target.value); App.toast('Completa nombre, fechas y condiciones'); } } },
       h('option', { value: '' }, '+ Agregar una campaña a…'), activos.map(function (p) { return h('option', { value: p.id }, p.nombre); }));
 
+    // atajo: las condiciones publicadas por Acuenta (acuenta.cl/condicionescampanas, 2026); no duplica si ya están
+    const falta = !(s.proveedores || []).some(function (p) { return (p.campanas || []).some(function (c) { return c.id === 'CAM-acuenta-click'; }) && (p.campanas || []).some(function (c) { return c.id === 'CAM-acuenta-mil'; }); });
+    const cargarAcuenta = function () {
+      Store.mutate(function (st) {
+        const p = App.vincularProveedor(st, 'Acuenta');
+        p.campanas = p.campanas || [];
+        const hay = function (id) { return p.campanas.some(function (c) { return c.id === id; }); };
+        if (!hay('CAM-acuenta-click')) p.campanas.push(nuevaCampana({ id: 'CAM-acuenta-click', nombre: 'Barato a un click', desde: '2026-09-28', hasta: '2026-10-11', canal: 'online', alcance: 'seleccionados',
+          excluyeFactura: true, hastaAgotarStock: true, acumula: { campanas: false, promosProducto: false, despacho: false }, claves: ['barato a un click'],
+          url: 'https://www.acuenta.cl/condicionescampanas', condiciones: 'Productos seleccionados en acuenta.cl y Acuenta App, hasta agotar stock. Excluye otras promociones y compras con factura.' }));
+        if (!hay('CAM-acuenta-mil')) p.campanas.push(nuevaCampana({ id: 'CAM-acuenta-mil', nombre: 'Todos los días $1.000, $2.000 y $3.000', desde: '2026-04-09', hasta: '2027-01-06', canal: 'todos', alcance: 'seleccionados',
+          preciosFijos: [1000, 2000, 3000], claves: ['todos los dias'], url: 'https://www.acuenta.cl/condicionescampanas', condiciones: 'Productos a $1.000, $2.000 y $3.000 en SuperBodega aCuenta y Acuenta App.' }));
+        p.promosDespacho = p.promosDespacho || [];
+        if (!p.promosDespacho.some(function (x) { return x.id === 'PD-acuenta-1190'; })) p.promosDespacho.push({ id: 'PD-acuenta-1190', nombre: 'Despacho $1.190 sobre $25.000', activa: true, desde: '2026-10-01', hasta: '2026-12-30',
+          costo: 1190, gratisDesde: null, minimoPedido: 25000, requiereMembresia: false, soloPrimeraCompra: false, alcance: 'todo', plazoDias: null, horaCorte: '' });
+        if (!p.despacho || !p.despacho.ofrece) p.despacho = Object.assign({ costo: 0, gratisDesde: null, minimoPedido: null }, p.despacho || {}, { ofrece: true });
+        p.web = p.web || 'https://www.acuenta.cl';
+      });
+      App.toast('Listo: 2 campañas y la promo de despacho de Acuenta. Revísalas y marca los productos que cotices.');
+    };
     return h('div', { class: 'stack' },
+      falta && App.esStaff() ? h('div', { class: 'card row gap wrap' }, h('b', null, 'Acuenta publicó sus condiciones de campaña'),
+        App.btn('➕ Cargar las campañas de Acuenta', cargarAcuenta, 'primary small', 'Crea "Barato a un click" y "Todos los días $1.000, $2.000 y $3.000", más su despacho de $1.190 sobre $25.000'),
+        h('small', { class: 'mut' }, 'Datos de acuenta.cl/condicionescampanas. Puedes editarlos después.')) : null,
       props.length ? App.card('Marcadas por el equipo (' + props.length + ')', h('div', { class: 'stack' },
         h('p', { class: 'help' }, 'Al cotizar, alguien indicó que el producto es de una campaña que aún no existe. Créala (queda con esos productos y sus fechas estimadas) o únelos a una que ya tengas.'),
         props.map(tarjetaPropuesta))) : null,
