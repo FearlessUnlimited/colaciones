@@ -262,9 +262,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T06:49:12Z">
+<meta name="build" content="2026-10-04T06:59:43Z">
 <script>
-window.BUILD = "2026-10-04T06:49:12Z";
+window.BUILD = "2026-10-04T06:59:43Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -3627,6 +3627,21 @@ window.CLOUD = {
     ['pv-pa-', 'Toda la compra, o solo los "productos seleccionados" de la promoción (márcalos en sus ofertas, en Insumos y compras). Ej.: Lider, gratis desde $30.000 en productos seleccionados.'],
     ['pv-ppl-', 'Días que tarda en llegar con esta promoción (0 = recibe hoy). Vacío = igual que el despacho normal.'],
     ['pv-phc-', 'Hora límite para recibir en ese plazo. Ej.: 15:00 para "recibe hoy comprando antes de las 15:00".'],
+    ['cot-camp', 'Si el precio es de una campaña del lugar (ej. Barato a un click), elígela: la fecha la pone la campaña. Si no existe aún, elige "otra campaña (nueva)" y el gerente la crea.'],
+    ['cap-camp', 'Si el precio es de una campaña del lugar, va elegida cuando la página la nombra o el precio es uno de los de la campaña. Cámbiala si no es esa; si es de otra que no existe, elige "nueva" y el gerente la completa.'],
+    ['cot-campn', 'Nombre de la campaña nueva, si lo sabes. Ej.: Cyber, Barato a un click.'],
+    ['cap-campn', 'Nombre de la campaña nueva, si lo sabes. Ej.: Cyber, Barato a un click.'],
+    ['cp-n', 'Nombre de la campaña, como la publica el proveedor.'],
+    ['cp-t', 'Precios de campaña: cada producto trae su precio (cotizaciones). Descuento: un porcentaje sobre el precio normal de los productos del proveedor.'],
+    ['cp-pct', 'Porcentaje de descuento sobre el precio normal.'],
+    ['cp-desde', 'Primer día en que vale la campaña.'],
+    ['cp-hasta', 'Último día (inclusive). Al pasar esa fecha, todos sus productos vuelven solos al precio normal. Vacío = sin fecha de término.'],
+    ['cp-can', 'Dónde vale: tienda y online, solo online (web o app) o solo en tienda. Solo online obliga a pedir online.'],
+    ['cp-alc', 'Qué productos alcanza: toda la tienda, algunas categorías o productos elegidos.'],
+    ['cp-pf', 'Precios fijos de la campaña (ej. 1000, 2000, 3000). Si un producto del proveedor cuesta uno de ellos, se sugiere esta campaña al cotizar.'],
+    ['cp-cl', 'Palabras que, si aparecen en la página del producto, sugieren esta campaña. El nombre también cuenta.'],
+    ['cp-url', 'Página donde el proveedor publica las condiciones.'],
+    ['cp-cond', 'Notas: límites por cliente, locales válidos, etc.'],
     ['pv-pn-', 'Nombre de la promoción de despacho. Ej.: Despacho gratis Cyber, envío $990 en octubre.'],
     ['pv-pd-', 'Primer día en que vale la promoción.'],
     ['pv-ph-', 'Último día en que vale la promoción. Vacío = sin fecha de término.'],
@@ -8244,7 +8259,7 @@ window.CLOUD = {
         paso('⭐', 'Opinión', 'Un insumo sirve (o no) para algo. Anota marca y dónde se compró.', avisos),
         h('h4', null, 'Anotar un precio que viste'),
         paso('➕', 'Cotizar desde una página web', 'En el computador: arrastra el botón ➕ Cotizar a tu barra de favoritos y úsalo en la página del producto. En el celular: copia el enlace y pégalo. Todo viene escrito: solo revisa y envía. Si falta algo, envíalo igual: el gerente lo completa.', function () { App.go('capturar'); }),
-        paso('🏷️', 'Cotizar a mano', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha.', function () { App.go('cotizaciones'); }),
+        paso('🏷️', 'Cotizar a mano', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha. Si es de una campaña del lugar (ej. Barato a un click), elígela en "¿Es de una campaña?"; si no existe, marca "nueva".', function () { App.go('cotizaciones'); }),
         h('h4', null, 'Ver recetas'),
         paso('📖', 'Cocina', 'Ingredientes y pasos. Elige las porciones y las cantidades se ajustan.', function () { App.go('cocina'); }),
         paso('🥗', 'Producción del día', 'Platos, más las entradas, ensaladas y postres de los combos (estimados) y los bebestibles envasados a despachar.', function () { App.go('cocina', 'dia'); }),
