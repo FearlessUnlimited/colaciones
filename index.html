@@ -12,6 +12,8 @@
   --good: #1f7a3f; --good-soft: #dcf0e2; --warn: #b45309; --warn-soft: #fdecc8; --bad: #b42318; --bad-soft: #fde1de; --info: #1d5fa8; --info-soft: #dce9f7;
   --sim: #7c3aed; --sim-soft: #ece4fd; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 14px rgba(0,0,0,.05);
   --seg0: #0f766e; --seg1: #2563a8; --seg2: #b45309; --seg3: #7c3aed; --seg4: #be185d; --seg5: #4d7c0f; --seg6: #0e7490; --seg7: #9ca3af;
+  /* planificar compras: categórica validada (validate_palette) en claro y oscuro; pagas = neutro */
+  --cv1: #2563a8; --cv2: #b45309; --cv3: #7c3aed; --cv4: #be185d; --cv5: #4d7c0f; --cv0: #a8aea9;
   --radius: 10px; --font: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
@@ -21,6 +23,7 @@
     --good: #5fd08a; --good-soft: #17341f; --warn: #f0b05a; --warn-soft: #3b2c10; --bad: #ff8a7d; --bad-soft: #3d1b18; --info: #7db7f0; --info-soft: #17283a;
     --sim: #b69cff; --sim-soft: #2a2145; --shadow: 0 1px 2px rgba(0,0,0,.4);
     --seg0: #2dd4bf; --seg1: #6aa8f0; --seg2: #f0b05a; --seg3: #b69cff; --seg4: #f472b6; --seg5: #a3d65c; --seg6: #5ad1e6; --seg7: #7b848a;
+    --cv1: #4f8fdb; --cv2: #c07c22; --cv3: #9b7bef; --cv4: #e0559a; --cv5: #6b9a2a; --cv0: #5d666a;
   }
 }
 * { box-sizing: border-box; }
@@ -240,15 +243,28 @@ ol.pasos li { margin: 6px 0; }
 .guia-ir { font-size: 22px; color: var(--mut); padding: 0 6px; }
 .guia-link:hover .guia-ir, .guia-link:focus-visible .guia-ir { color: var(--info); }
 
+/* planificar compras */
+.apilada { display: flex; gap: 2px; height: 16px; width: 100%; margin: 6px 0 4px; }
+.apilada > span { display: block; min-width: 3px; height: 100%; }
+.apilada > span:first-child { border-radius: 4px 0 0 4px; } .apilada > span:last-child { border-radius: 0 4px 4px 0; } .apilada > span:only-child { border-radius: 4px; }
+.leyenda { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--mut); }
+.leyenda .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.leyenda b { color: var(--ink); font-weight: 600; }
+.propuesta .ahorro { font-size: 22px; font-weight: 700; color: var(--good); }
+.chart .tl-lab { fill: var(--ink); font-size: 11px; } .chart .tl-prov { fill: var(--mut); font-size: 11px; font-weight: 700; }
+.chart .hoy { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; } .chart .tl-bar:hover, .chart .tl-dia:hover { opacity: .8; }
+.comp-no td { color: var(--mut); text-decoration: line-through; }
+.chart-wrap.ancho { overflow-x: auto; } .chart-wrap.ancho .chart { min-width: 600px; }
+
 </style>
 </head>
 <body>
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T06:35:01Z">
+<meta name="build" content="2026-10-04T06:49:12Z">
 <script>
-window.BUILD = "2026-10-04T06:35:01Z";
+window.BUILD = "2026-10-04T06:49:12Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -6597,8 +6613,28 @@ window.CLOUD = {
       g.online = E.pedidoOnline(ctx, g.filas.filter(function (f) { return f.packs > 0; }));
       g.brutoSel = E.brutoSeleccionado(ctx, g.filas.map(function (f) { return { ofertaId: f.ofertaId, bruto: f.costo }; }));
       g.log = prov ? E.logistica(ctx, prov, g.total, g.online, g.brutoSel) : null;
+      // con campañas en el pedido: el despacho respeta lo que se acumula, y se avisa si conviene pedir sin alguna
+      const its = g.filas.filter(function (f) { return f.packs > 0 && f.ofertaId; })
+        .map(function (f) { return Object.assign({ insumoId: f.insumoId, usable: f.usable }, E.compraConOferta(ctx, ctx.ofertas.get(f.ofertaId), f.usable)); });
+      g.sinFactura = its.some(function (it) { return it.sinFactura; });
+      if (prov && its.some(function (it) { return it.campanas.length; })) {
+        const ev = E.opcionesPromoGrupo(ctx, prov, its), tal = ev.opciones[0];
+        g.log = tal.logistica; g.online = tal.online;
+        if (ev.mejor !== tal && ev.mejor.viable && tal.total - ev.mejor.total > 0.5) {
+          g.sinCampana = { nombres: ev.mejor.excluidas.map(function (id) { const e = ctx.campanas.get(id); return e ? e.c.nombre || 'la campaña' : id; }), ahorro: tal.total - ev.mejor.total, despacho: ev.mejor.logistica.promo };
+        }
+      }
       if (g.log) totalLog += g.log.costo;
     });
+    const ahorroPromos = filas.reduce(function (t, f) { return t + (f.ahorroPromo || 0); }, 0);
+    // etiquetas de las promociones que bajan el precio de una línea
+    const chipsPromo = function (f) {
+      if (!f.promos || !f.promos.length) return f.oportunidad ? h('div', null, App.badge('🔥 oferta hasta ' + App.fechaCorta(f.oportunidad), 'good')) : null;
+      return h('div', { class: 'row gap wrap' }, f.promos.map(function (p) {
+        const ico = p.tipo === 'cantidad' ? '🏷️ ' : p.tipo === 'temporal' ? '🔥 ' : '🎯 ';
+        return App.badge(ico + (p.tipo === 'temporal' ? 'oferta' : p.nombre) + (p.hasta ? ' hasta ' + App.fechaCorta(p.hasta) : '') + (p.monto > 0.5 ? ' −' + App.clp(p.monto) : ''), 'good');
+      }));
+    };
     const teorico = filas.reduce(function (t, f) { return t + f.costoTeorico; }, 0);
     // ingresos y margen esperados del plan (con la mezcla de combos)
     const esp = esperado(ctx, calc, dias.map(function (d) { return porDia[d]; }));
@@ -6623,18 +6659,19 @@ window.CLOUD = {
         const g = grupos[lugar];
         const lg = g.log, prov = g.proveedor;
         const pie = prov ? h('div', { class: 'row gap wrap mt' },
-          App.badgeFactura(prov),
+          g.sinFactura ? App.badge('sin factura (campaña)', 'warn') : App.badgeFactura(prov),
           g.online ? App.badge('🌐 pedido online', 'info') : null, App.badgeMembresia ? App.badgeMembresia(prov) : null,
           lg ? h('small', null, lg.modo + (lg.promo ? ' (' + lg.promo + ')' : '') + (lg.costo > 0.5 ? ' ' + App.clp(lg.costo) : '') + (App.plazoTxt(lg) ? ' · ' + App.plazoTxt(lg) : '')) : h('small', { class: 'bad-t' }, 'no alcanza el pedido mínimo y no se puede ir a buscar'),
           lg && lg.faltaMinimo > 0 ? h('small', { class: 'bad-t' }, 'faltan ' + App.clp(lg.faltaMinimo) + ' para el pedido mínimo') :
             lg && lg.faltaGratis > 0 ? h('small', { class: 'warn-t' }, 'faltan ' + App.clp(lg.faltaGratis) + ' para despacho gratis') : null,
+          g.sinCampana ? h('small', { class: 'warn-t', title: 'La campaña no se acumula con la promoción de despacho' },
+            'Sin ' + g.sinCampana.nombres.join(' ni ') + (g.sinCampana.despacho ? ' vale ' + g.sinCampana.despacho : '') + ' y saldría ' + App.clp(g.sinCampana.ahorro) + ' más barato') : null,
           h('span', { class: 'spacer' }),
           App.btn('Registrar esta compra', function () { App.abrirRegistroCompra(prov.id, g.filas); }, 'small noprint')) : null;
         return App.card(lugar, h('div', null, h('table', { class: 'tbl compact' },
           h('thead', null, h('tr', null, h('th', null, 'Insumo'), h('th', { class: 'r' }, 'Necesito'), h('th', { class: 'r' }, 'Comprar'), h('th', { class: 'r' }, 'Precio formato'), h('th', { class: 'r' }, 'Subtotal'))),
           h('tbody', null, g.filas.map(function (f) {
-            return h('tr', { class: f.missing ? 'warnrow' : '' }, h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(f.insumoId) }, f.nombre),
-                f.oportunidad ? h('div', null, App.badge('🔥 oferta hasta ' + App.fechaCorta(f.oportunidad), 'good')) : null),
+            return h('tr', { class: f.missing ? 'warnrow' : '' }, h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(f.insumoId) }, f.nombre), chipsPromo(f)),
               h('td', { class: 'r' }, App.cantidad(f.comprarBase, f.unidad),
                 f.cubiertoStock > 0 ? h('div', null, h('small', { class: 'good-t' }, '− ' + App.cantidad(f.cubiertoStock, f.unidad) + ' en sobrestock')) : null),
               h('td', { class: 'r strong' }, f.packs ? f.packs + ' × ' + f.formatoLabel : f.cubiertoStock > 0 ? h('span', { class: 'good-t' }, 'cubierto ✓') : '—'),
@@ -6644,12 +6681,14 @@ window.CLOUD = {
                 if (f.packs >= pc.minimo) return h('div', null, App.badge('🏷️ promo x' + pc.minimo, 'good'));
                 const conPromo = pc.minimo * pc.precio, sinPromo = f.packs * f.precioPack;
                 return h('div', null, h('small', { class: conPromo <= sinPromo ? 'good-t' : 'mut' }, 'llevando ' + pc.minimo + ': ' + App.clp(pc.precio) + ' c/u' + (conPromo <= sinPromo ? ' (pagas menos)' : ' (+' + App.clp(conPromo - sinPromo) + ')')));
-              })()), h('td', { class: 'r' }, App.clp(f.costo)));
+              })()), h('td', { class: 'r' }, f.ahorroPromo > 0.5 ? h('div', null, h('s', { class: 'mut', title: 'A precio normal (sin promociones)' }, App.clp(f.costoNormal))) : null, App.clp(f.costo)));
           })),
           h('tfoot', null, h('tr', null, h('td', { colspan: 4 }, 'Subtotal ' + lugar), h('td', { class: 'r strong' }, App.clp(g.total))))), pie), 'compra');
       }) : App.empty('Agrega platos al plan semanal para generar la lista de compras.'),
       filas.length ? h('div', { class: 'total-bar' }, 'Total de la compra: ', h('b', null, App.clp(total)),
         totalLog > 0.5 ? h('span', null, ' + despacho/visitas ', h('b', null, App.clp(totalLog))) : null,
+        ahorroPromos > 0.5 ? h('div', null, h('span', { class: 'good-t' }, '🎯 Ahorras ' + App.clp(ahorroPromos) + ' por promociones y campañas'), ' ',
+          h('a', { class: 'small noprint', href: '#/proveedores/planificar' }, 'ver cuándo y dónde conviene →')) : null,
         h('div', null, h('a', { class: 'small noprint', href: '#/proveedores/canasta' }, '¿Conviene repartir distinto? Ver canasta óptima →'))) : null);
   };
 })();
@@ -6660,7 +6699,7 @@ window.CLOUD = {
 (function () {
   'use strict';
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
-  const TABS = [['directorio', 'Directorio'], ['urgencias', '🚨 Urgencias'], ['calidad', '⭐ Opiniones de cocina'], ['compras', 'Compras'], ['campanas', '🎯 Campañas'], ['promos', '🚚 Promos de despacho'], ['oportunidades', 'Ofertas y sobrestock'], ['evolucion', 'Evolución de precios'], ['iva', 'IVA y crédito fiscal'], ['canasta', 'Evaluación y canasta óptima']];
+  const TABS = [['directorio', 'Directorio'], ['urgencias', '🚨 Urgencias'], ['calidad', '⭐ Opiniones de cocina'], ['compras', 'Compras'], ['planificar', '📅 Planificar compras'], ['campanas', '🎯 Campañas'], ['promos', '🚚 Promos de despacho'], ['oportunidades', 'Ofertas y sobrestock'], ['evolucion', 'Evolución de precios'], ['iva', 'IVA y crédito fiscal'], ['canasta', 'Evaluación y canasta óptima']];
   const TIPOS = [['supermercado', 'Supermercado'], ['mayorista', 'Mayorista'], ['feria', 'Feria / mercado'], ['carniceria', 'Carnicería / especialista'], ['distribuidora', 'Distribuidora'], ['otro', 'Otro']];
   const FACTURA = [['si', 'Da factura'], ['a_pedido', 'Factura a pedido'], ['no', 'Sin factura']];
 
@@ -7661,7 +7700,10 @@ window.CLOUD = {
         h('table', { class: 'tbl compact' }, h('tbody', null, plan.proveedores.map(function (g) {
           const lg = g.logistica;
           return h('tr', null,
-            h('td', null, h('b', null, g.nombre), ' ', App.badgeFactura(g.proveedor),
+            h('td', null, h('b', null, g.nombre), ' ', g.sinFactura ? App.badge('sin factura (campaña)', 'warn') : App.badgeFactura(g.proveedor),
+              (g.campanas || []).length || (g.campanasDescartadas || []).length ? h('div', { class: 'row gap wrap' },
+                (g.campanas || []).map(function (id) { const e = App.cache.canasta.ctx.campanas.get(id); return App.badge('🎯 ' + (e ? e.c.nombre || 'campaña' : id), 'good'); }),
+                (g.campanasDescartadas || []).map(function (id) { const e = App.cache.canasta.ctx.campanas.get(id); return App.badge('sin 🎯 ' + (e ? e.c.nombre || 'campaña' : id) + ': conviene la promo de despacho', ''); })) : null,
               h('details', null, h('summary', null, h('small', null, g.items.length + ' insumo(s)')), h('ul', { class: 'help' }, g.items.map(function (it) {
                 const ins = App.insumo(it.insumoId), o = s.ofertas.find(function (x) { return x.id === it.ofertaId; });
                 return h('li', null, (ins ? ins.nombre : '?') + ': ' + it.packs + ' × ' + (o ? o.formatoLabel : '') + ' = ' + App.clp(it.bruto));
@@ -7957,6 +7999,162 @@ window.CLOUD = {
         h('div', { class: 'stack' }, terminadas.map(tarjeta))) : null);
   }
 
+  /* ================= Planificar compras: cuándo y dónde conviene comprar con campañas y promos ================= */
+  // colores por origen del ahorro: fijos por entidad (campañas en orden de la línea de tiempo, luego los demás), nunca por ranking
+  function coloresOrigen(r) {
+    const claves = [];
+    r.eventos.forEach(function (e) { if (e.tipo === 'campana' && e.id && claves.indexOf(e.id) < 0) claves.push(e.id); });
+    ['temporal', 'cantidad', 'precio', 'despacho'].forEach(function (k) { claves.push(k); });
+    r.propuestas.forEach(function (x) { x.descuentos.forEach(function (d) { if (claves.indexOf(d.clave) < 0) claves.push(d.clave); }); });
+    const m = {};
+    let i = 0;
+    claves.forEach(function (k) { if (k === 'despacho') return; m[k] = i < 4 ? 'var(--cv' + (i + 1) + ')' : 'var(--cv0)'; i++; });
+    m.despacho = 'var(--cv5)';
+    return m;
+  }
+
+  // línea de tiempo: una barra por campaña o promo de despacho (agrupadas por proveedor) y, abajo, el ahorro posible de cada día
+  function lineaDeTiempo(r, colores) {
+    // el mismo color que la campaña tiene en las barras de ahorro; el despacho, siempre el suyo
+    const colorEv = function (e) { return e.tipo === 'despacho' ? colores.despacho : colores[e.id] || 'var(--cv0)'; };
+    const N = r.dias, W = 720, LAB = 170, R = 10, T = 18, FILA = 20, DIA = 86400000, x0 = Date.parse(r.desde);
+    const dW = (W - LAB - R) / N;
+    const X = function (iso) { return LAB + Math.round((Date.parse(iso) - x0) / DIA) * dW; };
+    const provs = [];
+    r.eventos.forEach(function (e) { if (provs.indexOf(e.proveedor) < 0) provs.push(e.proveedor); });
+    const filas = [];
+    provs.forEach(function (p) {
+      filas.push({ prov: p });
+      r.eventos.filter(function (e) { return e.proveedor === p; }).forEach(function (e) { filas.push({ ev: e }); });
+    });
+    const nombre = function (clave) { const e = r.eventos.find(function (x) { return x.clave === clave; }); return e ? e.nombre : clave; };
+    const AH = 64, yAh = T + filas.length * FILA + 18, H = yAh + AH + 30;
+    const maxAh = Math.max.apply(null, r.porDia.map(function (d) { return d.ahorro; }).concat([1]));
+    let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="chart" role="img" aria-label="Campañas y promociones de las próximas ' + N + ' días, con el ahorro posible de cada día">' +
+      '<defs>' + r.eventos.map(function (e, j) {
+        const col = colorEv(e);
+        return '<pattern id="trama-' + j + '" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:' + col + ';opacity:.35"/><rect width="3" height="6" style="fill:' + col + '"/></pattern>';
+      }).join('') + '</defs>';
+    // semanas y hoy
+    for (let k = 0; k <= N; k += 7) {
+      const x = (LAB + k * dW).toFixed(1), f = fmtFecha(E.fechaMenos(r.desde, -k));
+      svg += '<line x1="' + x + '" x2="' + x + '" y1="' + (T - 6) + '" y2="' + (yAh + AH) + '" class="grid"/>' + (k < N ? '<text x="' + (+x + 3) + '" y="' + (T - 8) + '" class="axis">' + (k === 0 ? 'hoy ' : '') + esc(f) + '</text>' : '');
+    }
+    filas.forEach(function (f, i) {
+      const y = T + i * FILA;
+      if (f.prov) { svg += '<text x="0" y="' + (y + 14) + '" class="tl-prov">' + esc(f.prov.nombre.slice(0, 26)) + '</text>'; return; }
+      const e = f.ev, trama = e.noSeAcumulaCon.length > 0;
+      const col = colorEv(e);
+      const xa = X(e.desde), xb = X(e.hasta) + dW, w = Math.max(4, xb - xa - 2);
+      const tip = (e.tipo === 'campana' ? '🎯 ' : '🚚 ') + e.nombre + ' · ' + fmtFecha(e.desde) + ' al ' + (e.sinFin ? 'sin fecha de término' : fmtFecha(e.obj.hasta)) +
+        (e.seAcumulaCon.length ? '\nSe suma con: ' + e.seAcumulaCon.map(nombre).join(', ') : '') + (e.noSeAcumulaCon.length ? '\nNo se suma con: ' + e.noSeAcumulaCon.map(nombre).join(', ') : '');
+      svg += '<text x="10" y="' + (y + 14) + '" class="tl-lab">' + esc((e.tipo === 'campana' ? '🎯 ' : '🚚 ') + (e.nombre.length > 24 ? e.nombre.slice(0, 23) + '…' : e.nombre)) + '<title>' + esc(e.nombre) + '</title></text>' +
+        '<rect class="tl-bar" x="' + (xa + 1).toFixed(1) + '" y="' + (y + 4) + '" width="' + w.toFixed(1) + '" height="12" rx="4" style="fill:' + (trama ? 'url(#trama-' + r.eventos.indexOf(e) + ')' : col) + '"><title>' + esc(tip) + '</title></rect>';
+    });
+    // ahorro posible por día (una sola magnitud: un solo tono)
+    svg += '<text x="0" y="' + (yAh + 12) + '" class="tl-prov">Ahorro posible</text><text x="0" y="' + (yAh + 26) + '" class="axis">si compras ese día</text>';
+    const mejor = r.porDia.reduce(function (a, d) { return d.ahorro > a.ahorro ? d : a; }, { ahorro: 0 });
+    r.porDia.forEach(function (d, k) {
+      if (!(d.ahorro > 0)) return;
+      const hh = Math.max(3, d.ahorro / maxAh * (AH - 14)), x = LAB + k * dW + 1;
+      svg += '<rect class="tl-dia" x="' + x.toFixed(1) + '" y="' + (yAh + AH - hh).toFixed(1) + '" width="' + Math.max(2, dW - 2).toFixed(1) + '" height="' + hh.toFixed(1) + '" rx="3" style="fill:var(--accent);opacity:' + (d === mejor ? 1 : 0.45) + '">' +
+        '<title>' + esc(fmtFecha(d.fecha) + ': hasta ' + App.clp(d.ahorro) + (d.propuesta >= 0 ? ' en ' + r.propuestas[d.propuesta].proveedor.nombre : '')) + '</title></rect>';
+    });
+    if (mejor.ahorro > 0) {
+      const k = r.porDia.indexOf(mejor), x = LAB + (k + 0.5) * dW;
+      svg += '<text x="' + Math.min(W - R, Math.max(LAB + 40, x)).toFixed(1) + '" y="' + (yAh + AH + 16) + '" class="tl-lab" text-anchor="middle">mejor: ' + esc(fmtFecha(mejor.fecha)) + ' · ' + esc(App.clp(mejor.ahorro)) + '</text>';
+    }
+    svg += '<line x1="' + LAB + '" x2="' + (W - R) + '" y1="' + (yAh + AH) + '" y2="' + (yAh + AH) + '" class="grid"/>';
+    return h('div', { class: 'chart-wrap ancho', html: svg + '</svg>' });
+  }
+
+  function planificar() {
+    const s = Store.get(), ctx = App.ctx(), P = App.ui.planComp = App.ui.planComp || { dias: 21, ver: null };
+    let items = itemsPlan(), supuesto = false;
+    if (!items.length) { supuesto = true; items = Array.from(E.volumenSemanal(ctx).vol).map(function (x) { return { recetaId: x[0], porciones: x[1] }; }); }
+    const clave = App.version + '|' + P.dias + '|' + (s.escenarioActivo || '');
+    if (App.cache.planCompK !== clave) { App.cache.planComp = E.planCompras(ctx, items, { dias: P.dias }); App.cache.planCompK = clave; }
+    const r = App.cache.planComp, col = coloresOrigen(r);
+
+    const cuando = function (x) {
+      if (x.estado === 'vigente') return App.badge('ahora · ' + (x.diasRestantes <= 0 ? 'último día' : 'hasta ' + App.fechaCorta(x.hasta)), x.diasRestantes <= 2 ? 'warn' : 'good');
+      return App.badge('del ' + App.fechaCorta(x.desde) + ' al ' + App.fechaCorta(x.hasta) + ' (en ' + x.diasParaEmpezar + ' d)', 'info');
+    };
+    const combinacion = function (x) {
+      return x.campanas.map(function (c) { return '🎯 ' + c.nombre; }).concat(x.despacho ? ['🚚 ' + x.despacho] : [x.logistica.modo]).join(' + ');
+    };
+    // barra apilada: lo que pagas + cada ahorro (suman lo que costaría a precio normal)
+    const apilada = function (x) {
+      const pagas = x.totalBruto, segs = [{ nombre: 'Pagas', monto: pagas, color: 'var(--cv0)' }].concat(x.descuentos.map(function (d) { return { nombre: d.nombre, monto: d.monto, color: col[d.clave] || 'var(--cv0)' }; }));
+      const tot = segs.reduce(function (t, sg) { return t + sg.monto; }, 0) || 1;
+      return h('div', null,
+        h('div', { class: 'apilada', role: 'img', 'aria-label': segs.map(function (sg) { return sg.nombre + ' ' + App.clp(sg.monto); }).join(', ') },
+          segs.filter(function (sg) { return sg.monto > 0.5; }).map(function (sg) {
+            return h('span', { title: sg.nombre + ': ' + App.clp(sg.monto) + ' (' + App.num(sg.monto / tot * 100, 0) + '%)', style: { width: (sg.monto / tot * 100) + '%', background: sg.color } });
+          })),
+        h('div', { class: 'leyenda' }, segs.filter(function (sg) { return sg.monto > 0.5; }).map(function (sg) {
+          return h('span', null, h('span', { class: 'sw', style: { background: sg.color } }), sg.nombre + ' ', h('b', null, App.clp(sg.monto)));
+        })));
+    };
+    const comparador = function (x) {
+      return h('div', { class: 'stack' },
+        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+          h('thead', null, h('tr', null, ['Combinación', 'Productos', 'Despacho', 'Total', ''].map(function (t, i) { return h('th', { class: i >= 1 && i <= 3 ? 'r' : '' }, t); }))),
+          h('tbody', null, x.opciones.map(function (op) {
+            const maxT = Math.max.apply(null, x.opciones.map(function (o) { return o.totalBruto; }));
+            const nom = (op.campanas.length ? op.campanas.map(function (n) { return '🎯 ' + n; }).join(' + ') : 'sin campañas') + (op.despacho ? ' + 🚚 ' + op.despacho : '');
+            return h('tr', { class: op.elegida ? 'strong' : '' },
+              h('td', null, (op.elegida ? '✓ ' : '') + nom, op.sin.length ? h('div', null, h('small', { class: 'mut' }, 'sin ' + op.sin.join(', '))) : null),
+              h('td', { class: 'r' }, App.clp(op.productos)), h('td', { class: 'r' }, !op.viable ? h('small', { class: 'bad-t' }, op.modo) : op.logistica > 0.5 ? App.clp(op.logistica) : h('small', { class: 'mut' }, op.modo)),
+              h('td', { class: 'r' }, App.clp(op.totalBruto)), h('td', { class: 'w100' }, App.bar(op.totalBruto / maxT * 100, op.elegida ? 'good' : '')));
+          })))),
+        x.noPermitidas.length ? h('div', { class: 'stack' }, h('small', { class: 'mut' }, 'Combinaciones que no se permiten:'),
+          x.noPermitidas.map(function (np) { return h('small', null, h('s', null, np.a + ' + ' + np.b), ' — ' + np.motivo); })) : null,
+        h('small', { class: 'mut' }, 'Las reglas de qué se suma con qué se editan en cada campaña (pestaña Campañas).'));
+    };
+    const tarjeta = function (x, i) {
+      const abierto = P.ver === i, p = x.proveedor;
+      const armar = function () {
+        App.abrirRegistroCompra(p.id, x.productos.map(function (pr) { return { ofertaId: pr.ofertaId, packs: pr.packs }; }));
+        if (x.sinFactura && App.ui.compra) App.ui.compra.tipoDoc = '39';   // la campaña excluye factura: boleta
+      };
+      return h('section', { class: 'card propuesta stack' },
+        h('div', { class: 'row gap wrap' }, h('b', null, p.nombre), cuando(x), h('span', { class: 'spacer' }), h('span', { class: 'ahorro' }, '−' + App.clp(x.ahorroTotal))),
+        h('div', null, h('small', null, combinacion(x))),
+        h('small', { class: 'mut' }, 'Pagas ' + App.clp(x.totalBruto) + ' por ' + x.productos.length + ' producto(s)' + (x.logistica.bruto > 0.5 ? ' (incluye ' + x.logistica.modo + ' ' + App.clp(x.logistica.bruto) + ')' : ' · ' + x.logistica.modo) +
+          '; a precio normal serían ' + App.clp(x.totalBruto + x.ahorroTotal) + '.'),
+        apilada(x),
+        x.avisos.length ? h('div', { class: 'row gap wrap' }, x.avisos.map(function (a) { return App.badge('⚠ ' + a, 'warn'); })) : null,
+        h('details', null, h('summary', null, h('small', null, 'Qué comprar ahí')), h('ul', { class: 'help' }, x.productos.map(function (pr) {
+          return h('li', null, pr.nombre + ': ' + App.clp(pr.bruto) + (pr.ahorro > 0.5 ? ' (ahorras ' + App.clp(pr.ahorro) + ')' : pr.yaAqui ? ' (ya lo compras aquí)' : ''));
+        }))),
+        h('div', { class: 'row gap wrap' },
+          App.btn('Armar esta compra', armar, 'small primary', 'Abre el registro de compra con estos productos'),
+          App.btn(abierto ? 'Ocultar comparación' : 'Comparar combinaciones', function () { P.ver = abierto ? null : i; App.render(); }, 'small')),
+        abierto ? comparador(x) : null);
+    };
+
+    const props = r.propuestas.slice(0, 6);
+    return h('div', { class: 'stack' },
+      App.card('📅 Campañas y promociones de las próximas semanas', h('div', { class: 'stack' },
+        h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'Mirar'),
+          h('div', { class: 'chips' }, [[14, '2 semanas'], [21, '3 semanas'], [28, '4 semanas']].map(function (d) { return App.chip(d[1], P.dias === d[0], function () { P.dias = d[0]; App.render(); }); }))),
+        r.eventos.length ? lineaDeTiempo(r, col) : App.empty('No hay campañas ni promociones de despacho vigentes o próximas. Agrégalas en las pestañas Campañas y Promos de despacho.'),
+        r.eventos.length ? h('div', { class: 'leyenda' },
+          h('span', null, '🎯 campaña (cada una con su color, el mismo de las barras de ahorro)'),
+          h('span', null, h('span', { class: 'sw', style: { background: 'var(--cv5)' } }), '🚚 promo de despacho'),
+          h('span', null, h('span', { class: 'sw', style: { background: 'repeating-linear-gradient(45deg, var(--mut) 0 3px, transparent 3px 6px)' } }), 'rayada: no se suma con alguna otra (pasa el mouse para ver cuál)'),
+          h('span', null, h('span', { class: 'sw', style: { background: 'var(--accent)' } }), 'ahorro posible ese día (la más oscura es el mejor)')) : null,
+        supuesto ? h('small', { class: 'warn-t' }, 'Sin plan semanal: se calcula con el volumen supuesto de Ajustes. Arma el plan en Lista de compras para que sea exacto.') : null)),
+      App.card('Mejores momentos para comprar (' + r.propuestas.length + ')', props.length ? h('div', { class: 'stack' },
+        h('p', { class: 'help' }, 'Cada propuesta junta lo de tu plan semanal que en ese proveedor y en esas fechas sale más barato que a precio normal, con la mejor combinación de promociones que se pueden sumar. El ahorro ya descuenta el despacho o la visita.'),
+        props.map(tarjeta)) : App.empty('Por ahora ninguna campaña o promoción baja el costo de tu plan. Cotiza productos en las campañas vigentes para que aparezcan aquí.')),
+      App.card('Cómo se calcula', h('ul', { class: 'help' },
+        h('li', null, 'Precio normal = sin campañas, ofertas temporales ni promociones, comprando donde compras hoy.'),
+        h('li', null, 'Por defecto una campaña no se suma a otras promociones (en cada producto vale la mejor), salvo al despacho. Si no se suma al despacho en promoción, se compara pedir con la campaña o con la promo de despacho y gana la más barata.'),
+        h('li', null, 'Solo cuentan cotizaciones aprobadas. Las campañas "sin factura" no dan crédito fiscal.'))));
+  }
+
   /* ================= Promos de despacho (radar para esperar el buen momento) ================= */
   function promosRadar() {
     const s = Store.get(), ctx = App.ctx();
@@ -8015,7 +8213,7 @@ window.CLOUD = {
 
   App.views.proveedores = function (arg) {
     const tab = TABS.some(function (t) { return t[0] === arg; }) ? arg : 'directorio';
-    const cuerpo = tab === 'directorio' ? directorio() : tab === 'compras' ? compras() : tab === 'promos' ? promosRadar() : tab === 'campanas' ? campanas() : tab === 'oportunidades' ? oportunidades() : tab === 'urgencias' ? urgencias() : tab === 'calidad' ? calidad() : tab === 'evolucion' ? evolucion() : tab === 'iva' ? iva() : canasta();
+    const cuerpo = tab === 'directorio' ? directorio() : tab === 'compras' ? compras() : tab === 'promos' ? promosRadar() : tab === 'campanas' ? campanas() : tab === 'planificar' ? planificar() : tab === 'oportunidades' ? oportunidades() : tab === 'urgencias' ? urgencias() : tab === 'calidad' ? calidad() : tab === 'evolucion' ? evolucion() : tab === 'iva' ? iva() : canasta();
     return h('div', { class: 'stack' }, avisoNube(),
       h('div', { class: 'chips big' }, TABS.map(function (t) { return App.chip(t[1], tab === t[0], function () { App.go('proveedores', t[0]); }); })), cuerpo);
   };
