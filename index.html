@@ -273,9 +273,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T11:24:40Z">
+<meta name="build" content="2026-10-04T12:00:22Z">
 <script>
-window.BUILD = "2026-10-04T11:24:40Z";
+window.BUILD = "2026-10-04T12:00:22Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -622,6 +622,9 @@ window.CLOUD = {
   // con las mismas fechas y condiciones (proveedor.campanas[]). Dos tipos:
   //  - 'precio': cada producto trae su precio de campaña (cotización con oferta.campanaId); vale entre desde y hasta de la campaña.
   //  - 'descuento': descuentoPct sobre el precio de las ofertas del proveedor en su alcance (todo | categorias | seleccionados = insumos[]).
+  // compraMinima ($): la campaña vale solo si el pedido a ese proveedor (todo lo que se le compra, antes del descuento) llega
+  // a ese monto. En los costos de los platos cuenta la compra semanal del plan en ese proveedor; en la lista de compras,
+  // la canasta y el planificador, el pedido que se arma.
   // Acumulación: por defecto una campaña NO se suma a otras campañas ni a promos de producto (oferta temporal, por cantidad)
   // y SÍ a las promociones de despacho. Se edita por campaña (acumula) y con excepciones puntuales (acumulaCon / noAcumulaCon,
   // en cualquiera de las dos). Entre otras campañas cuenta por producto (si no se acumulan, gana la mejor); con el despacho,
@@ -667,8 +670,33 @@ window.CLOUD = {
     if (!lista) return [];
     const ins = ctx.insumos.get(o.insumoId);
     return lista.filter(function (e) {
-      return o.campanaId !== e.c.id && estadoCampana(ctx, e.p, e.c) === 'vigente' && !(paraCostos && e.c.usarEnCostos === false) && alcanzaA(e.c, o, ins);
+      return o.campanaId !== e.c.id && estadoCampana(ctx, e.p, e.c) === 'vigente' && !(paraCostos && e.c.usarEnCostos === false) && alcanzaA(e.c, o, ins) &&
+        !(paraCostos && !minimoSemanal(ctx, e).alcanza);
     });
+  }
+  function compraMinima(c) { return Number(c && c.compraMinima) || 0; }
+  // monto del pedido que cuenta para la compra mínima de la campaña c: lo que se paga más lo que ella misma descontó
+  function montoParaMinimo(items, c) {
+    return items.reduce(function (t, it) {
+      return t + (Number(it.bruto) || 0) + (it.descuentos || []).reduce(function (s, d) { return s + (d.id === c.id ? Number(d.monto) || 0 : 0); }, 0);
+    }, 0);
+  }
+  // ¿la compra semanal del plan en ese proveedor llega a la compra mínima de la campaña? (decide si entra a los costos)
+  // Se mide suponiendo el descuento ya ganado: así se ve qué productos convendría comprar ahí con él.
+  function minimoSemanal(ctx, e) {
+    const minimo = compraMinima(e.c);
+    if (!minimo || ctx.opts.minimosCumplidos) return { alcanza: true, minimo: minimo, monto: null, falta: 0 };
+    ctx.memoMinimos = ctx.memoMinimos || new Map();
+    if (ctx.memoMinimos.has(e.c.id)) return ctx.memoMinimos.get(e.c.id);
+    const cx = variante(ctx, { minimosCumplidos: true }), items = [];
+    usoSemanalInsumos(cx).uso.forEach(function (q, id) {
+      const o = q > 0 ? costoInsumo(cx, id).oferta : null, pv = o && proveedorDe(cx, o);
+      if (pv && pv.id === e.p.id && o.formatoQty > 0) items.push(compraConOferta(cx, o, q));
+    });
+    const monto = montoParaMinimo(items, e.c);
+    const r = { alcanza: monto >= minimo, minimo: minimo, monto: monto, falta: monto >= minimo ? 0 : minimo - monto };
+    ctx.memoMinimos.set(e.c.id, r);
+    return r;
   }
   // precio de un formato con todas las promociones que le aplican, respetando qué se acumula con qué:
   // { precio, base, descuentos: [{ tipo: 'cantidad'|'campana', id, nombre, monto }], campanas: [ids], sinFactura, online, soloTienda }
@@ -727,10 +755,11 @@ window.CLOUD = {
     const promosD = (p.promosDespacho || []).filter(function (pr) { return estadoPromo(ctx, p, pr) === 'vigente'; });
     const estorba = function (e) {
       return opts.todas || promosD.some(function (pr) { return !seAcumulan(e.c, pr, 'despacho'); }) ||
-        (e.c.excluyeFactura && ivaAplica(ctx) && daFactura(p)) || (e.c.canal && e.c.canal !== 'todos');
+        (e.c.excluyeFactura && ivaAplica(ctx) && daFactura(p)) || (e.c.canal && e.c.canal !== 'todos') || compraMinima(e.c) > 0;
     };
     const conflictivas = Array.from(usadas.values()).filter(estorba).slice(0, 4).map(function (e) { return e.c.id; });
     const opciones = [];
+    let faltaCampana = 0;   // lo que faltó para la compra mínima de una campaña (la menor de las opciones que no llegaron)
     for (let mask = 0; mask < (1 << conflictivas.length); mask++) {
       const excl = conflictivas.filter(function (_, i) { return mask & (1 << i); });
       const cx = excl.length ? variante(ctx, { campanasExcluidas: excl }) : ctx;
@@ -757,6 +786,10 @@ window.CLOUD = {
       if (!ok) continue;
       const vivas = [];
       its.forEach(function (it) { (it.campanas || []).forEach(function (id) { if (vivas.indexOf(id) < 0) vivas.push(id); }); });
+      // una campaña con compra mínima que el pedido no alcanza no vale: queda la opción sin ella
+      const faltas = vivas.map(function (id) { const e = ctx.campanas.get(id), m = e ? compraMinima(e.c) : 0; return m ? Math.max(0, m - montoParaMinimo(its, e.c)) : 0; });
+      const falta = Math.max.apply(null, [0].concat(faltas));
+      if (falta > 0) { faltaCampana = faltaCampana ? Math.min(faltaCampana, falta) : falta; continue; }
       const sinFactura = its.some(function (it) { return it.sinFactura; }), soloTienda = its.some(function (it) { return it.soloTienda; });
       let bruto = 0, costo = 0;
       its.forEach(function (it) { bruto += it.bruto; costo += sinFactura ? it.bruto : it.costo; });
@@ -771,7 +804,8 @@ window.CLOUD = {
       if (x.viable !== a.viable) return x.viable ? x : a;
       return x.total < a.total - 0.5 ? x : a;
     }, null);
-    return { opciones: opciones, mejor: mejor, conflictivas: conflictivas };
+    if (mejor) mejor.faltaCampana = faltaCampana;
+    return { opciones: opciones, mejor: mejor, conflictivas: conflictivas, faltaCampana: faltaCampana };
   }
 
   /* Radar de promociones de despacho: para cada promoción que vale hoy o empieza pronto, cuánto de tu compra semanal
@@ -1319,8 +1353,45 @@ window.CLOUD = {
   }
 
   /* ---------- lista de compras ---------- */
+  // items: [{recetaId, porciones}]. Las campañas con compra mínima valen solo si el pedido a ese proveedor llega al monto;
+  // si no llega, la lista se arma sin ellas. Cada fila del proveedor lleva minimosCampana: [{ id, nombre, pct, minimo, monto, falta, vale }].
   function listaCompras(ctx, items) {
-    // items: [{recetaId, porciones}]
+    let cx = ctx, filas = filasCompra(cx, items);
+    const bajo = [];
+    for (let vuelta = 0; vuelta < 3; vuelta++) {
+      const nuevas = estadoMinimos(cx, filas).filter(function (m) { return !m.vale; });
+      if (!nuevas.length) break;
+      nuevas.forEach(function (m) { bajo.push(m); });
+      cx = variante(ctx, { campanasExcluidas: bajo.map(function (m) { return m.id; }) });
+      filas = filasCompra(cx, items);
+    }
+    const vigentes = estadoMinimos(cx, filas).concat(bajo);
+    filas.forEach(function (f) { f.minimosCampana = vigentes.filter(function (m) { return m.proveedorId === f.proveedorId; }); });
+    return filas;
+  }
+  // campañas con compra mínima en juego en cada proveedor de la lista: las que usan sus filas, y las vigentes que no se alcanzaron
+  function estadoMinimos(ctx, filas) {
+    const porProv = new Map();
+    filas.forEach(function (f) {
+      if (!f.proveedorId || !f.ofertaId || !(f.packs > 0)) return;
+      if (!porProv.has(f.proveedorId)) porProv.set(f.proveedorId, []);
+      porProv.get(f.proveedorId).push(compraConOferta(ctx, ctx.ofertas.get(f.ofertaId), f.usable));
+    });
+    const out = [];
+    porProv.forEach(function (its, pid) {
+      const ids = [];
+      its.forEach(function (it) { (it.campanas || []).forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); }); });
+      ids.forEach(function (id) {
+        const e = ctx.campanas.get(id), minimo = e ? compraMinima(e.c) : 0;
+        if (!minimo) return;
+        const monto = montoParaMinimo(its, e.c);
+        out.push({ id: id, proveedorId: pid, nombre: e.c.nombre || 'campaña', pct: Number(e.c.descuentoPct) || null, minimo: minimo, monto: monto,
+          falta: monto >= minimo ? 0 : minimo - monto, vale: monto >= minimo });
+      });
+    });
+    return out;
+  }
+  function filasCompra(ctx, items) {
     const acc = new Map();
     items.forEach(function (it) {
       if (!ctx.recetas.get(it.recetaId)) return;
@@ -1825,7 +1896,8 @@ window.CLOUD = {
       if (g.proveedor) {
         const ev = opcionesPromoGrupo(ctx, g.proveedor, g.items), m = ev.mejor;
         Object.assign(g, { items: m.items, bruto: m.bruto, costo: m.costo, online: m.online, brutoSel: m.brutoSel, sinFactura: m.sinFactura,
-          campanas: m.campanas, campanasDescartadas: m.excluidas, opcionesPromo: ev.opciones.length > 1 ? ev.opciones : null, logistica: m.logistica });
+          campanas: m.campanas, campanasDescartadas: m.excluidas, opcionesPromo: ev.opciones.length > 1 ? ev.opciones : null, logistica: m.logistica,
+          faltaCampana: m.faltaCampana || 0 });
       } else {
         g.online = pedidoOnline(ctx, g.items);
         g.brutoSel = brutoSeleccionado(ctx, g.items);
@@ -1888,7 +1960,7 @@ window.CLOUD = {
       return el;
     };
 
-    // mueve insumos hacia proveedores que quedaron bajo su despacho gratis o pedido mínimo, si eso abarata el total
+    // mueve insumos hacia proveedores que quedaron bajo su pedido mínimo, la compra mínima de una campaña o el despacho gratis, si eso abarata el total
     const mejorar = function (el, plan, permitidos) {
       let mejor = { el: el, plan: plan };
       for (let vuelta = 0; vuelta < 3; vuelta++) {
@@ -1896,7 +1968,7 @@ window.CLOUD = {
         mejor.plan.proveedores.forEach(function (g) {
           if (!g.proveedor) return;
           const lg = g.logistica;
-          const meta = lg.faltaMinimo > 0 ? lg.faltaMinimo : (lg.faltaGratis > 0 && lg.costo > 0 ? lg.faltaGratis : 0);
+          const meta = lg.faltaMinimo > 0 ? lg.faltaMinimo : g.faltaCampana > 0 ? g.faltaCampana : (lg.faltaGratis > 0 && lg.costo > 0 ? lg.faltaGratis : 0);
           if (!(meta > 0)) return;
           const pid = g.proveedor.id;
           const movibles = [];
@@ -1961,15 +2033,18 @@ window.CLOUD = {
   // ¿a qué campaña vigente pertenece una cotización? d = { proveedorId | lugar, precio, precioNormal, titulo, descripcion, textos[], fecha }
   // Pistas: la página nombra la campaña o una de sus claves (fuerte), el precio es uno de sus precios fijos (fuerte),
   // o es la única campaña de precios vigente y la página muestra un precio rebajado (media).
+  // Las campañas de descuento no se eligen: se aplican solas sobre el precio normal (van aparte, en `descuentos`, para avisar).
   function reconocerCampana(ctx, d) {
     d = d || {};
     const p = (d.proveedorId && ctx.proveedores.get(d.proveedorId)) || ctx.provPorNombre.get(normNombre(d.lugar)) || null;
-    if (!p) return { proveedor: null, sugerida: null, candidatas: [], vigentes: [] };
+    if (!p) return { proveedor: null, sugerida: null, candidatas: [], vigentes: [], descuentos: [] };
     const cx = d.fecha ? variante(ctx, { params: { hoy: d.fecha } }) : ctx;
     const texto = ' ' + normNombre([d.titulo, d.descripcion].concat(d.textos || []).join(' ')) + ' ';
     const precio = Math.round(Number(d.precio) || 0), rebajado = Number(d.precioNormal) > Number(d.precio);
-    const cands = (p.campanas || []).map(function (c) { return { campana: c, proveedor: p, estado: estadoCampana(cx, p, c), puntaje: 0, motivos: [] }; })
+    let cands = (p.campanas || []).map(function (c) { return { campana: c, proveedor: p, estado: estadoCampana(cx, p, c), puntaje: 0, motivos: [] }; })
       .filter(function (x) { return x.estado === 'vigente' || x.estado === 'sin-membresia'; });
+    const descuentos = cands.filter(function (x) { return x.campana.tipo === 'descuento'; }).map(function (x) { return x.campana; });
+    cands = cands.filter(function (x) { return x.campana.tipo !== 'descuento'; });
     cands.forEach(function (x) {
       const c = x.campana;
       const frases = (c.claves || []).concat(c.nombre ? [c.nombre] : []).map(normNombre).filter(function (k) { return k.length >= 3; });
@@ -1977,13 +2052,12 @@ window.CLOUD = {
       if (hit) { x.puntaje += 3; x.motivos.push('la página dice “' + hit + '”'); }
       if (precio > 0 && (c.preciosFijos || []).some(function (v) { return Math.round(Number(v)) === precio; })) { x.puntaje += 2; x.motivos.push('cuesta ' + clp(precio) + ', uno de los precios de la campaña'); }
     });
-    const dePrecio = cands.filter(function (x) { return x.campana.tipo !== 'descuento'; });
-    if (rebajado && dePrecio.length === 1 && !cands.some(function (x) { return x.puntaje > 0; })) {
-      dePrecio[0].puntaje = 1; dePrecio[0].motivos.push('es la única campaña vigente y la página muestra un precio rebajado');
+    if (rebajado && cands.length === 1 && !cands.some(function (x) { return x.puntaje > 0; })) {
+      cands[0].puntaje = 1; cands[0].motivos.push('es la única campaña vigente y la página muestra un precio rebajado');
     }
     const lista = cands.filter(function (x) { return x.puntaje > 0; }).sort(function (a, b) { return b.puntaje - a.puntaje; });
     lista.forEach(function (x) { x.confianza = x.puntaje >= 2 ? 'alta' : 'media'; });
-    return { proveedor: p, sugerida: lista[0] || null, candidatas: lista, vigentes: cands.map(function (x) { return x.campana; }) };
+    return { proveedor: p, sugerida: lista[0] || null, candidatas: lista, vigentes: cands.map(function (x) { return x.campana; }), descuentos: descuentos };
   }
 
   // cotizaciones que el equipo marcó como "parte de una campaña" que aún no existe: agrupadas por proveedor + nombre
@@ -2042,6 +2116,7 @@ window.CLOUD = {
       const ah = est === 'vigente' || est === 'programada' || est === 'sin-membresia' ? ahorroCampana(ctx, e) : { semana: 0, insumos: [] };
       out.push({ campana: e.c, proveedor: e.p, estado: est, ofertas: ofs, nOfertas: ofs.filter(function (o) { return !o.pendiente; }).length,
         nPendientes: ofs.filter(function (o) { return o.pendiente; }).length, ahorroSemana: ah.semana, insumosAhorro: ah.insumos,
+        minimo: compraMinima(e.c) && est === 'vigente' ? minimoSemanal(ctx, e) : null,
         diasRestantes: e.c.hasta ? diasEntre(hoy, e.c.hasta) : null, diasParaEmpezar: e.c.desde && e.c.desde > hoy ? diasEntre(hoy, e.c.desde) : 0 });
     });
     const orden = { vigente: 0, 'sin-membresia': 1, programada: 2, inactiva: 3, vencida: 4, excluida: 5 };
@@ -2448,6 +2523,7 @@ window.CLOUD = {
     variante: variante, exigeMembresia: exigeMembresia, ACUMULA_DEF: ACUMULA_DEF, acumulaDe: acumulaDe, seAcumulan: seAcumulan, estadoCampana: estadoCampana, campanaDe: campanaDe,
     esTemporal: esTemporal, hastaOferta: hastaOferta, esSoloOnline: esSoloOnline, infoPrecio: infoPrecio, descuentosDeOferta: descuentosDeOferta, unitLista: unitLista,
     opcionesPromoGrupo: opcionesPromoGrupo, reconocerCampana: reconocerCampana, campanasPropuestas: campanasPropuestas, listaCampanas: listaCampanas,
+    compraMinima: compraMinima, minimoSemanal: minimoSemanal, montoParaMinimo: montoParaMinimo,
     ahorroCampana: ahorroCampana, historialCampanas: historialCampanas, planCompras: planCompras,
     sobrestockVigente: sobrestockVigente, sugerenciaOportunidad: sugerenciaOportunidad, ofertasTemporales: ofertasTemporales,
     TIPOS_DOC: TIPOS_DOC, validarRut: validarRut, formatearRut: formatearRut, tipoDocCompra: tipoDocCompra, esFactura: esFactura,
@@ -3743,17 +3819,18 @@ window.CLOUD = {
     ['cap-camp', 'Si el precio es de una campaña del lugar, va elegida cuando la página la nombra o el precio es uno de los de la campaña. Cámbiala si no es esa; si es de otra que no existe, elige "nueva" y el gerente la completa.'],
     ['cot-campn', 'Nombre de la campaña nueva, si lo sabes. Ej.: Cyber, Barato a un click.'],
     ['cap-campn', 'Nombre de la campaña nueva, si lo sabes. Ej.: Cyber, Barato a un click.'],
-    ['cp-n', 'Nombre de la campaña, como la publica el proveedor.'],
-    ['cp-t', 'Precios de campaña: cada producto trae su precio (cotizaciones). Descuento: un porcentaje sobre el precio normal de los productos del proveedor.'],
-    ['cp-pct', 'Porcentaje de descuento sobre el precio normal.'],
-    ['cp-desde', 'Primer día en que vale la campaña.'],
-    ['cp-hasta', 'Último día (inclusive). Al pasar esa fecha, todos sus productos vuelven solos al precio normal. Vacío = sin fecha de término.'],
-    ['cp-can', 'Dónde vale: tienda y online, solo online (web o app) o solo en tienda. Solo online obliga a pedir online.'],
-    ['cp-alc', 'Qué productos alcanza: toda la tienda, algunas categorías o productos elegidos.'],
-    ['cp-pf', 'Precios fijos de la campaña (ej. 1000, 2000, 3000). Si un producto del proveedor cuesta uno de ellos, se sugiere esta campaña al cotizar.'],
-    ['cp-cl', 'Palabras que, si aparecen en la página del producto, sugieren esta campaña. El nombre también cuenta.'],
-    ['cp-url', 'Página donde el proveedor publica las condiciones.'],
-    ['cp-cond', 'Notas: límites por cliente, locales válidos, etc.'],
+    ['cam-n-', 'Nombre de la campaña, como la publica el proveedor.'],
+    ['cam-t-', 'Precios de campaña: cada producto trae su precio (cotizaciones). Descuento: un porcentaje sobre el precio normal de los productos del proveedor.'],
+    ['cam-pct-', 'Porcentaje de descuento sobre el precio normal.'],
+    ['cam-min-', 'Monto que debe sumar el pedido a este proveedor (todo lo que le compras, antes del descuento) para que valga la campaña. Ej.: 10% comprando sobre $20.000. En los costos de los platos cuenta tu compra semanal del plan; en la lista de compras y la canasta, el pedido. Vacío = sin mínimo.'],
+    ['cam-desde-', 'Primer día en que vale la campaña.'],
+    ['cam-hasta-', 'Último día (inclusive). Al pasar esa fecha, todos sus productos vuelven solos al precio normal. Vacío = sin fecha de término.'],
+    ['cam-can-', 'Dónde vale: tienda y online, solo online (web o app) o solo en tienda. Solo online obliga a pedir online.'],
+    ['cam-alc-', 'Qué productos alcanza: toda la tienda, algunas categorías o productos elegidos.'],
+    ['cam-pf-', 'Precios fijos de la campaña (ej. 1000, 2000, 3000). Si un producto del proveedor cuesta uno de ellos, se sugiere esta campaña al cotizar.'],
+    ['cam-cl-', 'Palabras que, si aparecen en la página del producto, sugieren esta campaña. El nombre también cuenta.'],
+    ['cam-url-', 'Página donde el proveedor publica las condiciones.'],
+    ['cam-cond-', 'Notas: límites por cliente, locales válidos, etc.'],
     ['pv-pn-', 'Nombre de la promoción de despacho. Ej.: Despacho gratis Cyber, envío $990 en octubre.'],
     ['pv-pd-', 'Primer día en que vale la promoción.'],
     ['pv-ph-', 'Último día en que vale la promoción. Vacío = sin fecha de término.'],
@@ -6165,7 +6242,14 @@ window.CLOUD = {
       .concat([[CAMP_NUEVA, 'Es de otra campaña (nueva)…']]);
     const elegida = rec.vigentes.find(function (c) { return c.id === F.campana; });
     const sug = rec.sugerida && F.campana === rec.sugerida.campana.id ? rec.sugerida : null;
+    // descuentos del proveedor (ej. 10% comprando sobre $20.000): se aplican solos, por eso se anota el precio normal
+    const avisoDescuentos = rec.descuentos.length ? h('small', null, '🏷️ ' + (rec.proveedor ? rec.proveedor.nombre : d.lugar) + ' tiene ' +
+      rec.descuentos.map(function (c) {
+        return (Number(c.descuentoPct) > 0 ? App.num(Number(c.descuentoPct), 0) + '% de descuento' : (c.nombre || 'un descuento')) +
+          (E.compraMinima(c) ? ' comprando sobre ' + App.clp(E.compraMinima(c)) : '') + (c.canal === 'tienda' ? ' (solo en tienda)' : c.canal === 'online' ? ' (solo online)' : '');
+      }).join(' y ') + '. Anota el precio normal de la etiqueta: la app aplica el descuento sola cuando el pedido cumple las condiciones.') : null;
     return h('div', { class: 'stack' },
+      avisoDescuentos,
       h('label', { class: 'block' }, '🎯 ¿Es de una campaña?',
         App.select({ fk: d.fk + '-camp', value: F.campana || '', options: opciones, onChange: function (v) { F.campana = v; F.campanaTocada = true; App.render(); } })),
       sug ? h('small', { class: sug.confianza === 'alta' ? 'good-t' : 'mut' }, (sug.confianza === 'alta' ? '✓ Reconocida: ' : '¿Es esta? ') + sug.motivos.join(' · ')) : null,
@@ -6890,6 +6974,11 @@ window.CLOUD = {
           lg ? h('small', null, lg.modo + (lg.promo ? ' (' + lg.promo + ')' : '') + (lg.costo > 0.5 ? ' ' + App.clp(lg.costo) : '') + (App.plazoTxt(lg) ? ' · ' + App.plazoTxt(lg) : '')) : h('small', { class: 'bad-t' }, 'no alcanza el pedido mínimo y no se puede ir a buscar'),
           lg && lg.faltaMinimo > 0 ? h('small', { class: 'bad-t' }, 'faltan ' + App.clp(lg.faltaMinimo) + ' para el pedido mínimo') :
             lg && lg.faltaGratis > 0 ? h('small', { class: 'warn-t' }, 'faltan ' + App.clp(lg.faltaGratis) + ' para despacho gratis') : null,
+          (g.filas[0].minimosCampana || []).map(function (m) {
+            const que = (m.pct ? m.pct + '% ' : '') + '(' + m.nombre + ', sobre ' + App.clp(m.minimo) + ')';
+            return m.vale ? h('small', { class: 'good-t' }, '✓ descuento ' + que + ' aplicado')
+              : h('small', { class: 'warn-t', title: 'Sin llegar al mínimo, la lista va a precio normal' }, 'faltan ' + App.clp(m.falta) + ' para el descuento ' + que);
+          }),
           g.sinCampana ? h('small', { class: 'warn-t', title: 'La campaña no se acumula con la promoción de despacho' },
             'Sin ' + g.sinCampana.nombres.join(' ni ') + (g.sinCampana.despacho ? ' vale ' + g.sinCampana.despacho : '') + ' y saldría ' + App.clp(g.sinCampana.ahorro) + ' más barato') : null,
           h('span', { class: 'spacer' }),
@@ -7171,9 +7260,17 @@ window.CLOUD = {
         (function () {
           const cs = E.listaCampanas(App.ctx(), p.id).filter(function (x) { return x.estado !== 'vencida'; });
           return h('div', { class: 'row gap wrap' },
-            cs.length ? cs.map(function (x) { const est = ESTADO_PROMO[x.estado] || [x.estado, '']; return App.badge('🎯 ' + (x.campana.nombre || 'Campaña') + ' · ' + est[0], est[1]); })
-              : h('small', { class: 'mut' }, 'Sin campañas vigentes.'),
-            App.btn(cs.length ? 'Ver campañas' : '+ Agregar campaña', function () { if (cs.length) App.go('proveedores', 'campanas'); else App.crearCampana(p.id); }, 'small'));
+            cs.length ? cs.map(function (x) {
+              const c = x.campana, est = ESTADO_PROMO[x.estado] || [x.estado, ''];
+              const det = [c.tipo === 'descuento' && Number(c.descuentoPct) > 0 ? '−' + App.num(Number(c.descuentoPct), 0) + '%' : null,
+                E.compraMinima(c) ? 'sobre ' + App.clp(E.compraMinima(c)) : null, c.canal === 'tienda' ? 'solo en tienda' : c.canal === 'online' ? 'solo online' : null].filter(Boolean);
+              return App.badge('🎯 ' + (c.nombre || 'Campaña') + (det.length ? ' (' + det.join(', ') + ')' : '') + ' · ' + est[0], est[1]);
+            }) : h('small', { class: 'mut' }, 'Sin campañas vigentes.'),
+            App.btn(cs.length ? 'Ver campañas' : '+ Agregar campaña', function () { if (cs.length) App.go('proveedores', 'campanas'); else App.crearCampana(p.id); }, 'small'),
+            App.btn('+ Descuento por monto de compra', function () {
+              App.crearCampana(p.id, { nombre: 'Descuento por monto de compra', tipo: 'descuento', alcance: 'todo', canal: 'tienda', hasta: null, descuentoPct: null, compraMinima: null });
+              App.toast('Completa el % de descuento y la compra mínima');
+            }, 'small', 'Ej.: 10% en todo comprando sobre $20.000 en la tienda. Vale para la lista de compras y la canasta; en los costos, si tu compra semanal llega al mínimo'));
         })());
     };
 
@@ -8069,12 +8166,12 @@ window.CLOUD = {
     };
 
     const editor = function (x) {
-      const c = x.campana, p = x.proveedor, pid = p.id, cid = c.id, fk = 'cp-' + cid + '-';
+      const c = x.campana, p = x.proveedor, pid = p.id, cid = c.id, fk = function (k) { return 'cam-' + k + '-' + cid; };
       const set = function (k, v, key) { updC(pid, cid, function (y) { y[k] = v; }, key); };
       const chk = function (k, label, title, def) {
         return h('label', { class: 'chk', title: title || '' }, h('input', { type: 'checkbox', checked: c[k] != null ? !!c[k] : !!def, onchange: function (e) { set(k, e.target.checked); } }), ' ' + label);
       };
-      const fecha = function (k) { return h('input', { type: 'date', class: 'w-fecha', value: c[k] || '', 'data-fk': fk + k, onchange: function (e) { set(k, e.target.value || null); } }); };
+      const fecha = function (k) { return h('input', { type: 'date', class: 'w-fecha', value: c[k] || '', 'data-fk': fk(k), onchange: function (e) { set(k, e.target.value || null); } }); };
       const ac = E.acumulaDe(c);
       const setAc = function (k, v) { updC(pid, cid, function (y) { y.acumula = Object.assign({}, E.ACUMULA_DEF, y.acumula || {}); y.acumula[k] = v; }); };
       // excepción con otra campaña o promo: un toque invierte lo que diga la regla; otro toque vuelve a la regla
@@ -8097,13 +8194,14 @@ window.CLOUD = {
       const ofs = x.ofertas.slice().sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
       return h('div', { class: 'stack' },
         h('div', { class: 'form-grid' },
-          h('label', null, 'Nombre', App.textInput({ fk: fk + 'n', value: c.nombre || '', ph: 'ej. Barato a un click', onChange: function (v) { set('nombre', v, 'cpn' + cid); } })),
-          h('label', null, 'Tipo', App.select({ fk: fk + 't', value: c.tipo || 'precio', options: TIPOS_CAMP, onChange: function (v) { set('tipo', v); } })),
-          c.tipo === 'descuento' ? h('label', null, 'Descuento (%)', App.numInput({ fk: fk + 'pct', cls: 'w70', value: c.descuentoPct, ph: 'ej. 20', onChange: function (n) { set('descuentoPct', n, 'cpp' + cid); }, onEmpty: function () { set('descuentoPct', null); } })) : null,
+          h('label', null, 'Nombre', App.textInput({ fk: fk('n'), value: c.nombre || '', ph: 'ej. Barato a un click', onChange: function (v) { set('nombre', v, 'cpn' + cid); } })),
+          h('label', null, 'Tipo', App.select({ fk: fk('t'), value: c.tipo || 'precio', options: TIPOS_CAMP, onChange: function (v) { set('tipo', v); } })),
+          c.tipo === 'descuento' ? h('label', null, 'Descuento (%)', App.numInput({ fk: fk('pct'), cls: 'w70', value: c.descuentoPct, ph: 'ej. 20', onChange: function (n) { set('descuentoPct', n, 'cpp' + cid); }, onEmpty: function () { set('descuentoPct', null); } })) : null,
+          h('label', null, 'Compra mínima ($)', App.numInput({ fk: fk('min'), cls: 'w90', value: c.compraMinima, ph: 'sin mínimo', onChange: function (n) { set('compraMinima', n, 'cpm' + cid); }, onEmpty: function () { set('compraMinima', null); } })),
           h('label', null, 'Desde', fecha('desde')),
           h('label', null, 'Hasta (inclusive)', fecha('hasta')),
-          h('label', null, 'Dónde vale', App.select({ fk: fk + 'can', value: c.canal || 'todos', options: CANALES, onChange: function (v) { set('canal', v); } })),
-          h('label', null, 'Qué productos', App.select({ fk: fk + 'alc', value: c.alcance || (c.tipo === 'descuento' ? 'todo' : 'seleccionados'),
+          h('label', null, 'Dónde vale', App.select({ fk: fk('can'), value: c.canal || 'todos', options: CANALES, onChange: function (v) { set('canal', v); } })),
+          h('label', null, 'Qué productos', App.select({ fk: fk('alc'), value: c.alcance || (c.tipo === 'descuento' ? 'todo' : 'seleccionados'),
             options: c.tipo === 'descuento' ? [['todo', 'Toda la tienda'], ['categorias', 'Algunas categorías'], ['seleccionados', 'Productos elegidos']] : [['seleccionados', 'Productos seleccionados'], ['todo', 'Toda la tienda']],
             onChange: function (v) { set('alcance', v); } }))),
         c.tipo === 'descuento' && c.alcance === 'categorias' ? h('div', { class: 'chips' }, cats.map(function (k) {
@@ -8112,7 +8210,7 @@ window.CLOUD = {
         })) : null,
         c.tipo === 'descuento' && c.alcance === 'seleccionados' ? h('div', { class: 'row gap wrap' },
           insSel.map(function (i) { return App.chip(i.nombre + ' ✕', true, function () { updC(pid, cid, function (y) { y.insumos = (y.insumos || []).filter(function (z) { return z !== i.id; }); }); }); }),
-          h('select', { 'data-fk': fk + 'ins', onchange: function (e) { const v = e.target.value; if (v) updC(pid, cid, function (y) { y.insumos = (y.insumos || []).concat([v]); }); } },
+          h('select', { 'data-fk': fk('ins'), onchange: function (e) { const v = e.target.value; if (v) updC(pid, cid, function (y) { y.insumos = (y.insumos || []).concat([v]); }); } },
             h('option', { value: '' }, '+ agregar producto…'), s.insumos.filter(function (i) { return (c.insumos || []).indexOf(i.id) < 0; }).slice().sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); })
               .map(function (i) { return h('option', { value: i.id }, i.nombre); }))) : null,
         h('div', { class: 'row gap wrap' },
@@ -8133,12 +8231,12 @@ window.CLOUD = {
               return App.chip(o.nombre + (si ? ': ✓ se suma' : ': ✗ no se suma') + (exc ? ' (excepción)' : ''), exc, function () { ciclo(o); });
             })) : null),
         h('div', { class: 'form-grid' },
-          c.tipo !== 'descuento' ? h('label', null, 'Precios fijos (opcional)', App.textInput({ fk: fk + 'pf', value: listaTxt(c.preciosFijos), ph: 'ej. 1000, 2000, 3000',
+          c.tipo !== 'descuento' ? h('label', null, 'Precios fijos (opcional)', App.textInput({ fk: fk('pf'), value: listaTxt(c.preciosFijos), ph: 'ej. 1000, 2000, 3000',
             title: 'Si un producto de este proveedor cuesta uno de estos precios, se sugiere la campaña', onChange: function () {}, onCommit: function (v) { set('preciosFijos', aNumeros(v)); } })) : null,
-          h('label', null, 'Palabras para reconocerla', App.textInput({ fk: fk + 'cl', value: listaTxt(c.claves), ph: 'ej. barato a un click, cyber',
+          h('label', null, 'Palabras para reconocerla', App.textInput({ fk: fk('cl'), value: listaTxt(c.claves), ph: 'ej. barato a un click, cyber',
             title: 'Si la página del producto muestra alguna, se sugiere la campaña (también sirve su nombre)', onChange: function () {}, onCommit: function (v) { set('claves', aTextos(v)); } })),
-          h('label', null, 'Página de condiciones', App.textInput({ fk: fk + 'url', value: c.url || '', ph: 'https://…', onChange: function (v) { set('url', v.trim(), 'cpu' + cid); } }))),
-        h('label', { class: 'block' }, 'Condiciones (notas)', App.textInput({ fk: fk + 'cond', value: c.condiciones || '', ph: 'ej. válido en locales seleccionados, máximo 6 unidades por cliente',
+          h('label', null, 'Página de condiciones', App.textInput({ fk: fk('url'), value: c.url || '', ph: 'https://…', onChange: function (v) { set('url', v.trim(), 'cpu' + cid); } }))),
+        h('label', { class: 'block' }, 'Condiciones (notas)', App.textInput({ fk: fk('cond'), value: c.condiciones || '', ph: 'ej. válido en locales seleccionados, máximo 6 unidades por cliente',
           onChange: function (v) { set('condiciones', v, 'cpc' + cid); } })),
         h('div', { class: 'stack' },
           h('small', { class: 'mut' }, ofs.length ? 'Productos en esta campaña (' + ofs.length + ')' : 'Aún no hay productos: se suman al cotizar eligiendo esta campaña, o desde la bandeja de Cotizaciones.'),
@@ -8170,10 +8268,14 @@ window.CLOUD = {
       return App.card(titulo, abierta ? editor(x) : h('div', { class: 'stack' },
         h('div', { class: 'row gap wrap' }, App.badge(est[0], est[1]), App.badge(vigencia(x), x.estado === 'vigente' && x.diasRestantes != null && x.diasRestantes <= 3 ? 'warn' : 'info'),
           c.tipo === 'descuento' ? App.badge('−' + App.num(Number(c.descuentoPct) || 0, 0) + '%', 'good') : null,
+          E.compraMinima(c) ? App.badge('comprando sobre ' + App.clp(E.compraMinima(c)), 'info') : null,
           c.canal === 'online' ? App.badge('🌐 solo online', 'info') : c.canal === 'tienda' ? App.badge('🏬 solo en tienda', 'info') : null,
           c.excluyeFactura ? App.badge('sin factura', 'warn') : null, c.hastaAgotarStock ? App.badge('hasta agotar stock', '') : null,
           c.requiereMembresia ? App.badge('⭐ socio', 'info') : null, c.usarEnCostos === false ? App.badge('no entra a los costos', '') : null),
         h('small', { class: 'mut' }, resumenAcumula(p, c)),
+        x.minimo ? h('small', { class: x.minimo.alcanza ? 'good-t' : 'warn-t' }, x.minimo.alcanza
+          ? '✓ Tu compra semanal aquí (~' + App.clp(x.minimo.monto) + ') llega al mínimo: el descuento entra a los costos'
+          : 'Tu compra semanal aquí (~' + App.clp(x.minimo.monto) + ') no llega al mínimo (faltan ' + App.clp(x.minimo.falta) + '): no entra a los costos; la lista de compras lo aplica si el pedido llega') : null,
         h('div', null, x.nOfertas + ' producto(s)' + (x.nPendientes ? ' · ' + x.nPendientes + ' por revisar' : ''),
           x.ahorroSemana > 0 ? h('span', { class: 'good-t' }, ' · ahorro ~' + App.clp(x.ahorroSemana) + '/semana con tu consumo') : null),
         c.condiciones ? h('small', { class: 'mut' }, '“' + c.condiciones + '”') : null), abierta ? 'abierta' : '',
@@ -8497,7 +8599,7 @@ window.CLOUD = {
         paso('⭐', 'Opinión', 'Un insumo sirve (o no) para algo. Anota marca y dónde se compró.', avisos),
         h('h4', null, 'Anotar un precio que viste'),
         paso('➕', 'Cotizar desde una página web', 'En el computador: arrastra el botón ➕ Cotizar a tu barra de favoritos y úsalo en la página del producto. En el celular: copia el enlace y pégalo. Todo viene escrito: solo revisa y envía. Si falta algo, envíalo igual: el gerente lo completa.', function () { App.go('capturar'); }),
-        paso('🏷️', 'Cotizar a mano', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha. Si es de una campaña del lugar (ej. Barato a un click), elígela en "¿Es de una campaña?"; si no existe, marca "nueva".', function () { App.go('cotizaciones'); }),
+        paso('🏷️', 'Cotizar a mano', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha. Si es de una campaña del lugar (ej. Barato a un click), elígela en "¿Es de una campaña?"; si no existe, marca "nueva". Si avisa un descuento por monto de compra, anota el precio normal: el descuento lo pone la app.', function () { App.go('cotizaciones'); }),
         h('h4', null, 'Ver recetas'),
         paso('📖', 'Cocina', 'Ingredientes y pasos. Elige las porciones y las cantidades se ajustan.', function () { App.go('cocina'); }),
         paso('🥗', 'Producción del día', 'Platos, más las entradas, ensaladas y postres de los combos (estimados) y los bebestibles envasados a despachar.', function () { App.go('cocina', 'dia'); }),
