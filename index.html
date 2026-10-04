@@ -246,9 +246,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T02:34:09Z">
+<meta name="build" content="2026-10-04T03:24:12Z">
 <script>
-window.BUILD = "2026-10-04T02:34:09Z";
+window.BUILD = "2026-10-04T03:24:12Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2254,6 +2254,16 @@ window.CLOUD = {
     var cerca = out.precios.slice().sort(function (a, b) { return Math.abs(a.dy) - Math.abs(b.dy); });
     out.precios = cerca.filter(function (p) { return conocidos.indexOf(cifra(p)) >= 0; }).slice(0, 4)
       .concat(cerca.filter(function (p) { return p.dy > -1200 && p.dy < 1600 && conocidos.indexOf(cifra(p)) < 0; }).slice(0, 10));
+    // etiqueta de precio exclusivo de la web ("Exclusivo .cl", "Solo online"): en la ventana del producto, o cerca del título/precio
+    var yRef = ref ? y0 : out.precios.length ? out.precios[0].dy : null, soloWeb = /exclusivo\s*\.?\s*(cl|web|online)|solo\s*(por\s*)?(web|online|internet|en\s*l[ií]nea)|precio\s*(web|online)|web\s*exclusiv/i;
+    [].some.call((modal || d).querySelectorAll('*'), function (e) {
+      if (e.children.length || !soloWeb.test(limpio(e.textContent, 60)) || limpio(e.textContent, 60).length > 40) return false;
+      var re2 = e.getBoundingClientRect();
+      if (!re2.width || !re2.height || (corte && (corte.compareDocumentPosition(e) & 4))) return false;
+      // sin ventana: la etiqueta está sobre el título/precio del producto, no en las tarjetas de productos similares que van más abajo
+      if (!modal && (yRef == null || re2.top + scrollY - yRef < -350 || re2.top + scrollY - yRef > 40)) return false;
+      out.soloWeb = true; return true;
+    });
     // frases útiles: compra mínima, precio por kilo/litro, formato del envase
     var texto = limpio(modal ? modal.innerText.split(/productos similares|tambi[eé]n te podr/i)[0] : d.body.innerText, 20000), re = /(compra m[ií]nima[^\n.]{0,30}|m[ií]nimo de \d+[^\n.]{0,20}|\$\s?[\d.]+(?:,\d+)?\s*(?:x|por|\/)\s*(?:kg|kilo|lt|l|litro|un|unidad|100\s?g|100\s?ml)\b|llev[aá]\s*\d+[^\n.]{0,40}|\d+\s*x\s*\$\s?[\d.]+)/gi, m;
     while ((m = re.exec(texto)) && out.textos.length < 10) out.textos.push(limpio(m[1], 80));
@@ -2559,7 +2569,7 @@ window.CLOUD = {
       url: raw.url || '', host: raw.host || '', nombre: nombre, tituloOriginal: String(ld.nombre || quitarSitio(og.title) || raw.h1 || quitarSitio(raw.titulo) || raw.nombre || '').replace(/\s+/g, ' ').trim(), nombreLimpio: limpio.nombre || nombre, extras: limpio.extras || [], variedad: limpio.variedad || [],
       etiquetas: etiquetas([nombre, raw.h1, og.description, ld.descripcion]), dieta: dietaSugerida(nombre), marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
-      formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
+      soloWeb: !!raw.soloWeb, formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
       insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
     };
   }
@@ -5389,21 +5399,21 @@ window.CLOUD = {
       if (F.porCantidad && (!((F.pcMin || 2) >= 2) || !(F.pcPrecio > 0) || !(F.pcPrecio < F.precio))) { App.toast('Promo por cantidad: indica desde cuántas unidades y un precio por unidad menor al normal'); return; }
       const u = yo();
       Store.mutate(function (st) {
-        const prov = staff ? App.vincularProveedor(st, F.lugar) : null;   // quien no es staff no edita proveedores: se vincula por nombre al revisarla
+        // toda cotización (de cualquier rol) queda por revisar; el proveedor se vincula (o se crea) al aprobarla
+        const prov = null;
         st.ofertas.push({ id: Store.uid('OF-'), insumoId: ins.id, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(), formatoLabel: F.fl || ins.unidad,
           formatoQty: F.fq, precio: F.precio, rendimiento: null, fecha: App.hoy(), fuente: 'cotizacion', disponible: true, preferida: false,
-          pendiente: !staff, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim(), temporal: F.temporal ? { hasta: F.hasta } : undefined,
+          pendiente: true, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim(), temporal: F.temporal ? { hasta: F.hasta } : undefined,
           soloOnline: F.online || undefined, requiereMembresia: F.membresia || undefined,
           promoCantidad: F.porCantidad ? { minimo: F.pcMin || 2, precio: F.pcPrecio, desde: App.hoy(), hasta: F.pcHasta || enUnaSemana() } : undefined });
       });
-      App.toast(F.temporal ? (staff ? 'Oferta temporal agregada: actívala en Proveedores → Ofertas y sobrestock' : 'Oferta temporal enviada para revisión 🔥')
-        : staff ? 'Cotización agregada como alternativa' : 'Cotización enviada para revisión');
+      App.toast(F.temporal ? 'Oferta temporal enviada a revisión 🔥' : 'Cotización enviada a revisión');
       App.ui.cot = { insumo: '', lugar: F.lugar, marca: '', fl: '', fq: null, precio: null, nota: '', temporal: false, hasta: enUnaSemana(), online: false, membresia: false, porCantidad: false, pcMin: 2, pcPrecio: null, pcHasta: null };
       App.render();
     };
 
     return App.card('Registrar una cotización', h('div', { class: 'stack' },
-      h('p', { class: 'help' }, staff ? 'Agrega precios que viste en otro lugar o marca. Quedan como alternativa; para usarlos márcalos en Insumos o en la bandeja de abajo.'
+      h('p', { class: 'help' }, staff ? 'Anota precios que viste en otro lugar o marca. Todas las cotizaciones, también las tuyas, quedan en la bandeja "Por revisar" de abajo: ahí decides si se usan.'
         : 'Anota un precio que viste (feria, almacén, supermercado). El gerente lo revisa y decide si se usa.'),
       h('div', { class: 'form-grid' },
         h('label', null, 'Insumo', App.textInput({ fk: 'cot-ins', value: F.insumo, list: 'dl-cot-ins', ph: 'Escribe y elige de la lista…',
@@ -5430,7 +5440,7 @@ window.CLOUD = {
         F.temporal ? h('span', { class: 'row gap' }, h('span', { class: 'mut' }, 'válida hasta'),
           h('input', { type: 'date', value: F.hasta, min: App.hoy(), 'data-fk': 'cot-hasta', onchange: function (ev) { F.hasta = ev.target.value; } })) : null),
       h('label', { class: 'block' }, 'Nota (opcional)', App.textInput({ fk: 'cot-nota', value: F.nota, ph: 'ej. precio de oferta, calidad, solo los sábados…', onChange: function (v) { F.nota = v; } })),
-      h('div', null, App.btn(staff ? 'Agregar cotización' : 'Enviar cotización', enviar, 'primary')),
+      h('div', null, App.btn('Enviar cotización', enviar, 'primary')),
       h('datalist', { id: 'dl-cot-ins' }, s.insumos.filter(function (i) { return i.categoria !== 'Envases' || staff; }).map(function (i) { return h('option', { value: i.nombre }); })),
       h('datalist', { id: 'dl-cot-lugar' }, lugares.map(function (l) { return h('option', { value: l }); }))));
   }
@@ -5442,7 +5452,7 @@ window.CLOUD = {
     if (!y.proveedorId && y.lugar) {
       const antes = (st.proveedores || []).length;
       const p = App.vincularProveedor(st, y.lugar);
-      if (p) { y.proveedorId = p.id; y.lugar = p.nombre; if ((st.proveedores || []).length > antes && y.fuente === 'web') p.porCompletar = true; }
+      if (p) { y.proveedorId = p.id; y.lugar = p.nombre; if ((st.proveedores || []).length > antes) p.porCompletar = true; }
     }
     if (y.fuente !== 'web' || !y.url) return;
     const p = y.proveedorId && (st.proveedores || []).find(function (x) { return x.id === y.proveedorId; });
@@ -5618,7 +5628,7 @@ window.CLOUD = {
       // sin un insumo claro queda como producto nuevo (con nombre limpio): enviar nunca se bloquea; el admin lo une a uno existente si corresponde
       insumoId: r.insumo ? r.insumo.id : NUEVO, nombreNuevo: r.nombreLimpio || r.nombre, unidadNueva: r.unidadNueva,
       precio: r.precio, precioNormal: r.precioNormal, oferta: !!r.precioNormal, hasta: '',
-      promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: r.tituloOriginal || r.nombre || '', fq: null, fl: '',
+      online: !!r.soloWeb, promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: r.tituloOriginal || r.nombre || '', fq: null, fl: '',
       variedad: (r.variedad || []).join(', '), etiquetas: (r.etiquetas || []).slice(), dieta: r.dieta
     };
     elegirFormato(U);
@@ -5665,19 +5675,18 @@ window.CLOUD = {
           etiquetas: F.etiquetas && F.etiquetas.length ? F.etiquetas.slice() : undefined });
         if (F.dieta) st.insumos[st.insumos.length - 1].dieta = F.dieta;
       }
-      const antes = (st.proveedores || []).length;
-      const prov = staff ? App.vincularProveedor(st, F.lugar) : null;   // quien no es staff no edita proveedores: se vincula al revisar
-      if (prov && (st.proveedores || []).length > antes) prov.porCompletar = true;
+      const prov = null;   // todas las cotizaciones quedan por revisar: el proveedor se vincula (o se crea) al aprobarla
       const base = { insumoId: insumoId, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(),
         formatoLabel: F.fl || unidad, formatoQty: sinFormato ? null : F.fq, rendimiento: null, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
-        pendiente: !staff || sinPrecio || sinFormato, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, tituloWeb: r.tituloOriginal || r.nombre || undefined, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
+        pendiente: true, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, tituloWeb: r.tituloOriginal || r.nombre || undefined, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
       const promo = F.promo && r.promoCantidad ? { minimo: r.promoCantidad.minimo, precio: r.promoCantidad.precio, desde: hoy, hasta: masDias(7), hastaPorConfirmar: true } : undefined;
       const lista = [];
       // oferta con precio normal visible: se guardan las dos (la normal es el precio de reposición)
       if (conNormal) lista.push(Object.assign({}, base, { precio: F.precioNormal, promoCantidad: promo }));
       lista.push(Object.assign({}, base, { precio: sinPrecio ? null : F.precio, promoCantidad: F.oferta ? undefined : promo,
-        temporal: F.oferta ? { hasta: hasta } : undefined, hastaPorConfirmar: F.oferta && !F.hasta ? true : undefined }));
-      lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); if (staff) App.aprenderCotizacion(st, o); });
+        temporal: F.oferta ? { hasta: hasta } : undefined, hastaPorConfirmar: F.oferta && !F.hasta ? true : undefined,
+        soloOnline: F.online || undefined }));   // el precio exclusivo de la web va en la cotización que se paga (la normal, si hay, no lo es)
+      lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); });
     });
     olvidar();
     App.ui.cap = { enviado: { n: ids.length, nombre: nuevo ? F.nombreNuevo.trim() : (App.insumo(insumoId) || {}).nombre, nuevo: nuevo, staff: staff && !sinPrecio && !sinFormato,
@@ -5723,7 +5732,7 @@ window.CLOUD = {
       h('p', null, e.n === 2 ? 'Se guardaron dos precios de ' : 'Se guardó el precio de ', h('b', null, e.nombre || 'el producto'),
         e.n === 2 ? ': la oferta 🔥 y el precio normal.' : '.'),
       e.faltan && e.faltan.length ? h('p', { class: 'help' }, 'Faltó ' + e.faltan.join(' y ') + ': queda por confirmar en la bandeja de Cotizaciones.') : null,
-      h('p', { class: 'help' }, e.staff ? 'Quedó como alternativa: para usarla en los costos márcala en Cotizaciones o en Insumos.'
+      h('p', { class: 'help' }, e.staff ? 'Quedó en Cotizaciones → Por revisar: ahí decides si se usa en los costos.'
         : 'El gerente la revisa y decide si se usa.' + (e.nuevo ? ' Como es un producto nuevo, también completará sus datos.' : '')),
       h('div', { class: 'row gap wrap' },
         App.btn('Cerrar esta pestaña', function () { window.close(); setTimeout(function () { App.toast('Ciérrala con la ✕ de la pestaña'); }, 300); }, 'primary'),
@@ -5787,6 +5796,8 @@ window.CLOUD = {
           h('div', { class: 'help' }, 'Equivale a ', h('b', null, precioPorBase(F.precio, F.fq, unidad)), F.oferta && F.precioNormal ? ' (normal ' + precioPorBase(F.precioNormal, F.fq, unidad) + ')' : '', '.')) : null,
 
         h('div', { class: 'stack' },
+          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.online, onchange: function (ev) { F.online = ev.target.checked; } }), ' 🌐 Precio solo comprando online',
+            r.soloWeb ? h('small', { class: 'good-t' }, ' (la página lo marca como exclusivo web)') : null),
           h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.oferta, onchange: function (ev) { F.oferta = ev.target.checked; App.render(); } }), ' 🔥 Está en oferta'),
           F.oferta ? h('div', { class: 'stack indent' },
             h('label', { class: 'row gap wrap' }, h('span', { class: 'mut' }, 'Precio normal (sin oferta)'),
