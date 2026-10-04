@@ -14,10 +14,12 @@
   --seg0: #0f766e; --seg1: #2563a8; --seg2: #b45309; --seg3: #7c3aed; --seg4: #be185d; --seg5: #4d7c0f; --seg6: #0e7490; --seg7: #9ca3af;
   /* planificar compras: categórica validada (validate_palette) en claro y oscuro; pagas = neutro */
   --cv1: #2563a8; --cv2: #b45309; --cv3: #7c3aed; --cv4: #be185d; --cv5: #4d7c0f; --cv0: #a8aea9;
+  color-scheme: light;
   --radius: 10px; --font: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
+    color-scheme: dark;   /* calendario, reloj e íconos de fecha/hora en oscuro */
     --bg: #14181a; --surface: #1d2326; --surface2: #262d30; --ink: #e8ece9; --mut: #96a09a; --line: #333c40;
     --accent: #2dd4bf; --accent-ink: #062a26; --accent-soft: #123a36;
     --good: #5fd08a; --good-soft: #17341f; --warn: #f0b05a; --warn-soft: #3b2c10; --bad: #ff8a7d; --bad-soft: #3d1b18; --info: #7db7f0; --info-soft: #17283a;
@@ -35,7 +37,7 @@ a { color: var(--accent); }
 p { margin: 0 0 8px; }
 small { font-size: 12px; color: var(--mut); }
 button, input, select, textarea { font: inherit; color: inherit; }
-input[type=text], input[type=email], input[type=password], input:not([type]), select, textarea {
+input[type=text], input[type=email], input[type=password], input[type=date], input[type=time], input[type=number], input:not([type]), select, textarea {
   background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; min-width: 0; max-width: 100%;
 }
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -213,7 +215,9 @@ b.big { font-size: 22px; }
 .tbl.prov td { vertical-align: top; } .desp { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; font-size: 12px; color: var(--mut); }
 .desp span { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 select.w-prov { width: 160px; }
-.tbl tr.sub-row > td { background: var(--surface2); padding: 10px 12px; } .montos { align-items: flex-end; }
+.tbl tr.sub-row > td { background: var(--surface2); padding: 10px 12px; }
+/* la ficha toma el ancho de la tabla sin estirarla: sus tablas anchas se desplazan dentro (scroll-x) */
+.tbl tr.sub-row > td > * { width: 0; min-width: 100%; } .montos { align-items: flex-end; }
 .tbl.sub { background: var(--surface2); border-radius: 8px; }
 .chart-wrap { width: 100%; overflow: hidden; } .chart { width: 100%; height: auto; display: block; }
 .chart .grid { stroke: var(--line); stroke-width: 1; } .chart .axis { fill: var(--mut); font-size: 11px; }
@@ -273,9 +277,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T12:00:22Z">
+<meta name="build" content="2026-10-04T12:14:59Z">
 <script>
-window.BUILD = "2026-10-04T12:00:22Z";
+window.BUILD = "2026-10-04T12:14:59Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
