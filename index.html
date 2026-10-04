@@ -230,6 +230,11 @@ input.grande { font-size: 20px; font-weight: 600; width: 150px; }
 .btn.marcador { cursor: grab; }
 ol.pasos li { margin: 6px 0; }
 .view-capturar { max-width: 720px; margin: 0 auto; }
+.badge-btn { cursor: pointer; border: 0; font: inherit; font-size: 11px; font-weight: 600; }
+.badge-btn:hover { filter: brightness(1.08); text-decoration: underline; }
+.fecha-btn { position: relative; display: inline-block; }
+.fecha-oculta { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+.fecha-oculta.visible { position: static; width: auto; height: auto; opacity: 1; pointer-events: auto; font-size: 12px; padding: 2px 4px; }
 
 </style>
 </head>
@@ -237,9 +242,9 @@ ol.pasos li { margin: 6px 0; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-04T00:57:31Z">
+<meta name="build" content="2026-10-04T01:14:13Z">
 <script>
-window.BUILD = "2026-10-04T00:57:31Z";
+window.BUILD = "2026-10-04T01:14:13Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2296,12 +2301,23 @@ window.CLOUD = {
     let m = marca || '';
     const candidatas = [marca, sitio].concat(marcasConocidas || [], MARCAS).filter(Boolean).sort(function (a, b) { return b.length - a.length; });
     candidatas.forEach(function (c) { const r = quitarFrase(t, c); if (r.hubo) { t = r.texto; if (!m && c !== sitio) m = c; } });
+    // el grado sí importa (arroz grado 1, lentejas grado 2): se protege antes de quitar números y tamaños
+    t = t.replace(/\bgrado\s*(\d)\b/gi, function (x, d) { return 'GRADO§' + d; }).replace(/\bg([1-3])\b/gi, function (x, d) { return 'GRADO§' + d; })
+      .replace(/\b(\d+)\s*mm\b/gi, function (x, d) { return 'MM§' + d; });   // calibre de legumbres (lentejas 6 mm)
     t = t.replace(/(?:\d+\s*x\s*)?\d+(?:[.,]\d+)?\s*(kgs?|kilos?|k|grs?|gramos?|g|lts?|litros?|l|ml|cc|unidades?|unid|und|uds?|un|u)\b\.?/gi, ' ');
-    t = t.split(/\s+/).filter(function (w) { const n = norm(w); return n && ENVASES.indexOf(n) < 0 && n !== 'x' && !/^\d+$/.test(n); }).join(' ');
+    // palabras de venta ("premium", "selección") no van en el nombre: pasan a la nota
+    const extras = [];
+    t = t.split(/\s+/).filter(function (w) {
+      const n = norm(w);
+      if (VENTA.indexOf(n) >= 0) { extras.push(tituloBonito(n === 'seleccion' ? 'selección' : n)); return false; }
+      return n && ENVASES.indexOf(n) < 0 && n !== 'x' && !/^\d+$/.test(n);
+    }).join(' ');
     for (let k = 0; k < 3; k++) t = t.replace(/^(de|con|en|y|para)\s+/i, '').replace(/\s+(de|con|en|y|sin|para|x)$/i, '').trim();
     t = t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : '';
-    return { nombre: t, marca: m ? tituloBonito(m) : '' };
+    t = t.replace(/grado§(\d)/gi, function (x, d) { return 'grado ' + d; }).replace(/mm§(\d+)/gi, function (x, d) { return d + ' mm'; });
+    return { nombre: t, marca: m ? tituloBonito(m) : '', extras: extras };
   }
+  const VENTA = ['premium', 'gourmet', 'selecto', 'selecta', 'seleccion', 'select', 'deluxe', 'gold', 'oro', 'exclusivo', 'exclusiva', 'nuevo', 'nueva', 'oferta', 'promo', 'especialidad', 'superior', 'tradicional', 'clasico', 'clasica', 'original'];
   const LIQUIDOS = /\b(aceite|leche|crema|vinagre|jugo|nectar|bebida|agua|vino|salsa de soya|gaseosa|refresco|cerveza|caldo liquido)\b/;
 
   /* formato del envase: "5 L", "6 x 350 ml", "400GR", "Bolsa 10 und", "1 Kilo" → {g|ml|un: {qty, label}} */
@@ -2463,7 +2479,7 @@ window.CLOUD = {
     const marcasConocidas = Array.from(new Set((state.ofertas || []).map(function (o) { return o.marca; }).filter(function (m) { return m && m.length >= 3; })));
     const limpio = limpiarNombre(nombre, marca, sitio, marcasConocidas);
     return {
-      url: raw.url || '', host: raw.host || '', nombre: nombre, nombreLimpio: limpio.nombre || nombre, marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
+      url: raw.url || '', host: raw.host || '', nombre: nombre, nombreLimpio: limpio.nombre || nombre, extras: limpio.extras || [], marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
       formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: promoCantidad(raw.textos, p.actual),
       insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
@@ -5317,13 +5333,26 @@ window.CLOUD = {
     ins.enlaces.push({ url: y.url, host: y.host || '', sku: y.sku || '' });
     if (ins.enlaces.length > 12) ins.enlaces.shift();
   };
+  // "📅 fecha por confirmar" es en sí el botón: abre el calendario del navegador sin dejar un campo a la vista
+  function botonFecha(o) {
+    const fijar = function (v) {
+      if (!v) return;
+      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); if (y && y.temporal) { y.temporal.hasta = v; delete y.hastaPorConfirmar; } });
+      App.toast('Oferta válida hasta el ' + App.fechaCorta(v));
+    };
+    const inp = h('input', { type: 'date', class: 'fecha-oculta', min: App.hoy(), value: (o.temporal && o.temporal.hasta) || '', tabindex: '-1', 'aria-hidden': 'true',
+      onchange: function (ev) { fijar(ev.target.value); } });
+    return h('span', { class: 'fecha-btn' },
+      h('button', { type: 'button', class: 'badge warn badge-btn', title: 'Elegir hasta cuándo dura la oferta',
+        onclick: function () { try { inp.showPicker(); } catch (e) { inp.classList.add('visible'); inp.focus(); } } }, '📅 fecha por confirmar'), inp);
+  }
   function badgesWeb(o, ins, s) {
     const provNuevo = !o.proveedorId && !(s.proveedores || []).some(function (p) { return E.normNombre(p.nombre) === E.normNombre(o.lugar) || (p.alias || []).some(function (a) { return E.normNombre(a) === E.normNombre(o.lugar); }); });
     return h('div', { class: 'row gap wrap' },
       o.fuente === 'web' && o.url ? h('a', { href: o.url, target: '_blank', rel: 'noopener', class: 'badge info' }, '🌐 desde web ↗') : null,
       ins && ins.propuesto ? App.badge('🆕 producto nuevo', 'warn') : null,
       provNuevo && o.lugar ? App.badge('🏪 proveedor nuevo', 'warn') : null,
-      o.hastaPorConfirmar ? App.badge('📅 fecha por confirmar', 'warn') : null,
+      o.hastaPorConfirmar ? botonFecha(o) : null,
       o.precioPorConfirmar ? App.badge('💲 precio por confirmar', 'warn') : null,
       o.formatoPorConfirmar ? App.badge('📦 formato por confirmar', 'warn') : null);
   }
@@ -5365,7 +5394,6 @@ window.CLOUD = {
       h('thead', null, h('tr', null, ['Insumo', 'Dónde / quién', 'Formato y precio', 'vs. en uso', 'Impacto/mes', ''].map(function (t, i) { return h('th', { class: i === 3 || i === 4 ? 'r' : '' }, t); }))),
       h('tbody', null, pend.map(function (o) {
         const ins = s.insumos.find(function (i) { return i.id === o.insumoId; }) || { nombre: '?', unidad: 'g' };
-        const fijarHasta = function (v) { Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); if (v && y.temporal) { y.temporal.hasta = v; delete y.hastaPorConfirmar; } }); };
         const actual = E.costoInsumo(ctx, o.insumoId);
         const completar = function (fn) { Store.mutate(function (st) { fn(st.ofertas.find(function (x) { return x.id === o.id; })); }); };
         const nuevo = E.costoNetoOferta(ctx, o), sinDatos = o.precioPorConfirmar || o.formatoPorConfirmar;
@@ -5374,8 +5402,7 @@ window.CLOUD = {
         return h('tr', null,
           h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(o.insumoId) }, ins.nombre), h('div', null, h('small', null, (App.usoMap().get(o.insumoId) || []).length + ' platos'))),
           h('td', null, badgesWeb(o, ins, s), o.temporal ? h('div', null, App.badgeTemporal(o)) : null,
-            o.hastaPorConfirmar ? h('div', { class: 'row gap' }, h('small', { class: 'mut' }, 'dura hasta'), h('input', { type: 'date', min: App.hoy(), 'data-fk': 'hasta-' + o.id, onchange: function (ev) { fijarHasta(ev.target.value); } })) : null,
-            App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
+            App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca && E.normNombre(o.marca) !== E.normNombre(o.lugar) ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
           h('td', null, o.precioPorConfirmar || o.formatoPorConfirmar ? h('div', { class: 'stack' },
               o.precioPorConfirmar ? h('label', { class: 'row gap' }, h('small', { class: 'mut' }, 'precio $'), App.numInput({ fk: 'pc-p-' + o.id, cls: 'w80', ph: 'precio',
                 onBlur: function (ev) { const n = App.parseNum(ev.target.value); if (n > 0) completar(function (y) { y.precio = n; delete y.precioPorConfirmar; }); } })) : h('span', null, App.clp(o.precio)),
@@ -5471,7 +5498,7 @@ window.CLOUD = {
       // sin un insumo claro queda como producto nuevo (con nombre limpio): enviar nunca se bloquea; el admin lo une a uno existente si corresponde
       insumoId: r.insumo ? r.insumo.id : NUEVO, nombreNuevo: r.nombreLimpio || r.nombre, unidadNueva: r.unidadNueva,
       precio: r.precio, precioNormal: r.precioNormal, oferta: !!r.precioNormal, hasta: '',
-      promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: '', fq: null, fl: ''
+      promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: (r.extras || []).join(', '), fq: null, fl: ''
     };
     elegirFormato(U);
   }
