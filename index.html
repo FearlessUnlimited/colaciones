@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T10:31:04Z">
+<meta name="build" content="2026-10-05T11:14:58Z">
 <script>
-window.BUILD = "2026-10-05T10:31:04Z";
+window.BUILD = "2026-10-05T11:14:58Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -297,6 +297,7 @@ window.CLOUD = {
  *  - La cantidad de cada línea de receta es peso/volumen UTILIZABLE tal como se compra (lentejas SECAS,
  *    arroz CRUDO, carne cruda sin hueso). Todas las cantidades están en la unidad base del insumo (g, ml, un).
  *  - El rendimiento (<=100%) es solo merma de limpieza/pelado; la merma de cocción NO se aplica al costo.
+ *    En conservas es drenado / neto: el formato es el peso neto y a las recetas va lo drenado (cada cotización puede tener el suyo).
  *  - Costo neto por unidad base = precio del formato / (cantidad del formato * rendimiento).
  */
 (function (root) {
@@ -3126,7 +3127,8 @@ window.CLOUD = {
     t = t.split(/\s+/).filter(function (w) {
       const n = norm(w);
       if (VENTA.indexOf(n) >= 0) { extras.push(tituloBonito(n === 'seleccion' ? 'selección' : n)); return false; }
-      return n && ENVASES.indexOf(n) < 0 && n !== 'x' && !/^\d+$/.test(n);
+      // "drenado", "neto": describen el peso de una conserva, no el producto
+      return n && ENVASES.indexOf(n) < 0 && n !== 'x' && !/^\d+$/.test(n) && ['drenado', 'drenada', 'neto', 'neta', 'escurrido', 'peso'].indexOf(n) < 0;
     }).join(' ');
     for (let k = 0; k < 3; k++) t = t.replace(/^(de|con|en|y|para)\s+/i, '').replace(/\s+(de|con|en|y|sin|para|x)$/i, '').trim();
     t = t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : '';
@@ -3225,17 +3227,44 @@ window.CLOUD = {
       else if (u === '100ml') cand.push({ unidad: 'ml', porBase: n * 10 });
       else cand.push({ unidad: /^(kg|kilo)$/.test(u) ? 'g' : /^(un|unidad)$/.test(u) ? 'un' : 'ml', porBase: n });
     }
-    const razon = promo && actual > 0 ? promo.precio / actual : null;
-    const dePromo = function (c) { return razon != null && cand.some(function (d) { return d !== c && d.unidad === c.unidad && Math.abs(c.porBase / d.porBase - razon) < 0.02; }); };
+    const razones = actual > 0 ? [].concat(promo || []).map(function (x) { return x.precio / actual; }) : [];
+    const dePromo = function (c) { return razones.some(function (razon) { return cand.some(function (d) { return d !== c && d.unidad === c.unidad && Math.abs(c.porBase / d.porBase - razon) < 0.02; }); }); };
     return cand.filter(function (c) { return !dePromo(c); })[0] || null;
   }
-  // "2 x $1.000" o "Lleva 2 por $1.000" → {minimo: 2, precio: 500} (precio por unidad llevando el mínimo)
-  function promoCantidad(textos, actual) {
+  // "2 x $1.000" o "Lleva 2 por $1.000" → {minimo: 2, precio: 500} (precio por unidad llevando el mínimo).
+  // Una página puede traer varias (Santa Isabel: "Lleva 3 por $3.190" y, con su tarjeta, "Lleva 3 por $2.990"): se devuelven todas
+  function promosCantidad(textos, actual) {
+    const out = [];
     for (const t of textos || []) {
       const m = /(\d+)\s*(?:x|por)\s*\$\s?([\d.]+)/i.exec(t);
       if (!m) continue;
-      const n = parseInt(m[1], 10), total = numero(m[2]);
-      if (n >= 2 && total > 0 && (!actual || total / n < actual)) return { minimo: n, precio: Math.round(total / n) };
+      const n = parseInt(m[1], 10), total = numero(m[2]), p = { minimo: n, precio: Math.round(total / n), total: total };   // total: lo que se paga llevando el mínimo, exacto
+      if (n >= 2 && total > 0 && (!actual || total / n < actual) && !out.some(function (x) { return x.minimo === p.minimo && x.precio === p.precio; })) out.push(p);
+    }
+    return out;
+  }
+  function promoCantidad(textos, actual) { return promosCantidad(textos, actual)[0] || null; }
+  /* conservas: "142 g neto - 92 g drenado", "Drenado 104 g - Neto 160 g", "Pack 3 un. … 56 g drenado, 80 g neto".
+     Se vende por el peso neto (el formato); a las recetas va lo drenado: rendimiento = drenado / neto, propio de cada marca y formato */
+  function pesosConserva(textos) {
+    const num = function (v, u) { return parseFloat(String(v).replace(',', '.')) * (/^k/.test(u) ? 1000 : 1); };
+    // "92 g drenado" / "drenado 104 g" (también "peso drenado: 104 g"); lo mismo con "neto"
+    const RE = {
+      drenado: [/(\d+(?:\.\d+)?)\s*(kgs?|kilos?|grs?|gramos?|g)\b\.?\s*(?:peso\s+)?drenado/, /drenado\s*:?\s*(\d+(?:\.\d+)?)\s*(kgs?|kilos?|grs?|gramos?|g)\b/],
+      neto: [/(\d+(?:\.\d+)?)\s*(kgs?|kilos?|grs?|gramos?|g)\b\.?\s*(?:peso\s+)?neto/, /neto\s*:?\s*(\d+(?:\.\d+)?)\s*(kgs?|kilos?|grs?|gramos?|g)\b/]
+    };
+    const busca = function (t, palabra) {
+      const m = RE[palabra][0].exec(t) || RE[palabra][1].exec(t);
+      return m ? num(m[1], m[2]) : null;
+    };
+    for (const txt of [].concat(textos).filter(Boolean)) {
+      // sin quitar la puntuación: el guion o la coma separan "drenado 104 g - neto 160 g" (si no, "104 g neto" parecería el neto)
+      const t = String(txt).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/(\d),(\d)/g, '$1.$2');
+      const dren = busca(t, 'drenado'), neto = busca(t, 'neto');
+      if (!(dren > 0) || !(neto > dren)) continue;
+      const pk = packDe(textos), pm = /\bpack\s*(?:de\s*)?(\d+)\b/.exec(t);
+      const n = pk && pk.n >= 2 ? pk.n : pm && parseInt(pm[1], 10) >= 2 ? parseInt(pm[1], 10) : 1;
+      return { drenado: dren, neto: neto, n: n, rendimiento: Math.round(dren / neto * 1000) / 1000 };
     }
     return null;
   }
@@ -3365,10 +3394,17 @@ window.CLOUD = {
     const p = precios(raw);
     const textosFormato = [nombre, raw.h1, (raw.variantes || []).filter(function (v) { return v.sel !== false; }).map(function (v) { return v.nombre; }).join(' · '), og.description, ld.descripcion];
     const fmts = formatos(textosFormato);
-    const pc = promoCantidad(raw.textos, p.actual);
-    const ppu = precioPorUnidad(raw.textos, pc, p.actual);
+    const promos = promosCantidad(raw.textos, p.actual), pc = promos[0] || null;
+    const ppu = precioPorUnidad(raw.textos, promos, p.actual);
+    // conserva con peso drenado y neto: el formato es el neto (de todo el pack) y el rendimiento, drenado / neto.
+    // El "$x por kg" de la tienda no sirve para revisar el formato: unas lo calculan sobre el drenado y otras sobre otra cosa
+    const cons = pesosConserva(textosFormato);
+    if (cons) {
+      fmts.g = { qty: cons.neto * cons.n, label: (cons.n > 1 ? cons.n + ' x ' : '') + String(cons.neto).replace('.', ',') + ' g neto' };
+      if (cons.n > 1) fmts.un = { qty: cons.n, label: cons.n + ' un' }; else delete fmts.un;
+    }
     // verificación del formato con el "$x por kg/LT" que muestra la tienda
-    if (ppu && p.actual > 0) {
+    if (ppu && p.actual > 0 && !cons) {
       const deducido = Math.round(p.actual / ppu.porBase * (ppu.unidad === 'un' ? 1 : 1000) * 10) / 10;
       const f = fmts[ppu.unidad];
       if (!f) fmts[ppu.unidad] = { qty: deducido, label: App_cant(deducido, ppu.unidad), deducido: true };
@@ -3383,10 +3419,10 @@ window.CLOUD = {
     const enNombre = formatos([nombre, raw.nombre]);
     const liquido = LIQUIDOS.test(norm(nombre));
     // envases que se venden por unidad: un pack de envases iguales (6 x 350 ml) o una lata suelta → la unidad es cada envase
-    const pk = packDe(textosFormato), lata = /\blatas?\b/.test(norm(nombre));
+    const pk = cons ? null : packDe(textosFormato), lata = !cons && /\blatas?\b/.test(norm(nombre));
     if (!pk && lata && (fmts.ml || fmts.g) && !fmts.un) fmts.un = { qty: 1, label: '1 un' };
     const porEnvase = pk ? pk.label : lata && (fmts.ml || fmts.g) ? (fmts.ml || fmts.g).label : null;
-    const unidadNueva = porEnvase ? 'un' : liquido && (fmts.ml || !fmts.g) ? 'ml' : enNombre.g ? 'g' : enNombre.ml ? 'ml' : enNombre.un && !fmts.g && !fmts.ml ? 'un' : fmts.g ? 'g' : fmts.ml ? 'ml' : liquido ? 'ml' : fmts.un ? 'un' : 'g';
+    const unidadNueva = cons ? 'g' : porEnvase ? 'un' : liquido && (fmts.ml || !fmts.g) ? 'ml' : enNombre.g ? 'g' : enNombre.ml ? 'ml' : enNombre.un && !fmts.g && !fmts.ml ? 'un' : fmts.g ? 'g' : fmts.ml ? 'ml' : liquido ? 'ml' : fmts.un ? 'un' : 'g';
     // envase en la etiqueta del formato ("bidón 5 L")
     const env = envase([nombre, raw.h1, og.description]);
     if (env) Object.keys(fmts).forEach(function (k) { if (norm(fmts[k].label).indexOf(norm(env)) < 0) fmts[k].label = env + ' ' + fmts[k].label; });
@@ -3397,7 +3433,7 @@ window.CLOUD = {
       url: raw.url || '', host: raw.host || '', nombre: nombre, tituloOriginal: Eng.oracion(tituloPagina, propios), nombreLimpio: porEnvase ? App_nombreEnvase(limpio.nombre || nombre, lata, porEnvase) : limpio.nombre || nombre, porEnvase: porEnvase, extras: limpio.extras || [], variedad: limpio.variedad || [],
       etiquetas: etiquetas([nombre, raw.h1, og.description, ld.descripcion]), dieta: dietaSugerida(nombre), marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
-      soloWeb: !!raw.soloWeb, etiquetasPromo: (raw.etiquetas || []).slice(0, 25), formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: pc,
+      soloWeb: !!raw.soloWeb, etiquetasPromo: (raw.etiquetas || []).slice(0, 25), formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: pc, promos: promos, conserva: cons,
       etiquetaOferta: (raw.etiquetas || []).some(function (t) { return /^(oferta|en oferta|precio oferta)$/i.test(String(t).trim()); }),
       insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
     };
@@ -3788,7 +3824,7 @@ window.CLOUD = {
     ['ins-nombre', 'Nombre del insumo tal como lo buscarás en las recetas. Ej.: Pechuga de pollo deshuesada.'],
     ['ins-categoria', 'Agrupa los insumos en listas y reportes. Elige una de la lista o crea una con "+ Nueva categoría…".'],
     ['ins-unidad', 'Unidad en que se usa en las recetas: g (gramos), ml (mililitros) o un (unidades). Todas las cantidades de receta van en esta unidad.'],
-    ['ins-rend', 'Parte utilizable tras pelar o limpiar, en %. 100 = sin merma; 90 = pierdes un 10%. No incluyas la merma de cocción.'],
+    ['ins-rend', 'Parte utilizable tras pelar o limpiar, en %. 100 = sin merma; 90 = pierdes un 10%. No incluyas la merma de cocción. En conservas es el drenado sobre el neto (atún: ~65%); cada cotización puede tener el suyo.'],
     ['ins-fam', 'Agrupa insumos equivalentes (ej. ave, pescado-blanco) para sugerir sustitutos. Elige una de la lista o crea una con "+ Nueva familia…". Sin familia = sin sustitutos.'],
     ['ins-dieta', 'Dieta del insumo: vegano, vegetariano (lácteos/huevo), pescetariano (pescados y mariscos) u omnívoro (carnes y aves). Evita que un plato vegano o vegetariano sugiera lo que no corresponde.'],
     ['ins-variedad', 'Presentación que distingue a este insumo de otros parecidos: granel, deshuesada, en aceite, congelado, a la chilena… Ayuda a decidir qué cotizaciones unir.'],
@@ -3802,7 +3838,9 @@ window.CLOUD = {
     ['cap-normal', 'Precio normal, sin oferta. Se guarda aparte: es al que vuelve el costo cuando la oferta termina.'],
     ['cap-lugar', 'Tienda o proveedor. Si no existe, se crea solo con este nombre y el gerente completa sus datos.'],
     ['cap-marca', 'Marca del producto (opcional). Viene sugerida desde la página.'],
-    ['cap-fq', 'Cuánto trae el envase, en la unidad del producto. Ej.: bidón de 5 L = 5000 ml.'],
+    ['cap-fq', 'Cuánto trae el envase, en la unidad del producto. Ej.: bidón de 5 L = 5000 ml. En conservas, el peso neto (pack de 3 latas de 80 g = 240).'],
+    ['cap-dren', 'Peso drenado de todo el formato, en gramos: lo que queda sin el agua o aceite y lo que va a las recetas. Ej.: pack de 3 latas de 56 g drenado = 168.'],
+    ['cot-dren', 'Solo conservas: peso drenado del formato, en gramos (lo que va a las recetas). Ej.: lata de 140 g neto con 91 g drenado = 91.'],
     ['cap-fl', 'Cómo se llama el envase (solo etiqueta). Ej.: bidón 5 L.'],
     ['cap-hasta', 'Último día de la oferta. Si no lo sabes, deja "no sé": el gerente lo confirma.'],
     ['cap-variedad', 'Presentación del producto (granel, deshuesada, en aceite…). Viene sugerida desde la página; el gerente la confirma al validar.'],
@@ -3814,7 +3852,7 @@ window.CLOUD = {
     ['o-fl-', 'Nombre del formato en que se vende; es solo una etiqueta. Ej.: kg, saco 25 kg, bandeja 30.'],
     ['o-fq-', 'Cuánto trae el formato, en la unidad del insumo (g, ml o un). Ej.: 1 kg = 1000; bandeja de 30 huevos = 30.'],
     ['o-pr-', 'Precio del formato completo en pesos, tal como lo pagas (con IVA si lo trae). Con un escenario activo, esto edita el escenario y no tus datos reales.'],
-    ['o-rd-', 'Opcional: rendimiento propio de este producto, en %. Vacío = usa el rendimiento del insumo.'],
+    ['o-rd-', 'Opcional: rendimiento propio de este producto, en %. Vacío = usa el rendimiento del insumo. En conservas: peso drenado ÷ peso neto (lata de 140 g neto y 91 g drenado = 65%).'],
     ['o-fu-', 'De dónde viene el precio: estimado, comprado, cotización u ODEPA. Al editar un precio estimado pasa a "comprado".'],
     ['imp-pct', 'Variación de precio a simular, en %. Abajo ves qué platos suben o bajan de costo.'],
     // cotizaciones
@@ -5030,7 +5068,9 @@ window.CLOUD = {
           }, onBlur: function () { App.cache.editando = null; } })),
         h('td', null, App.numInput({ fk: 'o-rd-' + o.id, cls: 'w60', value: o.rendimiento != null ? Math.round(o.rendimiento * 1000) / 10 : '', ph: Math.round(ins.rendimiento * 100) + '', title: 'Opcional: rendimiento propio de este producto (%). Vacío = usa el del insumo',
           onChange: function (n) { if (n > 0 && n <= 100) upO(o, function (x) { x.rendimiento = n / 100; }, 'ro' + o.id); },
-          onEmpty: function () { upO(o, function (x) { x.rendimiento = null; }); } })),
+          onEmpty: function () { upO(o, function (x) { x.rendimiento = null; }); } }),
+          // lo útil del formato (en conservas: el peso drenado de la lata o del pack)
+          (function () { const rd = o.rendimiento != null ? o.rendimiento : ins.rendimiento; return rd > 0 && rd < 1 && o.formatoQty > 0 ? h('div', null, h('small', { class: 'mut' }, App.cantidad(o.formatoQty * rd, ins.unidad) + ' útiles')) : null; })()),
         h('td', { class: 'r strong' }, App.costoVisible(cn, ins.unidad), esMejor ? h('div', null, App.badge('más barata', 'good')) : null),
         h('td', null, App.select({ fk: 'o-fu-' + o.id, cls: 'w90', value: o.fuente || 'estimado', options: FUENTES, onChange: function (v) { upO(o, function (x) { x.fuente = v; }); } }),
           h('small', { class: precioViejo(o, p) ? 'warn-t' : '' }, o.fecha || '')),
@@ -5192,7 +5232,7 @@ window.CLOUD = {
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
   const TIPOS = [['plato', 'Plato'], ['base', 'Base / sub-receta'], ['acompanamiento', 'Acompañamiento'], ['entrada', 'Entrada'], ['ensalada', 'Ensalada'], ['postre', 'Postre'], ['bebestible', 'Bebestible']];
   const LINEAS = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína'];
-  const FILTROS = [['plato', 'Platos'], ['base', 'Bases'], ['acompanamiento', 'Guarniciones'], ['opc', 'Opcionales'], ['bebestible', 'Bebestibles'], ['', 'Todas']];
+  const FILTROS = [['plato', 'Platos'], ['base', 'Bases'], ['salsa', 'Salsas'], ['acompanamiento', 'Guarniciones'], ['opc', 'Opcionales'], ['bebestible', 'Bebestibles'], ['', 'Todas']];
 
   // envasadoId: insumo que se vende tal cual (bebida, jugo en caja); sin él, el bebestible es una receta propia (jugo natural)
   App.nuevaReceta = function (nombre, tipo, envasadoId) {
@@ -5234,7 +5274,7 @@ window.CLOUD = {
     const F = App.ui.filtros.rec = App.ui.filtros.rec || { q: '', tipo: 'plato' };
     const q = (F.q || '').toLowerCase();
     const filas = s.recetas.filter(function (r) {
-      if (F.tipo === 'opc' ? !/entrada|ensalada|postre/.test(r.tipo) : (F.tipo && r.tipo !== F.tipo)) return false;
+      if (F.tipo === 'salsa' ? !(r.tipo === 'base' && r.etiqueta === 'salsa') : F.tipo === 'opc' ? !/entrada|ensalada|postre/.test(r.tipo) : (F.tipo && r.tipo !== F.tipo)) return false;
       return !q || (r.nombre + ' ' + (r.linea || '')).toLowerCase().indexOf(q) >= 0;
     });
     return h('div', { class: 'pane-list' },
@@ -5245,7 +5285,7 @@ window.CLOUD = {
         h('tbody', null, filas.map(function (r) {
           const ch = E.chequeos(ctx, r.id).filter(function (c) { return c.nivel !== 'info'; });
           return h('tr', { class: r.id === sel ? 'on' : '', onclick: function () { App.go('recetas', r.id); } },
-            h('td', null, h('div', { class: 'nm' }, r.nombre, r.activo === false ? h('small', null, ' (inactiva)') : null), h('small', null, r.linea || r.tipo, ch.length ? ' ' : null, ch.length ? App.badge('⚠ ' + ch.length, ch.some(function (c) { return c.nivel === 'error'; }) ? 'bad' : 'warn') : null)),
+            h('td', null, h('div', { class: 'nm' }, r.nombre, r.activo === false ? h('small', null, ' (inactiva)') : null), h('small', null, r.tipo === 'base' && r.etiqueta === 'salsa' ? 'Salsa' : (r.linea || r.tipo), ch.length ? ' ' : null, ch.length ? App.badge('⚠ ' + ch.length, ch.some(function (c) { return c.nivel === 'error'; }) ? 'bad' : 'warn') : null)),
             h('td', { class: 'r' }, App.clp(costoFila(r, calc, ctx))));
         })))));
   }
@@ -5376,6 +5416,7 @@ window.CLOUD = {
         h('label', null, 'Nombre', App.textInput({ fk: 'r-nombre', value: r.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'rn'); },
           onCommit: function (v) { const n = App.oracion(v); if (n !== v) upd(function (x) { x.nombre = n; }); } })),
         h('label', null, 'Tipo', App.select({ fk: 'r-tipo', value: r.tipo, options: TIPOS, onChange: function (v) { upd(function (x) { x.tipo = v; }); } })),
+        r.tipo === 'base' ? h('label', null, 'Etiqueta', App.select({ fk: 'r-etq', value: r.etiqueta || '', options: [['', 'Sin etiqueta'], ['salsa', 'Salsa']], onChange: function (v) { upd(function (x) { if (v) x.etiqueta = v; else delete x.etiqueta; }); } })) : null,
         h('label', null, 'Línea de menú', r.tipo === 'plato' ? App.select({ fk: 'r-linea', value: r.linea, options: LINEAS.map(function (l) { return [l, l]; }), onChange: function (v) { upd(function (x) { x.linea = v; }); } })
           : App.textInput({ fk: 'r-linea2', value: r.linea || '', onChange: function (v) { upd(function (x) { x.linea = v; }, 'rl'); },
             onCommit: function (v) { const c = E.canonico(s.recetas.filter(function (x) { return x.id !== r.id; }).map(function (x) { return x.linea; }), App.oracion(v)); if (c !== v) upd(function (x) { x.linea = c; }); } })),
@@ -6227,7 +6268,7 @@ window.CLOUD = {
     const q = (F.q || '').toLowerCase();
     const filtrados = platos.filter(function (r) { return !q || r.nombre.toLowerCase().indexOf(q) >= 0; });
     const grupos = {};
-    filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? 'Bases y sub-recetas' : r.tipo === 'acompanamiento' ? 'Guarniciones' : r.tipo === 'bebestible' ? 'Bebestibles' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
+    filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? (r.etiqueta === 'salsa' ? 'Salsas' : 'Bases y sub-recetas') : r.tipo === 'acompanamiento' ? 'Guarniciones' : r.tipo === 'bebestible' ? 'Bebestibles' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
     const sel = platos.find(function (r) { return r.id === F.id; }) || filtrados.find(function (r) { return r.tipo === 'plato'; }) || filtrados[0];
     const ORDEN = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína', 'Guarniciones', 'Opcionales', 'Bebestibles', 'Bases y sub-recetas'];
     return h('div', { class: 'split cocina' },
@@ -6415,6 +6456,11 @@ window.CLOUD = {
     return unidad === 'g' ? App.clp(u * 1000) + '/kg' : unidad === 'ml' ? App.clp(u * 1000) + '/L' : App.clpU(u) + '/un';
   }
 
+  // peso drenado de una conserva → rendimiento de la cotización (drenado / neto del formato)
+  function rendimientoDe(F, ins) {
+    return ins && ins.unidad === 'g' && F.drenado > 0 && F.fq > 0 && F.drenado < F.fq ? Math.round(F.drenado / F.fq * 1000) / 1000 : null;
+  }
+
   /* ---------- formulario ---------- */
   function formulario() {
     const s = Store.get(), staff = App.esStaff();
@@ -6433,12 +6479,12 @@ window.CLOUD = {
       const camp = App.datosCampana(F);
       if (F.temporal && !camp.campanaId && !(F.hasta >= App.hoy())) { App.toast('La oferta debe valer al menos hasta hoy'); return; }
       if (F.porCantidad && (!((F.pcMin || 2) >= 2) || !(F.pcPrecio > 0) || !(F.pcPrecio < F.precio))) { App.toast('Promo por cantidad: indica desde cuántas unidades y un precio por unidad menor al normal'); return; }
-      const u = yo();
+      const u = yo(), rend = rendimientoDe(F, ins);
       Store.mutate(function (st) {
         // toda cotización (de cualquier rol) queda por revisar; el proveedor se vincula (o se crea) al aprobarla
         const prov = null;
         st.ofertas.push({ id: Store.uid('OF-'), insumoId: ins.id, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(), formatoLabel: F.fl || ins.unidad,
-          formatoQty: F.fq, precio: F.precio, rendimiento: null, fecha: App.hoy(), fuente: 'cotizacion', disponible: true, preferida: false,
+          formatoQty: F.fq, precio: F.precio, rendimiento: rend, fecha: App.hoy(), fuente: 'cotizacion', disponible: true, preferida: false,
           pendiente: true, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim(),
           // de una campaña existente: la fecha la pone la campaña; de una campaña nueva: temporal (sin fecha, la confirma el gerente)
           temporal: camp.campanaId ? undefined : F.temporal ? { hasta: F.hasta } : camp.campanaPropuesta ? { hasta: enUnaSemana() } : undefined,
@@ -6448,7 +6494,7 @@ window.CLOUD = {
           promoCantidad: F.porCantidad ? { minimo: F.pcMin || 2, precio: F.pcPrecio, desde: App.hoy(), hasta: F.pcHasta || enUnaSemana() } : undefined });
       });
       App.toast(camp.campanaId || camp.campanaPropuesta ? 'Cotización de campaña enviada a revisión 🎯' : F.temporal ? 'Oferta temporal enviada a revisión 🔥' : 'Cotización enviada a revisión');
-      App.ui.cot = { insumo: '', lugar: F.lugar, marca: '', fl: '', fq: null, precio: null, nota: '', temporal: false, hasta: enUnaSemana(), online: false, membresia: false, porCantidad: false, pcMin: 2, pcPrecio: null, pcHasta: null };
+      App.ui.cot = { insumo: '', lugar: F.lugar, marca: '', fl: '', fq: null, precio: null, nota: '', drenado: null, temporal: false, hasta: enUnaSemana(), online: false, membresia: false, porCantidad: false, pcMin: 2, pcPrecio: null, pcHasta: null };
       App.render();
     };
 
@@ -6467,7 +6513,12 @@ window.CLOUD = {
           h('span', { class: 'mut' }, 'u otro:'),
           App.textInput({ fk: 'cot-fl', cls: 'w90', value: F.fl, ph: 'nombre', onChange: function (v) { F.fl = v; } }),
           App.numInput({ fk: 'cot-fq', cls: 'w80', value: F.fq, ph: 'cantidad', onChange: function (n) { F.fq = n; App.render(); } }), h('small', null, ins.unidad)),
-        h('div', { class: 'help' }, 'Equivale a ', h('b', null, precioPorBase(F.precio, F.fq, ins.unidad)), ' (precio de compra, antes de mermas).')) : null,
+        // conservas: el formato es el peso neto; a las recetas va lo drenado (cada marca y formato tiene el suyo)
+        ins.unidad === 'g' ? h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'Peso drenado (conservas, opcional)'),
+          App.numInput({ fk: 'cot-dren', cls: 'w80', value: F.drenado, ph: 'g', onChange: function (n) { F.drenado = n; App.render(); }, onEmpty: function () { F.drenado = null; App.render(); } }),
+          h('small', null, 'g'), rendimientoDe(F, ins) ? h('small', { class: 'mut' }, '= ' + App.pct(rendimientoDe(F, ins) * 100) + ' del neto') : F.drenado > 0 ? h('small', { class: 'bad-t' }, 'debe ser menor que el formato') : null) : null,
+        h('div', { class: 'help' }, 'Equivale a ', h('b', null, rendimientoDe(F, ins) ? precioPorBase(F.precio, F.drenado, ins.unidad) + ' drenado' : precioPorBase(F.precio, F.fq, ins.unidad)),
+          rendimientoDe(F, ins) ? '' : ' (precio de compra, antes de mermas)', '.')) : null,
       (F.lugar || '').trim() ? App.campoCampana(F, { lugar: F.lugar, precio: F.precio, titulo: F.marca, fk: 'cot' }) : null,
       h('div', { class: 'row gap wrap' },
         F.campana && F.campana !== App.CAMP_NUEVA ? null :
@@ -6696,7 +6747,8 @@ window.CLOUD = {
       // sin un insumo claro queda como producto nuevo (con nombre limpio): enviar nunca se bloquea; el admin lo une a uno existente si corresponde
       insumoId: r.insumo ? r.insumo.id : NUEVO, nombreNuevo: r.nombreLimpio || r.nombre, unidadNueva: r.unidadNueva,
       precio: r.precio, precioNormal: r.precioNormal, oferta: !!r.precioNormal || !!r.etiquetaOferta, hasta: '',
-      online: !!r.soloWeb, promo: !!r.promoCantidad, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: r.tituloOriginal || r.nombre || '', fq: null, fl: '',
+      online: !!r.soloWeb, promos: (r.promos || []).map(function () { return true; }),
+      drenado: r.conserva ? r.conserva.drenado * r.conserva.n : null, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: r.tituloOriginal || r.nombre || '', fq: null, fl: '',
       variedad: (r.variedad || []).join(', '), etiquetas: (r.etiquetas || []).slice(), dieta: r.dieta
     };
     elegirFormato(U);
@@ -6718,6 +6770,11 @@ window.CLOUD = {
     return unidad === 'g' ? App.clp(u * 1000) + '/kg' : unidad === 'ml' ? App.clp(u * 1000) + '/L' : App.clpU(u) + '/un';
   }
 
+  // conservas: a las recetas va lo drenado. Rendimiento de la cotización = drenado / neto del formato (solo si el insumo se mide en gramos)
+  function rendimientoDe(F, unidad) {
+    return unidad === 'g' && F.drenado > 0 && F.fq > 0 && F.drenado < F.fq ? Math.round(F.drenado / F.fq * 1000) / 1000 : null;
+  }
+
   function enviar(U) {
     const F = U.F, r = U.r, staff = App.esStaff(), u = yo(), hoy = App.hoy();
     // nada bloquea el envío: lo que falte queda "por confirmar" y lo completa admin/gerente al revisar
@@ -6733,6 +6790,7 @@ window.CLOUD = {
     const unidad = unidadElegida(U);
     const sinPrecio = !(F.precio > 0), sinFormato = !(F.fq > 0);
     const conNormal = F.oferta && F.precioNormal > F.precio;
+    const rend = rendimientoDe(F, unidad);
     const notas = [r.compraMinima ? 'Compra mínima ' + r.compraMinima + ' un' : '', (F.nota || '').trim(), 'Cotizado en ' + F.lugar.trim()].filter(Boolean).join(' · ');
     const hasta = F.hasta || masDias(7);
     // de una campaña existente: la fecha la pone la campaña; de una nueva: queda temporal y el gerente la completa
@@ -6741,16 +6799,16 @@ window.CLOUD = {
     Store.mutate(function (st) {
       if (nuevo) {
         insumoId = Store.uid('INS-');
-        st.insumos.push({ id: insumoId, nombre: F.nombreNuevo.trim(), categoria: 'Por clasificar', unidad: unidad, rendimiento: 1, familia: null, dieta: null,
+        st.insumos.push({ id: insumoId, nombre: F.nombreNuevo.trim(), categoria: 'Por clasificar', unidad: unidad, rendimiento: rend || 1, familia: null, dieta: null,
           propuesto: true, autor: u.nombre, autorId: u.id, propuestoEl: hoy, variedad: (F.variedad || '').trim() || undefined,
           etiquetas: F.etiquetas && F.etiquetas.length ? F.etiquetas.slice() : undefined });
         if (F.dieta) st.insumos[st.insumos.length - 1].dieta = F.dieta;
       }
       const prov = null;   // todas las cotizaciones quedan por revisar: el proveedor se vincula (o se crea) al aprobarla
       const base = { insumoId: insumoId, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(),
-        formatoLabel: F.fl || unidad, formatoQty: sinFormato ? null : F.fq, rendimiento: null, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
+        formatoLabel: F.fl || unidad, formatoQty: sinFormato ? null : F.fq, rendimiento: rend, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
         pendiente: true, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, tituloWeb: r.tituloOriginal || r.nombre || undefined, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
-      const pc = F.promo && r.promoCantidad ? r.promoCantidad : null, exige = App.exigenciasOferta(F);
+      const exige = App.exigenciasOferta(F);
       const lista = [];
       // oferta con precio normal visible: se guardan las dos (la normal es el precio de reposición)
       if (conNormal) lista.push(Object.assign({}, base, { precio: F.precioNormal }));
@@ -6758,13 +6816,14 @@ window.CLOUD = {
         temporal: temporal ? { hasta: hasta } : undefined, hastaPorConfirmar: temporal && !F.hasta ? true : undefined,
         campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta,
         soloOnline: exige.soloOnline, requiereMembresia: exige.requiereMembresia }));   // el precio exclusivo de la web va en la cotización que se paga (la normal, si hay, no lo es)
-      // promo por cantidad ("2 x $7.350"): cotización aparte con su propio formato (2 packs de 6 = 12 un a $7.350), para compararla
-      // y elegirla como cualquier otra; dura poco (fecha por confirmar, o la de la campaña)
-      if (pc) lista.push(Object.assign({}, base, { precio: pc.minimo * pc.precio,
+      // cada promo por cantidad marcada ("2 x $7.350"): cotización aparte con su propio formato (2 packs de 6 = 12 un a $7.350),
+      // para compararla y elegirla como cualquier otra; dura poco (fecha por confirmar, o la de la campaña).
+      // Si una exige la tarjeta o la membresía de la tienda, se marca al revisarla
+      (r.promos || []).filter(function (x, i) { return F.promos[i]; }).forEach(function (pc) { lista.push(Object.assign({}, base, { precio: pc.total || pc.minimo * pc.precio,
         formatoLabel: pc.minimo + ' x ' + (F.fl || unidad), formatoQty: sinFormato ? null : pc.minimo * F.fq,
-        nota: 'Promo llevando ' + pc.minimo + ': ' + App.clp(pc.minimo * pc.precio) + ' · ' + notas,
+        nota: 'Promo llevando ' + pc.minimo + ': ' + App.clp(pc.total || pc.minimo * pc.precio) + ' · ' + notas,
         temporal: camp.campanaId ? undefined : { hasta: F.hasta || masDias(7) }, hastaPorConfirmar: camp.campanaId || F.hasta ? undefined : true,
-        campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta, soloOnline: exige.soloOnline, requiereMembresia: exige.requiereMembresia }));
+        campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta, soloOnline: exige.soloOnline, requiereMembresia: exige.requiereMembresia })); });
       lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); });
     });
     olvidar();
@@ -6881,7 +6940,13 @@ window.CLOUD = {
             App.textInput({ fk: 'cap-fl', cls: 'w120', value: F.fl, ph: 'ej. bolsa 1 kg', onChange: function (v) { F.fl = v; } })),
           fmt && fmt.revisar ? h('small', { class: 'bad-t' }, '⚠ Según el precio por kilo/litro de la página serían ' + App.cantidad(fmt.revisar, unidad) + ': revisa el formato.') : null,
           !fmt && Object.keys(r.formatos).length ? h('small', { class: 'mut' }, 'La página dice: ' + Object.keys(r.formatos).map(function (k) { return r.formatos[k].label; }).join(' · ')) : null,
-          h('div', { class: 'help' }, 'Equivale a ', h('b', null, precioPorBase(F.precio, F.fq, unidad)), F.oferta && F.precioNormal ? ' (normal ' + precioPorBase(F.precioNormal, F.fq, unidad) + ')' : '', '.')) : null,
+          // conservas (atún, choclo, palmitos…): se compra el neto, a la receta va lo drenado
+          unidad === 'g' && (r.conserva || F.verDrenado) ? h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'Peso drenado (lo que va a las recetas)'),
+            App.numInput({ fk: 'cap-dren', cls: 'w80', value: F.drenado, ph: 'g', onChange: function (n) { F.drenado = n; App.render(); }, onEmpty: function () { F.drenado = null; App.render(); } }),
+            h('small', null, 'g'), rendimientoDe(F, unidad) ? h('small', { class: 'mut' }, '= ' + App.pct(rendimientoDe(F, unidad) * 100) + ' del neto') : F.drenado > 0 ? h('small', { class: 'bad-t' }, 'debe ser menor que el formato') : null)
+            : unidad === 'g' ? h('a', { href: '#', class: 'small', onclick: function (ev) { ev.preventDefault(); F.verDrenado = true; App.render(); } }, '+ Peso drenado (conservas)') : null,
+          h('div', { class: 'help' }, 'Equivale a ', h('b', null, rendimientoDe(F, unidad) ? precioPorBase(F.precio, F.drenado, unidad) + ' drenado' : precioPorBase(F.precio, F.fq, unidad)),
+            rendimientoDe(F, unidad) ? ' (' + precioPorBase(F.precio, F.fq, unidad) + ' neto)' : '', F.oferta && F.precioNormal ? ' (normal ' + precioPorBase(F.precioNormal, F.fq, unidad) + ')' : '', '.')) : null,
 
         h('div', { class: 'stack' },
           campNode,
@@ -6897,10 +6962,15 @@ window.CLOUD = {
                   return App.chip(c[1], F.hasta === c[0], function () { F.hasta = c[0]; App.render(); });
                 })),
               h('input', { type: 'date', value: F.hasta || '', min: App.hoy(), 'data-fk': 'cap-hasta', onchange: function (ev) { F.hasta = ev.target.value; App.render(); } }))) : null,
-          r.promoCantidad ? h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.promo, onchange: function (ev) { F.promo = ev.target.checked; } }),
-            // el precio de la promo es por formato (un pack de 6, una bolsa…); si el insumo se cuenta por unidad, se muestra también por unidad
-            ' 🏷️ Promo: llevando ' + r.promoCantidad.minimo + (F.fl ? ' (' + F.fl + ')' : '') + ', ' + App.clp(r.promoCantidad.precio) + ' cada uno' +
-              (unidad === 'un' && F.fq > 1 ? ' = ' + App.clp(r.promoCantidad.precio / F.fq) + ' por unidad' : '') + ' (se guarda como otra cotización)') : null,
+          // una casilla por promo (puede haber dos: la de todos y la de la tarjeta de la tienda); cada una se guarda como otra cotización.
+          // Su precio es por formato (un pack de 6, una lata…): se muestra también por unidad o por kilo drenado
+          (r.promos || []).map(function (pc, i) {
+            const rd = rendimientoDe(F, unidad);
+            return h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.promos[i], onchange: function (ev) { F.promos[i] = ev.target.checked; } }),
+              ' 🏷️ Promo: llevando ' + pc.minimo + (F.fl ? ' (' + F.fl + ')' : '') + ', ' + App.clp(pc.precio) + ' cada uno' +
+                (unidad === 'un' && F.fq > 1 ? ' = ' + App.clp(pc.precio / F.fq) + ' por unidad' : rd ? ' = ' + precioPorBase(pc.precio, F.drenado, unidad) + ' drenado' : '') +
+                ' (se guarda como otra cotización' + ((r.promos || []).length > 1 ? '; si una es con la tarjeta de la tienda, márcalo al revisar' : '') + ')');
+          }),
           r.compraMinima ? h('small', { class: 'mut' }, 'La página exige compra mínima de ' + r.compraMinima + ' unidades (queda anotado).') : null),
 
         h('label', { class: 'block' }, 'Nota (opcional) · trae el nombre tal como sale en la página', App.textInput({ fk: 'cap-nota', value: F.nota, ph: 'ej. buena calidad, solo despacho los martes…', onChange: function (v) { F.nota = v; } })),
@@ -8725,6 +8795,13 @@ window.CLOUD = {
         h('h4', null, 'Ver recetas'),
         paso('📖', 'Cocina', 'Ingredientes y pasos. Elige las porciones y las cantidades se ajustan.', function () { App.go('cocina'); }),
         paso('🥗', 'Producción del día', 'Platos, más las entradas, ensaladas y postres de los combos (estimados) y los bebestibles envasados a despachar.', function () { App.go('cocina', 'dia'); }),
+        h('h4', null, 'Preguntas frecuentes'),
+        h('details', null, h('summary', null, '¿Una salsa (bolognesa, carbonara, crema de pollo, pesto) es base, guarnición o sub-receta?'),
+          h('div', { class: 'mut' }, 'Es una ', h('b', null, 'base'), ' (Recetas → Bases), con la etiqueta ', h('b', null, 'Salsa'), ', y se usa dentro del plato como ', h('b', null, 'sub-receta'), '. Así su costo entra al plato y, si la usan varios platos, se corrige en un solo lugar.')),
+        h('details', null, h('summary', null, '¿Y qué es una guarnición?'),
+          h('div', { class: 'mut' }, 'Algo que se elige aparte del plato (arroz, puré, ensalada). Es un ', h('b', null, 'acompañamiento'), ' con su propio costo y margen; cada plato define cuáles permite y cuál va por defecto. Una salsa no es guarnición: es parte del plato.')),
+        h('details', null, h('summary', null, '¿Cómo creo una salsa?'),
+          h('div', { class: 'mut' }, 'Recetas → "+ Nueva" → tipo "Base / sub-receta" → en su ficha, Etiqueta: Salsa. Después, en el plato, agrega una línea "+ Sub-receta" y elígela. Para ver todas juntas, usa el filtro "Salsas".')),
         h('p', { class: 'help noprint' }, 'Lo que envías llega al gerente, que decide. Tú no cambias costos ni precios.'),
         h('div', { class: 'noprint' }, App.btn('🖨 Imprimir esta guía', function () { window.print(); }, 'small'))))
     );
