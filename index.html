@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T21:55:42Z">
+<meta name="build" content="2026-10-05T22:18:47Z">
 <script>
-window.BUILD = "2026-10-05T21:55:42Z";
+window.BUILD = "2026-10-05T22:18:47Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -4063,6 +4063,7 @@ window.CLOUD = {
     ['ins-unidad', 'Unidad en que se usa en las recetas: g (gramos), ml (mililitros) o un (unidades). Todas las cantidades de receta van en esta unidad.'],
     ['ins-rend', 'Parte utilizable tras pelar o limpiar, en %. 100 = sin merma; 90 = pierdes un 10%. No incluyas la merma de cocción. En conservas es el drenado sobre el neto (atún: ~65%); cada cotización puede tener el suyo.'],
     ['ins-grasa', '% de grasa de la carne molida (10, 7, 4…). Cada nivel de grasa es un insumo distinto de la misma familia, con su propio precio. El nombre se arma solo con este número. Vacío en lo que no es carne molida.'],
+    ['o-mov-', 'Pasa esta cotización a otro insumo (por ejemplo, la carne de 7% de grasa que quedó cargada bajo la de 10%). Conserva precio e historial.'],
     ['o-cons-', 'Si esta cotización es de carne refrigerada o congelada. Es la misma carne con otro precio: las recetas pueden pedir una u otra, o aceptar la más barata.'],
     ['cot-cons', 'Si la carne es refrigerada o congelada. Si la dejas vacía y el nombre o la marca lo dicen, se detecta sola.'],
     ['cap-cons', 'Refrigerado o congelado. Viene sugerido si la página lo dice; si no, déjalo vacío y el gerente lo completa.'],
@@ -5243,6 +5244,28 @@ window.CLOUD = {
     }, 'ej. 7');
   }
 
+  // pasa una cotización a otro insumo (ej. separar una carne de 7% que se cargó bajo la de 10%); conserva precio, historial y enlaces
+  function moverOferta(o, ins, nOfertas) {
+    const s = Store.get();
+    return h('select', { class: 'w90', 'data-fk': 'o-mov-' + o.id, title: 'Mover esta cotización a otro insumo', onchange: function (ev) {
+      const destino = s.insumos.find(function (i) { return i.id === ev.target.value; });
+      ev.target.value = '';
+      if (!destino) return;
+      const aviso = destino.unidad !== ins.unidad ? ' OJO: ' + destino.nombre + ' se mide en ' + destino.unidad + ' y este formato está en ' + ins.unidad + '; revisa la cantidad del formato.' : '';
+      App.confirm('¿Mover la cotización de ' + (o.lugar || 'este lugar') + (o.marca ? ' (' + o.marca + ')' : '') + ' a "' + destino.nombre + '"?' + (nOfertas <= 1 ? ' "' + ins.nombre + '" se queda sin cotizaciones.' : '') + aviso, function () {
+        Store.mutate(function (st) {
+          const x = st.ofertas.find(function (y) { return y.id === o.id; });
+          if (!x) return;
+          x.insumoId = destino.id; x.preferida = !st.ofertas.some(function (y) { return y.insumoId === destino.id && y.id !== x.id; });
+        });
+        App.toast('Cotización movida a "' + destino.nombre + '"');
+      }, 'Mover');
+    } },
+      h('option', { value: '' }, 'Mover a…'),
+      s.insumos.filter(function (i) { return i.id !== ins.id && !i.propuesto; }).sort(function (a, b) { return a.nombre.localeCompare(b.nombre, 'es'); })
+        .map(function (i) { return h('option', { value: i.id }, i.nombre); }));
+  }
+
   function detalle(ins, ctx) {
     const s = Store.get(), esc = App.escenario(), p = ctx.p;
     const ofs = App.ofertasDe(ins.id);
@@ -5372,7 +5395,7 @@ window.CLOUD = {
         h('td', { class: 'c' }, h('input', { type: 'radio', name: 'pref-' + ins.id, checked: !!o.preferida, title: 'Oferta preferida (la que usan los costos)',
           onchange: function () { Store.mutate(function (st) { st.ofertas.forEach(function (x) { if (x.insumoId === ins.id) x.preferida = (x.id === o.id); if (x.id === o.id) x.pendiente = false; }); }); } })),
         h('td', { class: 'c' }, h('input', { type: 'checkbox', checked: o.disponible !== false, title: 'Disponible', onchange: function (ev) { upO(o, function (x) { x.disponible = ev.target.checked; }); } })),
-        h('td', null, App.btn('✕', function () {
+        h('td', null, moverOferta(o, ins, ofs.length), App.btn('✕', function () {
           if (ofs.length <= 1) { App.toast('Cada insumo necesita al menos una oferta'); return; }
           App.confirm('¿Eliminar la oferta de ' + (o.lugar || 'este lugar') + '?', function () { Store.mutate(function (st) { st.ofertas = st.ofertas.filter(function (x) { return x.id !== o.id; }); }); }, 'Eliminar', true);
         }, 'small ghost', 'Eliminar oferta')));
