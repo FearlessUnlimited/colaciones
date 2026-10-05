@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T10:21:03Z">
+<meta name="build" content="2026-10-05T10:31:04Z">
 <script>
-window.BUILD = "2026-10-05T10:21:03Z";
+window.BUILD = "2026-10-05T10:31:04Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -6750,15 +6750,21 @@ window.CLOUD = {
       const base = { insumoId: insumoId, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(),
         formatoLabel: F.fl || unidad, formatoQty: sinFormato ? null : F.fq, rendimiento: null, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
         pendiente: true, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, tituloWeb: r.tituloOriginal || r.nombre || undefined, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
-      const promo = F.promo && r.promoCantidad ? { minimo: r.promoCantidad.minimo, precio: r.promoCantidad.precio, desde: hoy, hasta: masDias(7), hastaPorConfirmar: true } : undefined;
+      const pc = F.promo && r.promoCantidad ? r.promoCantidad : null, exige = App.exigenciasOferta(F);
       const lista = [];
       // oferta con precio normal visible: se guardan las dos (la normal es el precio de reposición)
-      // la promo por cantidad se ve hoy junto al precio que se paga: va en esa cotización (no se sabe si sigue cuando vuelve el precio normal)
       if (conNormal) lista.push(Object.assign({}, base, { precio: F.precioNormal }));
-      lista.push(Object.assign({}, base, { precio: sinPrecio ? null : F.precio, promoCantidad: promo,
+      lista.push(Object.assign({}, base, { precio: sinPrecio ? null : F.precio,
         temporal: temporal ? { hasta: hasta } : undefined, hastaPorConfirmar: temporal && !F.hasta ? true : undefined,
         campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta,
-        soloOnline: App.exigenciasOferta(F).soloOnline, requiereMembresia: App.exigenciasOferta(F).requiereMembresia }));   // el precio exclusivo de la web va en la cotización que se paga (la normal, si hay, no lo es)
+        soloOnline: exige.soloOnline, requiereMembresia: exige.requiereMembresia }));   // el precio exclusivo de la web va en la cotización que se paga (la normal, si hay, no lo es)
+      // promo por cantidad ("2 x $7.350"): cotización aparte con su propio formato (2 packs de 6 = 12 un a $7.350), para compararla
+      // y elegirla como cualquier otra; dura poco (fecha por confirmar, o la de la campaña)
+      if (pc) lista.push(Object.assign({}, base, { precio: pc.minimo * pc.precio,
+        formatoLabel: pc.minimo + ' x ' + (F.fl || unidad), formatoQty: sinFormato ? null : pc.minimo * F.fq,
+        nota: 'Promo llevando ' + pc.minimo + ': ' + App.clp(pc.minimo * pc.precio) + ' · ' + notas,
+        temporal: camp.campanaId ? undefined : { hasta: F.hasta || masDias(7) }, hastaPorConfirmar: camp.campanaId || F.hasta ? undefined : true,
+        campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta, soloOnline: exige.soloOnline, requiereMembresia: exige.requiereMembresia }));
       lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); });
     });
     olvidar();
@@ -6894,7 +6900,7 @@ window.CLOUD = {
           r.promoCantidad ? h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.promo, onchange: function (ev) { F.promo = ev.target.checked; } }),
             // el precio de la promo es por formato (un pack de 6, una bolsa…); si el insumo se cuenta por unidad, se muestra también por unidad
             ' 🏷️ Promo: llevando ' + r.promoCantidad.minimo + (F.fl ? ' (' + F.fl + ')' : '') + ', ' + App.clp(r.promoCantidad.precio) + ' cada uno' +
-              (unidad === 'un' && F.fq > 1 ? ' = ' + App.clp(r.promoCantidad.precio / F.fq) + ' por unidad' : '')) : null,
+              (unidad === 'un' && F.fq > 1 ? ' = ' + App.clp(r.promoCantidad.precio / F.fq) + ' por unidad' : '') + ' (se guarda como otra cotización)') : null,
           r.compraMinima ? h('small', { class: 'mut' }, 'La página exige compra mínima de ' + r.compraMinima + ' unidades (queda anotado).') : null),
 
         h('label', { class: 'block' }, 'Nota (opcional) · trae el nombre tal como sale en la página', App.textInput({ fk: 'cap-nota', value: F.nota, ph: 'ej. buena calidad, solo despacho los martes…', onChange: function (v) { F.nota = v; } })),
