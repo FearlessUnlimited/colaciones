@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T11:14:58Z">
+<meta name="build" content="2026-10-05T11:39:02Z">
 <script>
-window.BUILD = "2026-10-05T11:14:58Z";
+window.BUILD = "2026-10-05T11:39:02Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -1230,6 +1230,15 @@ window.CLOUD = {
     if (state.params.dietasV2) return;
     (state.insumos || []).forEach(function (i) { if (i.dieta === 'omni' && normNombre(i.categoria) === normNombre('Pescados y mariscos')) i.dieta = 'pescetariano'; });
     state.params.dietasV2 = true;
+  }
+  // una vez: las bases que ya son salsas (por su nombre) quedan con la etiqueta "salsa"; después se maneja a mano desde la receta
+  function etiquetarSalsas(state) {
+    state.params = state.params || {};
+    if (state.params.salsasV1) return;
+    (state.recetas || []).forEach(function (r) {
+      if (r.tipo === 'base' && !r.etiqueta && /(salsa|pesto|bechamel|bolo[nñ]esa|carbonara|pomodoro|alfredo|chimichurri|pil[- ]?pil)/i.test(normNombre(r.nombre))) r.etiqueta = 'salsa';
+    });
+    state.params.salsasV1 = true;
   }
   function nivelDieta(ins) { return DIETA_NIVEL[ins && ins.dieta] != null ? DIETA_NIVEL[ins.dieta] : 0; }
 
@@ -2516,7 +2525,7 @@ window.CLOUD = {
     costoNetoOferta: costoNetoOferta, ofertasDisponibles: ofertasDisponibles, costoInsumo: costoInsumo,
     costoReceta: costoReceta, costoPlato: costoPlato, calcularTodo: calcularTodo, esVendible: esVendible,
     opcionesGuarnicion: opcionesGuarnicion, explotar: explotar, explotarPlato: explotarPlato, usosDeInsumo: usosDeInsumo,
-    impacto: impacto, violacionesDieta: violacionesDieta, dietaCompatible: dietaCompatible, asegurarDietas: asegurarDietas,
+    impacto: impacto, violacionesDieta: violacionesDieta, dietaCompatible: dietaCompatible, asegurarDietas: asegurarDietas, etiquetarSalsas: etiquetarSalsas,
     alternativasReceta: alternativasReceta, volumenSemanal: volumenSemanal, usoSemanalInsumos: usoSemanalInsumos,
     ahorrosPosibles: ahorrosPosibles, pesoEnCosto: pesoEnCosto, listaCompras: listaCompras, chequeos: chequeos,
     puntoEquilibrio: puntoEquilibrio, SEMANAS_MES: SEMANAS_MES, fechaMenos: fechaMenos,
@@ -2797,6 +2806,7 @@ window.CLOUD = {
     if (window.Engine) {
       window.Engine.asegurarProveedores(s); window.Engine.unificarTextos(s);   // proveedores desde los "lugar"; familias/categorías sin variantes de mayúsculas
       window.Engine.asegurarDietas(s);   // pescados y mariscos: de "con carne/pescado" a pescetariano (una vez)
+      window.Engine.etiquetarSalsas(s);   // bases que son salsas → etiqueta (una vez)
       window.Engine.normalizarMayusculas(s);   // mayúscula solo al iniciar oración y en nombres propios (una vez); antes de los combos: renombra las líneas
       window.Engine.asegurarCombos(s);   // combos y precio por línea (la primera vez, desde el antiguo precio de la Trilogía)
     }
@@ -2970,7 +2980,7 @@ window.CLOUD = {
     }
     // fuera de una ventana, lo que viene después de "Productos similares" (y parecidos) son otros productos: ahí se deja de leer
     if (!modal) corte = [].filter.call(d.querySelectorAll('h2,h3,h4,h5,h6,p,span,div'), function (e) {
-      if (e.children.length || !/^(productos similares|productos relacionados|tambi[eé]n te podr[ií]a interesar|te puede interesar|recomendados para ti|otros clientes tambi[eé]n compraron)/i.test(limpio(e.textContent, 60))) return false;
+      if (e.children.length || !/^(?:descubre\s+)?(productos similares|productos relacionados|tambi[eé]n te podr[ií]a interesar|te puede interesar|recomendados para ti|otros clientes tambi[eé]n compraron)/i.test(limpio(e.textContent, 60))) return false;
       return !nombreEl && !h1 ? true : !!((nombreEl || h1).compareDocumentPosition(e) & 4);
     })[0] || null;
     // precios visibles cerca del título: el que se ve grande es el que se paga; el tachado, el normal
