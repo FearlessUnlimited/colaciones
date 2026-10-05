@@ -205,6 +205,7 @@ tr.subhead td { font-weight: 700; background: var(--surface2); } tr.hijo td { co
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
 .modal { background: var(--surface); border-radius: 12px; max-width: 520px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
 .modal-h { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 0; } .modal-b { padding: 12px 16px; } .modal-f { padding: 0 16px 14px; display: flex; justify-content: flex-end; gap: 8px; }
+.toast.bad { background: #b42318; color: #fff; max-width: min(92vw, 520px); }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 9px; z-index: 200; box-shadow: var(--shadow); transition: opacity .4s; } .toast.out { opacity: 0; }
 details summary { cursor: pointer; color: var(--accent); margin: 6px 0; }
 
@@ -277,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T08:03:44Z">
+<meta name="build" content="2026-10-05T08:15:42Z">
 <script>
-window.BUILD = "2026-10-05T08:03:44Z";
+window.BUILD = "2026-10-05T08:15:42Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2822,16 +2823,26 @@ window.CLOUD = {
 
   function notify() { listeners.forEach(function (f) { f('change'); }); }
 
-  // key agrupa ediciones consecutivas (tipeo) en un solo paso de deshacer
+  // key agrupa ediciones consecutivas (tipeo) en un solo paso de deshacer.
+  // Todo o nada: si fn falla a mitad de camino, el estado vuelve a como estaba (nada queda a medias para el próximo guardado),
+  // se avisa a la vista ('error') y el error sigue su curso para que quien llamó no continúe como si hubiera funcionado.
   function mutate(fn, key) {
-    const now = Date.now();
-    if (!key || key !== lastKey || now - lastAt > 1500) {
-      undoStack.push(JSON.stringify(state)); if (undoStack.length > 60) undoStack.shift();
+    const now = Date.now(), antes = JSON.stringify(state);
+    const nuevoPaso = !key || key !== lastKey || now - lastAt > 1500;
+    try { fn(state); }
+    catch (e) {
+      state = JSON.parse(antes);
+      if (e && typeof e === 'object') e.revertido = true;
+      notify();   // la vista se redibuja con el estado restaurado (sus referencias apuntaban al que se descartó)
+      listeners.forEach(function (f) { f('error', e); });
+      throw e;
+    }
+    if (nuevoPaso) {
+      undoStack.push(antes); if (undoStack.length > 60) undoStack.shift();
       redoStack = [];
     }
     lastKey = key || null; lastAt = now;
     version++;
-    fn(state);
     scheduleSave(); notify();
   }
 
@@ -3469,11 +3480,19 @@ window.CLOUD = {
   };
 
   /* ---------- toast / modal ---------- */
-  App.toast = function (msg) {
-    const t = h('div', { class: 'toast' }, msg);
+  App.toast = function (msg, tipo) {
+    const larga = tipo === 'error', t = h('div', { class: 'toast' + (larga ? ' bad' : ''), role: larga ? 'alert' : 'status' }, msg);
     document.body.appendChild(t);
-    setTimeout(function () { t.classList.add('out'); }, 2200);
-    setTimeout(function () { t.remove(); }, 2700);
+    setTimeout(function () { t.classList.add('out'); }, larga ? 7000 : 2200);
+    setTimeout(function () { t.remove(); }, larga ? 7500 : 2700);
+  };
+  // un fallo nunca pasa en silencio: si un cambio no se pudo hacer, se dice (el detalle técnico queda en la consola)
+  let ultimoAviso = 0;
+  App.avisarFallo = function (err) {
+    if (Date.now() - ultimoAviso < 1500) return;   // un mismo clic puede disparar el aviso dos veces (cambio revertido + error sin atrapar)
+    ultimoAviso = Date.now();
+    console.error(err);
+    App.toast('⚠ No se pudo completar la acción' + (err && err.revertido ? ': no se cambió nada' : '') + '. Si se repite, avisa al administrador.', 'error');
   };
   App.modal = function (title, body, actions) {
     const ov = h('div', { class: 'overlay', onclick: function (ev) { if (ev.target === ov) close(); } });
@@ -3691,9 +3710,13 @@ window.CLOUD = {
     if (App.nube.activo) App.iniciarNube(); else Store.load();
     Store.subscribe(function (ev) {
       if (ev === 'change') { App.version++; App.render(); }
+      else if (ev === 'error') App.avisarFallo(arguments[1]);
       else if (ev === 'saved' && !App.nube.activo) { const el = document.querySelector('.saved'); if (el && Store.lastSaved()) el.textContent = 'Guardado ' + Store.lastSaved().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }); }
     });
     window.addEventListener('hashchange', parseHash);
+    // errores sin atrapar en botones y demás acciones (los de un cambio revertido ya se avisaron)
+    window.addEventListener('error', function (ev) { if (ev.error && !ev.error.revertido) App.avisarFallo(ev.error); });
+    window.addEventListener('unhandledrejection', function (ev) { if (!(ev.reason && ev.reason.revertido)) App.avisarFallo(ev.reason); });
     window.addEventListener('beforeunload', function () { Store.flush(); });
     document.addEventListener('keydown', function (ev) {
       if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z' && !/INPUT|TEXTAREA/.test((document.activeElement || {}).tagName || '')) { ev.preventDefault(); Store.undo(); }
