@@ -45,7 +45,7 @@ textarea { width: 100%; resize: vertical; }
 input.num { text-align: right; }
 input.sim { border-color: var(--sim); background: var(--sim-soft); }
 input[type=range] { width: 100%; accent-color: var(--accent); }
-.w60 { width: 60px; } .w70 { width: 74px; } .w80 { width: 88px; } .w90 { width: 96px; } .w200 { width: 160px; }
+.w50 { width: 50px; } .w60 { width: 60px; } .w70 { width: 74px; } .w80 { width: 88px; } .w90 { width: 96px; } .w200 { width: 160px; }
 input.wide { width: 100%; } input.ing { width: 100%; min-width: 180px; } input.alt { width: 120px; }
 
 /* header */
@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T11:55:38Z">
+<meta name="build" content="2026-10-05T12:12:10Z">
 <script>
-window.BUILD = "2026-10-05T11:55:38Z";
+window.BUILD = "2026-10-05T12:12:10Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -3551,6 +3551,14 @@ window.CLOUD = {
     return App.num(q, q < 10 ? 2 : 1) + ' ' + unidad;
   };
   // texto con la regla de mayúsculas (inicio de oración y nombres propios); se aplica al guardar nombres
+  // búsquedas: sin importar mayúsculas ni tildes, y cada palabra escrita debe aparecer ("atun lata" encuentra "Atún lomitos lata")
+  App.sinTildes = function (t) { return String(t == null ? '' : t).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); };
+  App.coincide = function (texto, consulta) {
+    const palabras = App.sinTildes(consulta).split(/\s+/).filter(Boolean);
+    if (!palabras.length) return true;
+    const t = App.sinTildes(texto);
+    return palabras.every(function (w) { return t.indexOf(w) >= 0; });
+  };
   App.oracion = function (t) { return E.oracion(t, E.propiosDe(Store.get())); };
   App.hoy = function () { return E.hoyISO(E.params(Store.get())); };
 
@@ -4300,7 +4308,7 @@ window.CLOUD = {
   function cerrar() { cerrarLista(); cerrarGhost(); ac = null; }
 
   function resaltar(txt, q) {
-    const i = txt.toLowerCase().indexOf(q.trim().toLowerCase());
+    const i = App.sinTildes(txt).indexOf(App.sinTildes(q.trim()));
     if (!q.trim() || i < 0) return [txt];
     return [txt.slice(0, i), h('b', null, txt.slice(i, i + q.trim().length)), txt.slice(i + q.trim().length)];
   }
@@ -4321,7 +4329,7 @@ window.CLOUD = {
     cerrarGhost();
     const el = ac.el, v = el.value;
     if (!v || ac.sel >= 0 || el.selectionStart !== v.length) return;
-    const c = ac.res.find(function (x) { return x.length > v.length && x.toLowerCase().indexOf(v.toLowerCase()) === 0; });
+    const c = ac.res.find(function (x) { return x.length > v.length && App.sinTildes(x).indexOf(App.sinTildes(v)) === 0; });
     if (!c) return;
     ac.ghost = c;
     const cs = getComputedStyle(el);
@@ -4911,7 +4919,7 @@ window.CLOUD = {
     const s = Store.get(), p = ctx.p, uso = App.usoMap();
     const q = (F.q || '').toLowerCase();
     const filas = s.insumos.filter(function (i) {
-      if (q && (i.nombre + ' ' + i.categoria).toLowerCase().indexOf(q) < 0) return false;
+      if (q && !App.coincide(i.nombre + ' ' + i.categoria, q)) return false;
       if (F.cat && i.categoria !== F.cat) return false;
       const ofs = App.ofertasDe(i.id), c = E.costoInsumo(ctx, i.id);
       if (F.mode === 'sinprecio') return c.missing;
@@ -5323,7 +5331,7 @@ window.CLOUD = {
     const q = (F.q || '').toLowerCase();
     const filas = s.recetas.filter(function (r) {
       if (F.tipo === 'salsa' ? !(r.tipo === 'base' && r.etiqueta === 'salsa') : F.tipo === 'opc' ? !/entrada|ensalada|postre/.test(r.tipo) : (F.tipo && r.tipo !== F.tipo)) return false;
-      return !q || (r.nombre + ' ' + (r.linea || '')).toLowerCase().indexOf(q) >= 0;
+      return !q || App.coincide(r.nombre + ' ' + (r.linea || ''), q);
     });
     return h('div', { class: 'pane-list' },
       h('div', { class: 'filters' }, App.textInput({ fk: 'rec-q', value: F.q, ph: 'Buscar receta…', cls: 'search', onChange: function (v) { F.q = v; App.render(); } })),
@@ -5641,7 +5649,7 @@ window.CLOUD = {
       if (F.tipo === 'bebestible' && r.tipo !== 'bebestible') return false;
       if (F.tipo === 'plato' && F.linea && r.linea !== F.linea) return false;
       if (F.soloActivos && r.activo === false) return false;
-      return !q || r.nombre.toLowerCase().indexOf(q) >= 0;
+      return !q || App.coincide(r.nombre, q);
     });
     const key = { nombre: function (r) { return r.nombre; }, costo: function (r) { return calc.get(r.id).costoTotal; }, pvp: function (r) { return calc.get(r.id).pvp; },
       margen: function (r) { return calc.get(r.id).margen; }, margenPct: function (r) { return calc.get(r.id).margenPct == null ? -1e9 : calc.get(r.id).margenPct; },
@@ -6314,7 +6322,7 @@ window.CLOUD = {
     const F = App.ui.filtros.cocina = App.ui.filtros.cocina || { q: '', id: null, porc: 1 };
     const platos = s.recetas.filter(function (r) { return (r.tipo === 'plato' || r.tipo === 'base' || r.tipo === 'acompanamiento' || /entrada|ensalada|postre/.test(r.tipo) || (r.tipo === 'bebestible' && !r.envasado)) && r.activo !== false; });
     const q = (F.q || '').toLowerCase();
-    const filtrados = platos.filter(function (r) { return !q || r.nombre.toLowerCase().indexOf(q) >= 0; });
+    const filtrados = platos.filter(function (r) { return !q || App.coincide(r.nombre, q); });
     const grupos = {};
     filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? (r.etiqueta === 'salsa' ? 'Salsas' : 'Bases y sub-recetas') : r.tipo === 'acompanamiento' ? 'Guarniciones' : r.tipo === 'bebestible' ? 'Bebestibles' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
     const sel = platos.find(function (r) { return r.id === F.id; }) || filtrados.find(function (r) { return r.tipo === 'plato'; }) || filtrados[0];
@@ -9024,7 +9032,14 @@ window.CLOUD = {
     if (f.seccion) q = q.in('tabla', TABLAS[f.seccion] || [f.seccion]);
     if (f.dias) q = q.gte('hasta', new Date(Date.now() - Number(f.dias) * 86400000).toISOString());
     const t = String(f.texto || '').replace(/[%,()*"\\]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (t) q = q.or('etiqueta.ilike."*' + t + '*",nombre.ilike."*' + t + '*"');
+    if (t && !H.sinBusqueda) {
+      // columna "busqueda" (16_busqueda_sin_tildes.sql): sin tildes ni mayúsculas, y cada palabra escrita debe aparecer
+      App.sinTildes(t).split(' ').forEach(function (w) { q = q.ilike('busqueda', '%' + w + '%'); });
+    } else if (t) {
+      // sin ese script la base distingue tildes: cada vocal o ñ escrita vale por un carácter cualquiera (_), así "atun" encuentra "atún"
+      const pat = t.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[aeiouüñAEIOUÜÑ]/g, '_');
+      q = q.or('etiqueta.ilike."*' + pat + '*",nombre.ilike."*' + pat + '*"');
+    }
     return q;
   }
   function cargar(H, mas) {
@@ -9035,6 +9050,7 @@ window.CLOUD = {
     consulta(H, H.lista.length).then(function (r) {
       if (pedido !== H.pedido) return;
       H.cargando = false; H.cargado = true;
+      if (r.error && /busqueda/i.test(r.error.message || '') && !H.sinBusqueda) { H.sinBusqueda = true; H.cargando = false; cargar(H, mas); return; }   // aún no se ejecutó 16_busqueda_sin_tildes.sql
       if (r.error) {
         H.error = /PGRST205|42P01|does not exist|Could not find the table|schema cache/i.test(r.error.code + ' ' + r.error.message)
           ? 'Falta activar el historial en la base de datos: ejecuta 14_historial_cambios.sql en Supabase (ver supabase/LEEME.md).' : r.error.message;
