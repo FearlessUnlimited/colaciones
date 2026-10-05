@@ -277,9 +277,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T06:47:51Z">
+<meta name="build" content="2026-10-05T06:57:27Z">
 <script>
-window.BUILD = "2026-10-05T06:47:51Z";
+window.BUILD = "2026-10-05T06:57:27Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -3269,13 +3269,16 @@ window.CLOUD = {
   function claveUrl(u) {
     try { const x = new URL(u); return (x.hostname.replace(/^www\./, '') + x.pathname.replace(/\/+$/, '')).toLowerCase(); } catch (e) { return String(u || '').toLowerCase(); }
   }
-  // ¿este producto ya se cotizó antes? (enlaces aprendidos al aprobar, o cotizaciones visibles con el mismo enlace)
+  // ¿este producto ya se cotizó antes? Manda la cotización aprobada más reciente con el mismo enlace (o código de la tienda);
+  // si ya no queda ninguna, los enlaces aprendidos al aprobar
   function insumoConocido(state, url, sku, host) {
     const k = claveUrl(url), ks = sku ? dominio(host) + '#' + sku : null;
-    const ins = (state.insumos || []).find(function (i) { return (i.enlaces || []).some(function (e) { return claveUrl(e.url) === k || (ks && e.sku && dominio(e.host) + '#' + e.sku === ks); }); });
-    if (ins) return ins;
-    const o = (state.ofertas || []).slice().reverse().find(function (x) { return x.url && claveUrl(x.url) === k; });
-    return o ? (state.insumos || []).find(function (i) { return i.id === o.insumoId; }) || null : null;
+    const mismo = function (x) { return (x.url && claveUrl(x.url) === k) || (ks && x.sku && dominio(x.host) + '#' + x.sku === ks); };
+    const insDe = function (id) { return (state.insumos || []).find(function (i) { return i.id === id; }) || null; };
+    const o = (state.ofertas || []).filter(function (x) { return !x.pendiente && mismo(x); })
+      .sort(function (a, b) { return String(b.fecha || '').localeCompare(String(a.fecha || '')); })[0];
+    if (o && insDe(o.insumoId)) return insDe(o.insumoId);
+    return (state.insumos || []).find(function (i) { return (i.enlaces || []).some(mismo); }) || null;
   }
   function proveedorDe(state, host, nombre) {
     const dom = dominio(host), k = norm(nombre);
@@ -4867,6 +4870,12 @@ window.CLOUD = {
           upd(function (x) { delete x.propuesto; x.validadoPor = (App.nube.perfil && App.nube.perfil.nombre) || 'admin'; });
           App.toast('Producto validado: ya puedes aprobar sus cotizaciones en Cotizaciones');
         }, 'small primary'), ' ', unirAExistente(ins)) : null) : null,
+      // enlaces que la captura web reconoce como este insumo; si uno es de otro producto, se olvida aquí
+      App.esStaff() && !ins.propuesto && (ins.enlaces || []).length ? h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'La captura web lo reconoce en:'),
+        ins.enlaces.map(function (e) {
+          return h('span', { class: 'row gap' }, h('a', { href: e.url, target: '_blank', rel: 'noopener', title: e.url }, (e.host || 'página').replace(/^www\./, '') + ' ' + decodeURIComponent((e.url || '').split('/').filter(Boolean).slice(-2).join('/')).slice(0, 50) + ' ↗'),
+            App.btn('✕', function () { upd(function (x) { x.enlaces = (x.enlaces || []).filter(function (y) { return y.url !== e.url; }); }); App.toast('Enlace olvidado'); }, 'small ghost', 'No es este producto: olvidar el enlace'));
+        })) : null,
       h('div', { class: 'form-grid' },
         h('label', null, 'Nombre', App.textInput({ fk: 'ins-nombre', value: ins.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'nm' + ins.id); },
           onCommit: function (v) { const n = App.oracion(v); if (n !== v) upd(function (x) { x.nombre = n; }); } }),
@@ -6409,7 +6418,9 @@ window.CLOUD = {
     if (p && !p.web && y.host) p.web = 'https://' + y.host;
     const ins = st.insumos.find(function (i) { return i.id === y.insumoId; });
     if (!ins) return;
-    ins.enlaces = (ins.enlaces || []).filter(function (e) { return window.Captura.claveUrl(e.url) !== window.Captura.claveUrl(y.url); });
+    // un enlace es de un solo producto: se olvida en los demás insumos (si antes se asoció mal, se corrige al aprobar)
+    const k = window.Captura.claveUrl(y.url);
+    st.insumos.forEach(function (i) { if (i.enlaces) i.enlaces = i.enlaces.filter(function (e) { return window.Captura.claveUrl(e.url) !== k; }); });
     ins.enlaces.push({ url: y.url, host: y.host || '', sku: y.sku || '' });
     if (ins.enlaces.length > 12) ins.enlaces.shift();
   };
