@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T12:41:16Z">
+<meta name="build" content="2026-10-05T12:44:38Z">
 <script>
-window.BUILD = "2026-10-05T12:41:16Z";
+window.BUILD = "2026-10-05T12:44:38Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -5090,7 +5090,7 @@ window.CLOUD = {
       const esUsada = activo.oferta && activo.oferta.id === o.id;
       return h('tr', { class: (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada ' + (E.esTemporal(o) || activo.modo === 'oportunidad' ? 'usada-temp' : 'usada-normal') : (E.enOferta(ctx, o) ? 'en-oferta' : '')) },
         h('td', null,
-          /^https?:\/\//i.test(o.url || '') ? h('div', { style: { textAlign: 'center' } }, h('a', { href: o.url, target: '_blank', rel: 'noopener', title: 'Abrir la página de origen de la cotización' }, '🔗')) : null,
+          /^https?:\/\//i.test(o.url || '') ? h('div', { style: { textAlign: 'center' } }, h('a', { href: o.url, target: '_blank', rel: 'noopener', title: 'Abrir la página de origen de la cotización' }, '🌎')) : null,
           selProveedor(o), o.autor ? h('div', { style: { textAlign: 'center' } }, h('small', { class: 'mut' }, 'cotizó ' + o.autor)) : null),
         h('td', null, App.textInput({ fk: 'o-marca-' + o.id, value: o.marca, ph: 'Marca / detalle', onChange: function (v) { upO(o, function (x) { x.marca = v; }, 'mc' + o.id); } }),
           o.pendiente ? h('div', null, App.badge('por revisar', 'warn')) : null,
