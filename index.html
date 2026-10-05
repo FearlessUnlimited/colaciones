@@ -10,7 +10,7 @@
   --bg: #f6f5f1; --surface: #ffffff; --surface2: #f0eee8; --ink: #1f2421; --mut: #6b726d; --line: #e2dfd6;
   --accent: #0f766e; --accent-ink: #ffffff; --accent-soft: #d7efec;
   --good: #1f7a3f; --good-soft: #dcf0e2; --warn: #b45309; --warn-soft: #fdecc8; --bad: #b42318; --bad-soft: #fde1de; --info: #1d5fa8; --info-soft: #dce9f7;
-  --oferta-soft: #eef6c9; --sim: #7c3aed; --sim-soft: #ece4fd; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 14px rgba(0,0,0,.05);
+  --oferta-soft: #eef6c9; --uso-soft: #dbeafe; --uso-temp-soft: #ead9fb; --sim: #7c3aed; --sim-soft: #ece4fd; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 14px rgba(0,0,0,.05);
   --seg0: #0f766e; --seg1: #2563a8; --seg2: #b45309; --seg3: #7c3aed; --seg4: #be185d; --seg5: #4d7c0f; --seg6: #0e7490; --seg7: #9ca3af;
   /* planificar compras: categórica validada (validate_palette) en claro y oscuro; pagas = neutro */
   --cv1: #2563a8; --cv2: #b45309; --cv3: #7c3aed; --cv4: #be185d; --cv5: #4d7c0f; --cv0: #a8aea9;
@@ -23,7 +23,7 @@
     --bg: #14181a; --surface: #1d2326; --surface2: #262d30; --ink: #e8ece9; --mut: #96a09a; --line: #333c40;
     --accent: #2dd4bf; --accent-ink: #062a26; --accent-soft: #123a36;
     --good: #5fd08a; --good-soft: #17341f; --warn: #f0b05a; --warn-soft: #3b2c10; --bad: #ff8a7d; --bad-soft: #3d1b18; --info: #7db7f0; --info-soft: #17283a;
-    --oferta-soft: #2c3412; --sim: #b69cff; --sim-soft: #2a2145; --shadow: 0 1px 2px rgba(0,0,0,.4);
+    --oferta-soft: #2c3412; --uso-soft: #14304f; --uso-temp-soft: #35205a; --sim: #b69cff; --sim-soft: #2a2145; --shadow: 0 1px 2px rgba(0,0,0,.4);
     --seg0: #2dd4bf; --seg1: #6aa8f0; --seg2: #f0b05a; --seg3: #b69cff; --seg4: #f472b6; --seg5: #a3d65c; --seg6: #5ad1e6; --seg7: #7b848a;
     --cv1: #4f8fdb; --cv2: #c07c22; --cv3: #9b7bef; --cv4: #e0559a; --cv5: #6b9a2a; --cv0: #5d666a;
   }
@@ -156,7 +156,7 @@ label.chk { flex-direction: row; align-items: center; gap: 6px; color: var(--ink
 .tbl tfoot td { font-weight: 600; border-top: 2px solid var(--line); }
 .tbl.sel tbody tr { cursor: pointer; } .tbl.sel tbody tr:hover, .tbl tr.link:hover { background: var(--surface2); }
 .tbl tr.link { cursor: pointer; } .tbl td.link { cursor: pointer; }
-.tbl tr.on { background: var(--accent-soft); } .tbl tr.off { opacity: .55; } .tbl tr.en-oferta td { background: var(--oferta-soft); } .tbl tr.warnrow td { background: var(--warn-soft); } .tbl tr.usada td:first-child { border-left: 3px solid var(--accent); }
+.tbl tr.on { background: var(--accent-soft); } .tbl tr.off { opacity: .55; } .tbl tr.en-oferta td { background: var(--oferta-soft); } .tbl tr.usada-normal td { background: var(--uso-soft); } .tbl tr.usada-temp td { background: var(--uso-temp-soft); } .tbl tr.warnrow td { background: var(--warn-soft); } .tbl tr.usada td:first-child { border-left: 3px solid var(--accent); }
 .tbl th.sortable { cursor: pointer; user-select: none; } .tbl th.on { color: var(--ink); }
 .nm { font-weight: 600; }
 .tbl.platos td input.num { padding: 3px 6px; }
@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T12:34:29Z">
+<meta name="build" content="2026-10-05T12:41:16Z">
 <script>
-window.BUILD = "2026-10-05T12:34:29Z";
+window.BUILD = "2026-10-05T12:41:16Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -5088,7 +5088,7 @@ window.CLOUD = {
       const cn = E.costoNetoOferta(ctx, o);
       const esMejor = mejor && mejor.o.id === o.id && ofs.length > 1;
       const esUsada = activo.oferta && activo.oferta.id === o.id;
-      return h('tr', { class: (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada ' : '') + (E.enOferta(ctx, o) ? 'en-oferta' : '') },
+      return h('tr', { class: (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada ' + (E.esTemporal(o) || activo.modo === 'oportunidad' ? 'usada-temp' : 'usada-normal') : (E.enOferta(ctx, o) ? 'en-oferta' : '')) },
         h('td', null,
           /^https?:\/\//i.test(o.url || '') ? h('div', { style: { textAlign: 'center' } }, h('a', { href: o.url, target: '_blank', rel: 'noopener', title: 'Abrir la página de origen de la cotización' }, '🔗')) : null,
           selProveedor(o), o.autor ? h('div', { style: { textAlign: 'center' } }, h('small', { class: 'mut' }, 'cotizó ' + o.autor)) : null),
@@ -5159,7 +5159,12 @@ window.CLOUD = {
     const tablaOfertas = App.card('Dónde y a qué precio lo compras',
       h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
         h('thead', null, h('tr', null, ['Proveedor', 'Marca / detalle', 'Formato', 'Cant. formato', 'Precio formato', 'Rend. %', 'Costo neto', 'Fuente / fecha', 'Usar', 'Disp.', ''].map(function (t, i) { return h('th', { class: i === 6 ? 'r' : (i === 8 || i === 9 ? 'c' : '') }, t); }))),
-        h('tbody', null, ofs.map(filaOferta)))),
+        h('tbody', null, ofs.slice().sort(function (a, b) {   // la que se usa primero; luego de menor a mayor costo neto (sin costo al final)
+          const ua = activo.oferta && activo.oferta.id === a.id, ub = activo.oferta && activo.oferta.id === b.id;
+          if (ua !== ub) return ua ? -1 : 1;
+          const ca = E.costoNetoOferta(ctx, a), cb = E.costoNetoOferta(ctx, b);
+          return (ca > 0 ? ca : Infinity) - (cb > 0 ? cb : Infinity) || 0;
+        }).map(filaOferta)))),
       '', App.btn('+ Agregar cotización', nuevaOferta, 'small primary'));
 
     // impacto
