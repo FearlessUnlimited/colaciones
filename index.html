@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T12:12:10Z">
+<meta name="build" content="2026-10-05T12:21:09Z">
 <script>
-window.BUILD = "2026-10-05T12:12:10Z";
+window.BUILD = "2026-10-05T12:21:09Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -5027,9 +5027,16 @@ window.CLOUD = {
       const c = E.costoNetoOferta(ctx, o); return !a || (c > 0 && c < a.c) ? { o: o, c: c } : a; }, null);
 
     const upd = function (fn, key) { Store.mutate(function (st) { fn(st.insumos.find(function (x) { return x.id === ins.id; })); }, key); };
+    // enlaces que la captura web reconoce como este insumo: ocultos tras un botón que avisa cuántos hay
+    const nEnlaces = App.esStaff() && !ins.propuesto ? (ins.enlaces || []).length : 0;
+    const abiertos = App.ui.enlacesAbiertos = App.ui.enlacesAbiertos || {};
+    const verEnlaces = nEnlaces && abiertos[ins.id];
+    const botonEnlaces = nEnlaces ? App.btn('🔗 Capturas web ' + (verEnlaces ? '▴' : '▾'), function () { abiertos[ins.id] = !abiertos[ins.id]; App.render(); }, 'small' + (verEnlaces ? '' : ' primary'),
+      'Páginas web que la captura (➕ Cotizar) ya reconoce como este insumo: al cotizar desde ellas queda preseleccionado. Si alguna es de otro producto, ábrelas y olvídala con ✕. ' + nEnlaces + ' enlace(s) guardado(s).') : null;
     const cabecera = h('div', { class: 'card' },
       h('div', { class: 'card-h' }, h('h3', null, ins.nombre),
-        h('div', { class: 'row gap' }, App.btn('🚨 Compra urgente', function () { App.compraUrgente(ins.nombre); }, 'small', 'Compara las formas más rápidas de conseguirlo'),
+        h('div', { class: 'row gap' }, botonEnlaces,
+          App.btn('🚨 Compra urgente', function () { App.compraUrgente(ins.nombre); }, 'small', 'Compara las formas más rápidas de conseguirlo'),
           App.btn('Eliminar insumo', function () { eliminar(ins); }, 'small danger'))),
       ins.propuesto ? h('div', { class: 'aviso warn stack' },
         h('div', null, h('b', null, '🆕 Producto nuevo propuesto'), ins.autor ? ' por ' + ins.autor : '', ins.propuestoEl ? ' (' + App.fechaCorta(ins.propuestoEl) + ')' : '',
@@ -5042,7 +5049,7 @@ window.CLOUD = {
           App.toast('Producto validado: ya puedes aprobar sus cotizaciones en Cotizaciones');
         }, 'small primary'), ' ', unirAExistente(ins)) : null) : null,
       // enlaces que la captura web reconoce como este insumo; si uno es de otro producto, se olvida aquí
-      App.esStaff() && !ins.propuesto && (ins.enlaces || []).length ? h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'La captura web lo reconoce en:'),
+      verEnlaces ? h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'La captura web lo reconoce en:'),
         ins.enlaces.map(function (e) {
           return h('span', { class: 'row gap' }, h('a', { href: e.url, target: '_blank', rel: 'noopener', title: e.url }, (e.host || 'página').replace(/^www\./, '') + ' ' + decodeURIComponent((e.url || '').split('/').filter(Boolean).slice(-2).join('/')).slice(0, 50) + ' ↗'),
             App.btn('✕', function () { upd(function (x) { x.enlaces = (x.enlaces || []).filter(function (y) { return y.url !== e.url; }); }); App.toast('Enlace olvidado'); }, 'small ghost', 'No es este producto: olvidar el enlace'));
