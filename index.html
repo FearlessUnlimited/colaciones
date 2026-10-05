@@ -230,11 +230,11 @@ tr.subhead td { font-weight: 700; background: var(--surface2); } tr.hijo td { co
 .visor-contenido { display: flex; flex-direction: column; gap: 12px; } .visor-info { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .visor-revisar { margin-right: auto; }   /* aprobar a la izquierda, editar a la derecha */
 /* a lo ancho (ficha del insumo): foto a la izquierda; las características en dos columnas si caben */
-.visor-ancho .visor-contenido { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; }
-.visor-ancho .visor-foto { min-height: 160px; } .visor-ancho .visor-foto img { max-height: 200px; }
+.visor-ancho .visor-contenido { display: grid; grid-template-columns: minmax(0, 1fr) 170px; gap: 16px; align-items: start; }
+.visor-ancho .visor-foto { order: 2; min-height: 120px; padding: 6px; } .visor-ancho .visor-foto img { max-height: 160px; }
 .visor-ancho .visor-kpis { max-width: 520px; }
 @media (min-width: 1200px) { .visor-ancho .visor-datos { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); } }
-@media (max-width: 700px) { .visor-ancho .visor-contenido { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 700px) { .visor-ancho .visor-contenido { grid-template-columns: minmax(0, 1fr); } .visor-ancho .visor-foto { order: 0; } }
 .visor-ancho .card-h { flex-wrap: wrap; gap: 8px; }
 .tbl tr.elegible > td { cursor: pointer; }
 .tbl tr.visto td { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }   /* la que muestra el visor */
@@ -316,9 +316,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T23:36:22Z">
+<meta name="build" content="2026-10-05T23:49:26Z">
 <script>
-window.BUILD = "2026-10-05T23:36:22Z";
+window.BUILD = "2026-10-05T23:49:26Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
