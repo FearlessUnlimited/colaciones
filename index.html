@@ -277,9 +277,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T07:40:20Z">
+<meta name="build" content="2026-10-05T08:03:44Z">
 <script>
-window.BUILD = "2026-10-05T07:40:20Z";
+window.BUILD = "2026-10-05T08:03:44Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -6433,7 +6433,7 @@ window.CLOUD = {
     // un enlace es de un solo producto: se olvida en los demás insumos (si antes se asoció mal, se corrige al aprobar)
     const k = window.Captura.claveUrl(y.url);
     st.insumos.forEach(function (i) { if (i.enlaces) i.enlaces = i.enlaces.filter(function (e) { return window.Captura.claveUrl(e.url) !== k; }); });
-    ins.enlaces.push({ url: y.url, host: y.host || '', sku: y.sku || '' });
+    ins.enlaces = (ins.enlaces || []).concat({ url: y.url, host: y.host || '', sku: y.sku || '' });
     if (ins.enlaces.length > 12) ins.enlaces.shift();
   };
   // "📅 fecha por confirmar" es en sí el botón: abre el calendario del navegador sin dejar un campo a la vista
