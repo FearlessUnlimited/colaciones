@@ -45,7 +45,7 @@ textarea { width: 100%; resize: vertical; }
 input.num { text-align: right; }
 input.sim { border-color: var(--sim); background: var(--sim-soft); }
 input[type=range] { width: 100%; accent-color: var(--accent); }
-.w50 { width: 50px; } .w60 { width: 60px; } .w70 { width: 74px; } .w80 { width: 88px; } .w90 { width: 96px; } .w200 { width: 160px; }
+.w50 { width: 50px; } .w60 { width: 60px; } .w70 { width: 74px; } .w80 { width: 88px; } .w90 { width: 96px; } .w140 { width: 150px; } .w200 { width: 160px; }
 input.wide { width: 100%; } input.ing { width: 100%; min-width: 180px; } input.alt { width: 120px; }
 
 /* header */
@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T13:08:33Z">
+<meta name="build" content="2026-10-05T21:55:42Z">
 <script>
-window.BUILD = "2026-10-05T13:08:33Z";
+window.BUILD = "2026-10-05T21:55:42Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -324,6 +324,7 @@ window.CLOUD = {
     recargoSueltoPct: 20,     // % "invisible" sobre el PVP sugerido de entradas, ensaladas, postres y bebestibles vendidos sueltos
     toleranciaAlternativasPct: 10, // ± % de costo para sugerir una entrada/ensalada/postre alternativa del día
     ivaRecuperable: 'potencial', // no | potencial | si — 'si': lo comprado con factura se costea sin IVA (crédito fiscal)
+    grasaMaxLinea: { 'Gourmet / premium': 7, 'Alto en proteína': 4 }, // % máximo de grasa (carnes molidas) que exige cada línea de menú
     hoy: null                 // ISO yyyy-mm-dd; null = fecha actual
   };
 
@@ -357,7 +358,7 @@ window.CLOUD = {
       state: state, opts: opts, p: params(state, opts),
       insumos: new Map(), ofertas: new Map(), ofertasPorInsumo: new Map(), recetas: new Map(),
       proveedores: new Map(), provPorNombre: indiceProveedores(state.proveedores),
-      memoInsumo: new Map(), memoReceta: new Map(), memoPrecio: new Map(), variantes: new Map(), errors: [],
+      memoInsumo: new Map(), memoReceta: new Map(), memoLinea: new Map(), memoPrecio: new Map(), variantes: new Map(), errors: [],
       campanas: new Map(), descuentosPorProv: new Map(), excluidas: new Set(opts.campanasExcluidas || [])
     };
     (state.proveedores || []).forEach(function (p) {
@@ -844,7 +845,7 @@ window.CLOUD = {
           const aqui = f.proveedorId === prov.id;
           let mejor = null;
           (cx.ofertasPorInsumo.get(f.insumoId) || []).forEach(function (o) {
-            if (o.disponible === false || o.pendiente || fueraDeVigencia(cx, o) || !ofertaHabilitada(cx, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
+            if (o.disponible === false || o.pendiente || fueraDeVigencia(cx, o) || !ofertaHabilitada(cx, o) || !(o.formatoQty > 0) || !(o.precio > 0) || !sirveParaFila(o, f)) return;
             const pv = proveedorDe(cx, o);
             if (!pv || pv.id !== prov.id) return;
             const c = compraConOferta(cx, o, f.usable);
@@ -993,16 +994,26 @@ window.CLOUD = {
     });
   }
 
-  // oferta/costo vigente de un insumo según modo (preferida | barata | promedio) o fijación de escenario
-  function costoInsumo(ctx, insumoId) {
-    if (ctx.memoInsumo.has(insumoId)) return ctx.memoInsumo.get(insumoId);
+  // oferta/costo vigente de un insumo según modo (preferida | barata | promedio) o fijación de escenario.
+  // cons ('refrigerado' | 'congelado'): solo las cotizaciones con esa conservación; si no hay ninguna, se costea con
+  // las que hay y el resultado lo dice (sinConservacion) para avisar.
+  function costoInsumo(ctx, insumoId, cons) {
+    cons = CONSERVACIONES.indexOf(cons) >= 0 ? cons : null;
+    const mk = cons ? insumoId + '@' + cons : insumoId;
+    if (ctx.memoInsumo.has(mk)) return ctx.memoInsumo.get(mk);
+    const sirve = function (o) { return !cons || o.conservacion === cons; };
     let res = { unit: 0, oferta: null, missing: true, modo: ctx.p.modoOferta };
     const pin = ctx.opts.ofertaElegida && ctx.opts.ofertaElegida[insumoId];
-    let lista = ofertasDisponibles(ctx, insumoId);
-    if (!lista.length) lista = (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return !o.pendiente && !esTemporal(o) && ofertaHabilitada(ctx, o); });
+    let lista = ofertasDisponibles(ctx, insumoId).filter(sirve);
+    if (!lista.length) lista = (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return !o.pendiente && !esTemporal(o) && ofertaHabilitada(ctx, o) && sirve(o); });
     // escenario (simulación) > oferta temporal o de campaña en uso mientras dure > modo normal
-    const oport = ctx.opts.sinOportunidades || ctx.opts.sinPromos ? [] : (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return oportunidadActiva(ctx, o); })
+    const oport = ctx.opts.sinOportunidades || ctx.opts.sinPromos ? [] : (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return oportunidadActiva(ctx, o) && sirve(o); })
       .map(function (o) { return { o: o, c: costoNetoOferta(ctx, o) }; }).filter(function (x) { return x.c > 0; });
+    if (cons && !(pin && ctx.ofertas.get(pin)) && !oport.length && !lista.length) {
+      res = Object.assign({}, costoInsumo(ctx, insumoId), { sinConservacion: cons });
+      ctx.memoInsumo.set(mk, res);
+      return res;
+    }
     if (pin && ctx.ofertas.get(pin)) {
       const o = ctx.ofertas.get(pin);
       res = { unit: costoNetoOferta(ctx, o), oferta: o, missing: false, modo: 'fijada' };
@@ -1023,8 +1034,137 @@ window.CLOUD = {
       }
       if (res.unit <= 0) res.missing = true; // precio 0 = sin precio
     }
-    ctx.memoInsumo.set(insumoId, res);
+    ctx.memoInsumo.set(mk, res);
     return res;
+  }
+
+  /* ---------- calidad: % de grasa (carnes molidas) y conservación (refrigerado / congelado) ----------
+   * insumo.grasaPct: cada nivel de grasa es un insumo distinto de la misma familia (su precio, rendimiento y compras).
+   * oferta.conservacion: congelado o refrigerado es la misma carne con otro precio y duración: va en la cotización.
+   * Línea de receta: elegir = 'alternativas' | 'familia' → usa la opción más barata que cumpla los requisitos;
+   * grasaMax (de la línea, o de su línea de menú en params.grasaMaxLinea: manda la más exigente) y conservacion. */
+  const CONSERVACIONES = ['refrigerado', 'congelado'];
+  function grasaDe(ins) {
+    const g = ins ? ins.grasaPct : null;
+    return g == null || g === '' || isNaN(Number(g)) ? null : Number(g);
+  }
+  // los insumos sin % de grasa no se gradúan: cumplen siempre
+  function cumpleGrasa(ins, max) { const g = grasaDe(ins); return max == null || g == null || g <= max + 1e-9; }
+  function grasaMaxLinea(ctx, linea) {
+    const m = ctx.p.grasaMaxLinea || {}, k = normNombre(linea);
+    if (!k) return null;
+    const key = Object.keys(m).find(function (x) { return normNombre(x) === k; });
+    const v = key != null ? num(m[key]) : null;
+    return v != null && v >= 0 ? v : null;
+  }
+  function requisitosLinea(ctx, r, ln) {
+    const esIns = !!ln && ln.tipo === 'insumo';
+    const gl = esIns ? num(ln.grasaMax) : null, gm = esIns ? grasaMaxLinea(ctx, r && r.linea) : null;
+    const grasaMax = gl == null ? gm : gm == null ? gl : Math.min(gl, gm);
+    return { grasaMax: grasaMax, origenGrasa: grasaMax == null ? null : (gl != null && gl === grasaMax ? 'receta' : 'linea'),
+      conservacion: esIns && CONSERVACIONES.indexOf(ln.conservacion) >= 0 ? ln.conservacion : null };
+  }
+  // insumos de la misma familia y unidad (sustitutos)
+  function hermanosFamilia(ctx, ins) {
+    if (!ins || !normNombre(ins.familia)) return [];
+    return ctx.state.insumos.filter(function (s) { return s.id !== ins.id && s.unidad === ins.unidad && normNombre(s.familia) === normNombre(ins.familia); });
+  }
+  // opciones entre las que elige una línea flexible: el insumo de la línea, sus alternativas y (si elige en la familia) los de su familia
+  function candidatosLinea(ctx, r, ln) {
+    const ids = [ln.ref];
+    if (ln.elegir === 'alternativas' || ln.elegir === 'familia') (ln.alternativas || []).forEach(function (a) { ids.push(a); });
+    if (ln.elegir === 'familia') hermanosFamilia(ctx, ctx.insumos.get(ln.ref)).forEach(function (s) { if (dietaCompatible(ctx, r, s)) ids.push(s.id); });
+    return ids.filter(function (id, i) { return id && ids.indexOf(id) === i && ctx.insumos.has(id); });
+  }
+  // qué insumo usa de verdad una línea de receta: el de un escenario (sustitución) > el más barato que cumple (línea flexible) > el de la línea
+  function resolverLinea(ctx, r, ln, idx) {
+    const k = r.id + '#' + idx;
+    if (ctx.memoLinea.has(k)) return ctx.memoLinea.get(k);
+    const sust = ctx.opts.sust && ctx.opts.sust[r.id] && ctx.opts.sust[r.id][idx];
+    const req = requisitosLinea(ctx, r, ln);
+    let ref = sust || ln.ref, elegida = false;
+    if (!sust && ln.tipo === 'insumo' && (ln.elegir === 'alternativas' || ln.elegir === 'familia')) {
+      let mejor = null;
+      candidatosLinea(ctx, r, ln).forEach(function (id) {
+        // con un tope de grasa, una carne de la familia sin % de grasa no entra sola (solo si la línea la nombra: el insumo o sus alternativas)
+        const nombrada = id === ln.ref || (ln.alternativas || []).indexOf(id) >= 0;
+        if (!cumpleGrasa(ctx.insumos.get(id), req.grasaMax) || (req.grasaMax != null && !nombrada && grasaDe(ctx.insumos.get(id)) == null)) return;
+        const c = costoInsumo(ctx, id, req.conservacion);
+        if (c.missing) return;
+        if (!mejor || c.unit < mejor.unit - 1e-9) mejor = { id: id, unit: c.unit };
+      });
+      if (mejor) { ref = mejor.id; elegida = mejor.id !== ln.ref; }
+    }
+    const ins = ln.tipo === 'insumo' ? ctx.insumos.get(ref) : null;
+    const res = { ref: ref, cons: req.conservacion, req: req, elegida: elegida, sustituida: !!sust, cumpleGrasa: !ins || cumpleGrasa(ins, req.grasaMax) };
+    ctx.memoLinea.set(k, res);
+    return res;
+  }
+  // nombre con su % de grasa ("Carne molida de vacuno 7% grasa"): el número manda sobre lo escrito
+  const RE_GRASA = /\s*\(?\b\d+(?:[.,]\d+)?\s*%\s*(?:de\s+)?(?:materia\s+grasa|grasa|m\.?\s?g\.?(?=\s|$|\)))?\)?/i;
+  function textoPct(v) { return String(Math.round(Number(v) * 10) / 10).replace('.', ','); }
+  function nombreConGrasa(nombre, pct) {
+    const n = String(nombre || '').replace(RE_GRASA, ' ').replace(/\s+/g, ' ').trim();
+    return pct == null || pct === '' || isNaN(Number(pct)) ? n : n + ' ' + textoPct(pct) + '% grasa';
+  }
+  // % de grasa escrito en un texto ("10% grasa", "7 % M.G.", "materia grasa 4%"); null si no lo dice
+  function grasaEnTexto(texto) {
+    const t = String(texto || '');
+    const m = t.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:de\s+)?(?:materia\s+grasa|grasa|m\.?\s?g\b)/i) ||
+      t.match(/(?:materia\s+grasa|grasa)\s*(?:m[aá]x(?:ima|\.)?\s*)?:?\s*(\d+(?:[.,]\d+)?)\s*%/i);
+    if (!m) return null;
+    const v = Number(m[1].replace(',', '.'));
+    return v >= 0 && v <= 60 ? v : null;
+  }
+  // conservación escrita en un texto: congelado | refrigerado | null
+  function conservacionEnTexto(texto) {
+    const t = normNombre(texto);
+    if (/\b(congelad[oa]s?|ultracongelad[oa]s?|iqf)\b/.test(t)) return 'congelado';
+    if (/\b(refrigerad[oa]s?|enfriad[oa]s?)\b/.test(t)) return 'refrigerado';
+    return null;
+  }
+  // una vez: los insumos con el % de grasa en el nombre lo pasan a grasaPct, y las cotizaciones que dicen "congelado"
+  // o "refrigerado" (marca, formato, nota o título de la página) quedan con su conservación
+  function asegurarGrasa(state) {
+    state.params = state.params || {};
+    if (state.params.grasaV1) return;
+    (state.insumos || []).forEach(function (i) { if (grasaDe(i) == null) { const g = grasaEnTexto(i.nombre); if (g != null) i.grasaPct = g; } });
+    (state.ofertas || []).forEach(function (o) {
+      if (o.conservacion) return;
+      const c = conservacionEnTexto([o.marca, o.formatoLabel, o.nota, o.tituloWeb].filter(Boolean).join(' '));
+      if (c) o.conservacion = c;
+    });
+    state.params.grasaV1 = true;
+  }
+  // conservación de las compras: la que exige alguna receta; si unas piden refrigerado y otras congelado, ninguna (y se avisa)
+  function marcarConservacion(acc, insId, cons) {
+    if (!cons) return;
+    if (!acc.cons) acc.cons = new Map();
+    if (!acc.cons.has(insId)) acc.cons.set(insId, new Set());
+    acc.cons.get(insId).add(cons);
+  }
+  function unirConservacion(dest, acc) { if (acc && acc.cons) acc.cons.forEach(function (s, id) { s.forEach(function (c) { marcarConservacion(dest, id, c); }); }); }
+  function conservacionCompra(acc, insId) {
+    const s = acc && acc.cons && acc.cons.get(insId);
+    if (!s || !s.size) return { cons: null, conflicto: false };
+    return s.size === 1 ? { cons: s.values().next().value, conflicto: false } : { cons: null, conflicto: true };
+  }
+  // la que pide el plan semanal (urgencias, ficha del insumo)
+  function conservacionInsumo(ctx, insId) { return conservacionCompra(necesidades(ctx), insId); }
+  // ¿sirve esta cotización para una fila de compra que exige una conservación? (si ninguna la cumple, sirven todas y la fila lo avisa)
+  function sirveParaFila(o, f) { return !f || !f.conservacion || !!f.sinConservacion || o.conservacion === f.conservacion; }
+  // costo extra por unidad de usar una carne más magra que la más barata de su familia (solo insumos con % de grasa)
+  function extraPorGrasa(ctx, insId, unit, cons) {
+    const ins = ctx.insumos.get(insId);
+    if (grasaDe(ins) == null) return null;
+    let base = null;
+    [ins].concat(hermanosFamilia(ctx, ins)).forEach(function (s) {
+      if (grasaDe(s) == null) return;
+      const c = costoInsumo(ctx, s.id, cons);
+      if (c.missing) return;
+      if (!base || c.unit < base.unit) base = { id: s.id, nombre: s.nombre, grasaPct: grasaDe(s), unit: c.unit };
+    });
+    return base && unit > base.unit + 1e-9 ? { base: base, porUnidad: unit - base.unit } : null;
   }
 
   /* ---------- recetas ---------- */
@@ -1039,24 +1179,32 @@ window.CLOUD = {
       return Object.assign({}, vacio, { ciclo: true });
     }
     const porciones = r.porciones > 0 ? r.porciones : 1;
-    const sust = (ctx.opts.sust && ctx.opts.sust[id]) || {};
-    const out = { id: id, lote: 0, porPorcion: 0, min: 0, max: 0, lineas: [], faltantes: [], ciclo: false };
+    const out = { id: id, lote: 0, porPorcion: 0, min: 0, max: 0, lineas: [], faltantes: [], ciclo: false, extraGrasa: 0 };
     const st = stack.concat(id);
 
     (r.lineas || []).forEach(function (ln, idx) {
-      const ref = sust[idx] || ln.ref;
-      const fila = costoLinea(ctx, ln.tipo, ref, ln.cantidad, st);
-      // alternativas declaradas en la línea → rango min/max
+      const rl = resolverLinea(ctx, r, ln, idx), ref = rl.ref;
+      const fila = costoLinea(ctx, ln.tipo, ref, ln.cantidad, st, rl.cons);
+      // alternativas declaradas en la línea → rango min/max (solo las que cumplen el % de grasa exigido)
       let mn = fila.subtotal, mx = fila.subtotal;
       if (ln.alternativas && ln.alternativas.length) {
-        ln.alternativas.forEach(function (alt) {
-          const f2 = costoLinea(ctx, ln.tipo, alt, ln.cantidad, st);
+        (rl.elegida ? [ln.ref] : []).concat(ln.alternativas).forEach(function (alt) {
+          if (alt === ref || (ln.tipo === 'insumo' && !cumpleGrasa(ctx.insumos.get(alt), rl.req.grasaMax))) return;
+          const f2 = costoLinea(ctx, ln.tipo, alt, ln.cantidad, st, rl.cons);
           if (f2.subtotal < mn) mn = f2.subtotal;
           if (f2.subtotal > mx) mx = f2.subtotal;
         });
       }
-      fila.idx = idx; fila.nota = ln.nota || ''; fila.refOriginal = ln.ref; fila.sustituido = !!sust[idx];
+      fila.idx = idx; fila.nota = ln.nota || ''; fila.refOriginal = ln.ref; fila.sustituido = rl.sustituida;
       fila.min = mn; fila.max = mx; fila.borrador = !!ln.borrador;
+      fila.elegida = rl.elegida; fila.elegir = ln.elegir || null; fila.req = rl.req; fila.cumpleGrasa = rl.cumpleGrasa;
+      // cuánto cuesta de más por ser más magra que la más barata de su familia (lo que justifica el precio de premium o proteico)
+      fila.extraGrasa = 0;
+      if (ln.tipo === 'insumo') {
+        const eg = extraPorGrasa(ctx, ref, fila.unitCost, rl.cons);
+        if (eg) { fila.extraGrasa = eg.porUnidad * fila.cantidad; fila.grasaBase = eg.base; }
+      } else if (fila.extraGrasaPorPorcion) fila.extraGrasa = fila.extraGrasaPorPorcion * fila.cantidad;
+      out.extraGrasa += fila.extraGrasa;
       out.lote += fila.subtotal; out.min += mn; out.max += mx;
       if (fila.ciclo) out.ciclo = true;
       if (fila.missing) out.faltantes.push(fila.nombre);
@@ -1069,24 +1217,26 @@ window.CLOUD = {
     out.porPorcion = out.lote / porciones;
     out.minPorPorcion = out.min / porciones;
     out.maxPorPorcion = out.max / porciones;
+    out.extraGrasaPorPorcion = out.extraGrasa / porciones;
     out.lineas.forEach(function (f) { f.porPorcion = f.subtotal / porciones; });
     ctx.memoReceta.set(id, out);
     return out;
   }
 
-  function costoLinea(ctx, tipo, ref, cantidad, stack) {
+  function costoLinea(ctx, tipo, ref, cantidad, stack, cons) {
     cantidad = Number(cantidad) || 0;
     if (tipo === 'receta') {
       const sub = costoReceta(ctx, ref, stack);
       const rr = ctx.recetas.get(ref);
       return { tipo: 'receta', ref: ref, nombre: rr ? rr.nombre : ('(receta ' + ref + ')'), cantidad: cantidad,
         unidad: 'porc', unitCost: sub.porPorcion, subtotal: cantidad * sub.porPorcion, oferta: null,
-        missing: !rr || sub.faltantes.length > 0, ciclo: !!sub.ciclo };
+        missing: !rr || sub.faltantes.length > 0, ciclo: !!sub.ciclo, extraGrasaPorPorcion: sub.extraGrasaPorPorcion || 0 };
     }
     const ins = ctx.insumos.get(ref);
-    const c = costoInsumo(ctx, ref);
+    const c = costoInsumo(ctx, ref, cons);
     return { tipo: 'insumo', ref: ref, nombre: ins ? ins.nombre : ('(insumo ' + ref + ')'), cantidad: cantidad,
-      unidad: ins ? ins.unidad : '', unitCost: c.unit, subtotal: cantidad * c.unit, oferta: c.oferta, missing: c.missing || !ins };
+      unidad: ins ? ins.unidad : '', unitCost: c.unit, subtotal: cantidad * c.unit, oferta: c.oferta, missing: c.missing || !ins,
+      grasaPct: grasaDe(ins), conservacion: cons || null, sinConservacion: c.sinConservacion || null };
   }
 
   /* ---------- plato (receta vendible) ---------- */
@@ -1124,11 +1274,17 @@ window.CLOUD = {
     const foodCostPct = pvpNeto > 0 ? insumosTot / pvpNeto * 100 : null;
 
     // PVP sugerido por food cost objetivo (redondeado hacia arriba)
-    const netoSug = insumosTot / (p.foodCostObjetivo / 100);
-    let sug = p.ivaOn ? netoSug * (1 + p.ivaPct / 100) : netoSug;
-    if (r && TIPOS_SUELTOS.indexOf(r.tipo) >= 0) sug *= 1 + (Number(p.recargoSueltoPct) || 0) / 100;   // recargo invisible del suelto
     const rnd = p.redondeo > 0 ? p.redondeo : 1;
-    const pvpSugerido = insumosTot > 0 ? Math.ceil(sug / rnd) * rnd : 0;
+    const sugerir = function (tot) {
+      let sug = tot / (p.foodCostObjetivo / 100);
+      if (p.ivaOn) sug *= 1 + p.ivaPct / 100;
+      if (r && TIPOS_SUELTOS.indexOf(r.tipo) >= 0) sug *= 1 + (Number(p.recargoSueltoPct) || 0) / 100;   // recargo invisible del suelto
+      return tot > 0 ? Math.ceil(sug / rnd) * rnd : 0;
+    };
+    const pvpSugerido = sugerir(insumosTot);
+    // carne más magra que la más barata de su familia: cuánto sube el costo (con imprevistos) y el sugerido
+    const extraGrasaBase = (rc.extraGrasaPorPorcion || 0) + (g ? g.extraGrasaPorPorcion || 0 : 0);
+    const extraGrasa = envasado ? extraGrasaBase : extraGrasaBase * (1 + p.imprevistosPct / 100);
     // PVP mínimo (margen $0)
     const k = (p.ivaOn ? 1 / (1 + p.ivaPct / 100) : 1) - p.comisionPct / 100;
     const pvpMinimo = k > 0 ? (costoDirecto + overhead) / k : 0;
@@ -1139,6 +1295,7 @@ window.CLOUD = {
       costoDirecto: costoDirecto, costoTotal: costoTotal, pvp: pvp, pvpNeto: pvpNeto,
       margen: margen, margenPct: margenPct, foodCostPct: foodCostPct,
       pvpSugerido: pvpSugerido, pvpMinimo: pvpMinimo, envasado: envasado,
+      extraGrasa: extraGrasa, pvpSugeridoSinExtraGrasa: extraGrasa > 0.5 ? sugerir(insumosTot - extraGrasa) : pvpSugerido,
       pvpDeLinea: !!(r && r.tipo === 'plato' && (r.pvp == null || r.pvp === '')), pvpLinea: r && r.tipo === 'plato' ? precioLinea(ctx, r.linea) : null,
       rango: { min: (rc.minPorPorcion + guarn) * (1 + p.imprevistosPct / 100) + envase + overhead + comision,
                max: (rc.maxPorPorcion + guarn) * (1 + p.imprevistosPct / 100) + envase + overhead + comision },
@@ -1175,9 +1332,8 @@ window.CLOUD = {
     const r = ctx.recetas.get(id);
     if (!r || stack.indexOf(id) >= 0) return acc;
     const porciones = r.porciones > 0 ? r.porciones : 1;
-    const sust = (ctx.opts.sust && ctx.opts.sust[id]) || {};
     (r.lineas || []).forEach(function (ln, idx) {
-      const ref = sust[idx] || ln.ref;
+      const rl = resolverLinea(ctx, r, ln, idx), ref = rl.ref;
       const q = (Number(ln.cantidad) || 0) * mult / porciones;
       if (ln.tipo === 'receta') {
         const sr = ctx.recetas.get(ref); const sp = sr && sr.porciones > 0 ? sr.porciones : 1;
@@ -1185,6 +1341,7 @@ window.CLOUD = {
         explotar(ctx, ref, q * sp, acc, stack.concat(id));
       } else {
         acc.set(ref, (acc.get(ref) || 0) + q);
+        if (q > 0) marcarConservacion(acc, ref, rl.cons);
       }
     });
     return acc;
@@ -1285,31 +1442,33 @@ window.CLOUD = {
     const res = [];
     (r.lineas || []).forEach(function (ln, idx) {
       if (ln.tipo !== 'insumo') return;
-      const ins = ctx.insumos.get(ln.ref);
+      const rl = resolverLinea(ctx, r, ln, idx), ref = rl.ref;   // lo que usa hoy (una línea flexible: la más barata que cumple)
+      const ins = ctx.insumos.get(ref);
       if (!ins) return;
-      const actual = costoInsumo(ctx, ln.ref);
+      const actual = costoInsumo(ctx, ref, rl.cons);
       const q = (Number(ln.cantidad) || 0) / porciones;
       const opciones = [];
-      (ctx.ofertasPorInsumo.get(ln.ref) || []).forEach(function (o) {
+      (ctx.ofertasPorInsumo.get(ref) || []).forEach(function (o) {
         if (o.disponible === false || o.pendiente) return;
         if (actual.oferta && o.id === actual.oferta.id) return;
         const c = costoNetoOferta(ctx, o);
-        opciones.push({ tipo: 'oferta', insumoId: ln.ref, ofertaId: o.id, nombre: ins.nombre, lugar: o.lugar, marca: o.marca,
-          unit: c, enOferta: enOferta(ctx, o), deltaPorPorcion: (c - actual.unit) * q });
+        opciones.push({ tipo: 'oferta', insumoId: ref, ofertaId: o.id, nombre: ins.nombre, lugar: o.lugar, marca: o.marca,
+          unit: c, enOferta: enOferta(ctx, o), deltaPorPorcion: (c - actual.unit) * q, grasaPct: grasaDe(ins),
+          conservacion: o.conservacion || null, cumple: !rl.cons || o.conservacion === rl.cons });
       });
-      if (ins.familia) {
-        ctx.state.insumos.forEach(function (s) {
-          if (s.id === ins.id || normNombre(s.familia) !== normNombre(ins.familia) || s.unidad !== ins.unidad) return;
-          if (!dietaCompatible(ctx, r, s)) return;
-          const c = costoInsumo(ctx, s.id);
-          if (c.missing) return;
-          opciones.push({ tipo: 'sustituto', insumoId: s.id, ofertaId: c.oferta ? c.oferta.id : null, nombre: s.nombre,
-            lugar: c.oferta ? c.oferta.lugar : '', marca: c.oferta ? c.oferta.marca : '', unit: c.unit, enOferta: c.modo === 'oportunidad' || enOferta(ctx, c.oferta),
-            deltaPorPorcion: (c.unit - actual.unit) * q });
-        });
-      }
-      opciones.sort(function (a, b) { return a.unit - b.unit; });   // de más barato a más caro
-      res.push({ idx: idx, ref: ln.ref, nombre: ins.nombre, cantidad: ln.cantidad, unidad: ins.unidad, actual: actual,
+      hermanosFamilia(ctx, ins).forEach(function (s) {
+        if (!dietaCompatible(ctx, r, s)) return;
+        const c = costoInsumo(ctx, s.id, rl.cons);
+        if (c.missing) return;
+        opciones.push({ tipo: 'sustituto', insumoId: s.id, ofertaId: c.oferta ? c.oferta.id : null, nombre: s.nombre,
+          lugar: c.oferta ? c.oferta.lugar : '', marca: c.oferta ? c.oferta.marca : '', unit: c.unit, enOferta: c.modo === 'oportunidad' || enOferta(ctx, c.oferta),
+          deltaPorPorcion: (c.unit - actual.unit) * q, grasaPct: grasaDe(s), conservacion: c.oferta ? c.oferta.conservacion || null : null,
+          cumple: cumpleGrasa(s, rl.req.grasaMax) && !(rl.req.grasaMax != null && grasaDe(s) == null) && !c.sinConservacion, sinGrasa: grasaDe(s) == null && rl.req.grasaMax != null });
+      });
+      // de más barato a más caro; las que no cumplen el % de grasa o la conservación exigidos, al final
+      opciones.sort(function (a, b) { return (b.cumple - a.cumple) || (a.unit - b.unit); });
+      res.push({ idx: idx, ref: ref, refOriginal: ln.ref, elegir: ln.elegir || null, elegida: rl.elegida, req: rl.req, cumpleGrasa: rl.cumpleGrasa,
+        grasaPct: grasaDe(ins), nombre: ins.nombre, cantidad: ln.cantidad, unidad: ins.unidad, actual: actual,
         costoLinea: (Number(ln.cantidad) || 0) * actual.unit / porciones, opciones: opciones });
     });
     return res;
@@ -1338,7 +1497,9 @@ window.CLOUD = {
     const v = volumenSemanal(ctx);
     const total = new Map();
     v.vol.forEach(function (porc, rid) {
-      explotarPlato(ctx, rid, porc).forEach(function (q, ins) { total.set(ins, (total.get(ins) || 0) + q); });
+      const ex = explotarPlato(ctx, rid, porc);
+      ex.forEach(function (q, ins) { total.set(ins, (total.get(ins) || 0) + q); });
+      unirConservacion(total, ex);
     });
     ctx.memoUso = { uso: total, usoPlan: v.usoPlan };
     return ctx.memoUso;
@@ -1427,9 +1588,9 @@ window.CLOUD = {
     const acc = new Map();
     items.forEach(function (it) {
       if (!ctx.recetas.get(it.recetaId)) return;
-      explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0).forEach(function (q, ins) {
-        acc.set(ins, (acc.get(ins) || 0) + q);
-      });
+      const ex = explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0);
+      ex.forEach(function (q, ins) { acc.set(ins, (acc.get(ins) || 0) + q); });
+      unirConservacion(acc, ex);
     });
     const filas = [], stock = sobrestockVigente(ctx);
     acc.forEach(function (necesario, insId) {
@@ -1437,7 +1598,8 @@ window.CLOUD = {
       const st = stock.get(insId);
       const cubierto = st ? Math.min(necesario, st.restante) : 0;
       const usable = necesario - cubierto;
-      const c = costoInsumo(ctx, insId);
+      const cc = conservacionCompra(acc, insId);
+      const c = costoInsumo(ctx, insId, cc.cons);
       const o = c.oferta;
       const rend = o ? (o.rendimiento != null ? o.rendimiento : (ins.rendimiento != null ? ins.rendimiento : 1)) : 1;
       const comprarBase = rend > 0 ? usable / rend : usable;
@@ -1449,14 +1611,16 @@ window.CLOUD = {
         formatoQty: formato, packs: packs, precioPack: o ? precioPorPack(ctx, o, packs) : 0, unidadesPorFormato: o ? unidadesPack(o, ins) : 1,
         costo: formato > 0 ? packs * precioPorPack(ctx, o, packs) : usable * c.unit, costoTeorico: usable * c.unit, missing: c.missing,
         promoCantidad: o ? promoCantidadVigente(ctx, o) : null,
-        necesario: necesario, cubiertoStock: cubierto, oportunidad: c.modo === 'oportunidad' ? hastaOferta(ctx, o) : null });
+        necesario: necesario, cubiertoStock: cubierto, oportunidad: c.modo === 'oportunidad' ? hastaOferta(ctx, o) : null,
+        grasaPct: grasaDe(ins), conservacion: cc.cons, conflictoConservacion: cc.conflicto, sinConservacion: c.sinConservacion || null,
+        conservacionOferta: o ? o.conservacion || null : null });
     });
     // descuentos a la vista: lo mismo a precio normal (sin campañas, ofertas temporales ni promos) y qué promociones bajan el precio
     if (!ctx.opts.sinPromos) {
       const normal = variante(ctx, { sinPromos: true });
       filas.forEach(function (f) {
         const o = f.ofertaId ? ctx.ofertas.get(f.ofertaId) : null;
-        const n = costoInsumo(normal, f.insumoId), on = n.oferta;
+        const n = costoInsumo(normal, f.insumoId, f.conservacion), on = n.oferta;
         f.costoNormal = on && on.formatoQty > 0 ? compraConOferta(normal, on, f.usable).bruto : (n.missing ? null : f.usable * n.unit);
         f.ahorroPromo = f.costoNormal != null && f.costoNormal > f.costo + 0.5 ? f.costoNormal - f.costo : 0;
         f.promos = [];
@@ -1501,14 +1665,19 @@ window.CLOUD = {
   /* ---------- urgencias: la forma más rápida de conseguir un insumo ---------- */
   // Todas las formas de conseguir `usable` de un insumo (ir a comprar, despacho normal o en promoción de cada proveedor),
   // ordenadas por rapidez y luego por costo total (productos + despacho o visita). plazoMax filtra (0 = hoy, 1 = mañana).
-  function opcionesUrgencia(ctx, insumoId, usable, plazoMax) {
+  // cons: conservación exigida (sin indicarla, la que piden las recetas del plan semanal)
+  function opcionesUrgencia(ctx, insumoId, usable, plazoMax, cons) {
     const ins = ctx.insumos.get(insumoId);
     if (!ins || !(usable > 0)) return { opciones: [], normal: null };
-    const c0 = costoInsumo(ctx, insumoId);
+    if (cons === undefined) cons = conservacionInsumo(ctx, insumoId).cons;
+    const todas0 = ctx.ofertasPorInsumo.get(insumoId) || [];
+    const fc = { conservacion: cons || null };
+    fc.sinConservacion = !!cons && !todas0.some(function (o) { return o.conservacion === cons; });
+    const c0 = costoInsumo(ctx, insumoId, cons);
     const normalTotal = c0.oferta ? compraConOferta(ctx, c0.oferta, usable).bruto : null;
     const out = [];
-    (ctx.ofertasPorInsumo.get(insumoId) || []).forEach(function (o) {
-      if (o.disponible === false || fueraDeVigencia(ctx, o) || !ofertaHabilitada(ctx, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
+    todas0.forEach(function (o) {
+      if (o.disponible === false || fueraDeVigencia(ctx, o) || !ofertaHabilitada(ctx, o) || !(o.formatoQty > 0) || !(o.precio > 0) || !sirveParaFila(o, fc)) return;
       const p = proveedorDe(ctx, o);
       if (!p || p.activo === false) return;
       const c = compraConOferta(ctx, o, usable), div = c.sinFactura ? 1 : divisorIva(ctx, p);
@@ -1542,6 +1711,7 @@ window.CLOUD = {
     const todas = out.filter(function (x) { return x.viable; });
     const mejorHasta = function (d) { return todas.filter(function (x) { return x.plazoDias != null && x.plazoDias <= d; }).reduce(function (a, x) { return !a || x.total < a.total ? x : a; }, null); };
     return { insumo: ins, usable: usable, opciones: lista, masRapida: masRapida, masBarata: masBarata, normalTotal: normalTotal,
+      conservacion: fc.conservacion, sinConservacion: fc.sinConservacion,
       mejorHoy: mejorHasta(0), mejorManana: mejorHasta(1), mejorSinApuro: todas.reduce(function (a, x) { return !a || x.total < a.total ? x : a; }, null) };
   }
   // insumos cuyo sobrestock se acaba en `dias` días o menos (posibles quiebres)
@@ -1846,9 +2016,15 @@ window.CLOUD = {
     if (items && items.length) {
       items.forEach(function (it) {
         if (!ctx.recetas.get(it.recetaId)) return;
-        explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0).forEach(function (q, ins) { acc.set(ins, (acc.get(ins) || 0) + q); });
+        const ex = explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0);
+        ex.forEach(function (q, ins) { acc.set(ins, (acc.get(ins) || 0) + q); });
+        unirConservacion(acc, ex);
       });
-    } else usoSemanalInsumos(ctx).uso.forEach(function (q, id) { acc.set(id, q); });
+    } else {
+      const u = usoSemanalInsumos(ctx);
+      u.uso.forEach(function (q, id) { acc.set(id, q); });
+      unirConservacion(acc, u.uso);
+    }
     return acc;
   }
 
@@ -1958,8 +2134,10 @@ window.CLOUD = {
     const cand = new Map(), sinOferta = [];
     nec.forEach(function (q, id) {
       if (!(q > 0)) return;
-      const m = new Map();
-      ofertasDisponibles(ctx, id).forEach(function (o) {
+      const m = new Map(), fc = { conservacion: conservacionCompra(nec, id).cons };
+      const ofs = ofertasDisponibles(ctx, id);
+      fc.sinConservacion = !ofs.some(function (o) { return sirveParaFila(o, fc); });
+      ofs.filter(function (o) { return sirveParaFila(o, fc); }).forEach(function (o) {
         if (!(o.formatoQty > 0) || !(precioOferta(ctx, o) > 0)) return;
         const p = proveedorDe(ctx, o);
         if (!p || p.activo === false) return;
@@ -2048,7 +2226,7 @@ window.CLOUD = {
     // referencias: lo que compras hoy (ofertas en uso) y lo más barato ítem por ítem
     const elActual = new Map();
     insIds.forEach(function (id) {
-      const o = costoInsumo(ctx, id).oferta;
+      const o = costoInsumo(ctx, id, conservacionCompra(nec, id).cons).oferta;
       if (o && o.formatoQty > 0) elActual.set(id, compraConOferta(ctx, o, nec.get(id)));
     });
     const elBarato = elegir(new Set(cuenta.keys()));
@@ -2213,7 +2391,7 @@ window.CLOUD = {
         filasBase.forEach(function (f) {
           let mejor = null;
           (cd.ofertasPorInsumo.get(f.insumoId) || []).forEach(function (o) {
-            if (o.disponible === false || o.pendiente || fueraDeVigencia(cd, o) || !ofertaHabilitada(cd, o) || !(o.formatoQty > 0) || !(o.precio > 0)) return;
+            if (o.disponible === false || o.pendiente || fueraDeVigencia(cd, o) || !ofertaHabilitada(cd, o) || !(o.formatoQty > 0) || !(o.precio > 0) || !sirveParaFila(o, f)) return;
             const pv = proveedorDe(cd, o);
             if (!pv || pv.id !== p.id) return;
             const c = compraConOferta(cd, o, f.usable);
@@ -2515,6 +2693,14 @@ window.CLOUD = {
     }
     const dv = violacionesDieta(ctx, id);
     if (dv.length) out.push({ nivel: 'error', msg: 'Incompatible con línea ' + r.linea + ': ' + dv.join(', ') });
+    // % de grasa y conservación exigidos (por la línea de menú o por la receta)
+    rc.lineas.forEach(function (f) {
+      if (f.tipo !== 'insumo') return;
+      if (!f.cumpleGrasa) out.push({ nivel: 'warn', msg: '"' + f.nombre + '" tiene ' + textoPct(f.grasaPct) + '% de grasa; ' +
+        (f.req.origenGrasa === 'linea' ? 'la línea ' + r.linea : 'esta receta') + ' pide ' + textoPct(f.req.grasaMax) + '% o menos' +
+        (f.elegir ? ' y ninguna de sus opciones con precio lo cumple' : '') });
+      if (f.sinConservacion) out.push({ nivel: 'info', msg: 'No hay cotizaciones ' + (f.sinConservacion === 'congelado' ? 'congeladas' : 'refrigeradas') + ' de "' + f.nombre + '": se costea con las que hay' });
+    });
     if ((r.lineas || []).some(function (l) { return l.borrador; })) out.push({ nivel: 'info', msg: 'Contiene líneas en borrador por revisar' });
     return out;
   }
@@ -2563,7 +2749,10 @@ window.CLOUD = {
     necesidades: necesidades, compraConOferta: compraConOferta, logistica: logistica, armarPlan: armarPlan, optimizarCanasta: optimizarCanasta,
     DIAS: DIAS, LINEAS: LINEAS, TIPOS_SUELTOS: TIPOS_SUELTOS, COMPONENTES: COMPONENTES, COMBO_SOLO: COMBO_SOLO, lineasPlatos: lineasPlatos, precioBaseLinea: precioBaseLinea,
     asegurarCombos: asegurarCombos, comboPorId: comboPorId, combosActivos: combosActivos, precioLinea: precioLinea, precioPlato: precioPlato, precioEnCombo: precioEnCombo,
-    bebestiblePermitido: bebestiblePermitido, opcionesComponente: opcionesComponente, costoCombo: costoCombo, itemsDelDia: itemsDelDia, sugerirAlternativas: sugerirAlternativas
+    bebestiblePermitido: bebestiblePermitido, opcionesComponente: opcionesComponente, costoCombo: costoCombo, itemsDelDia: itemsDelDia, sugerirAlternativas: sugerirAlternativas,
+    CONSERVACIONES: CONSERVACIONES, grasaDe: grasaDe, cumpleGrasa: cumpleGrasa, grasaMaxLinea: grasaMaxLinea, requisitosLinea: requisitosLinea,
+    hermanosFamilia: hermanosFamilia, candidatosLinea: candidatosLinea, resolverLinea: resolverLinea, nombreConGrasa: nombreConGrasa, textoPct: textoPct,
+    grasaEnTexto: grasaEnTexto, conservacionEnTexto: conservacionEnTexto, asegurarGrasa: asegurarGrasa, conservacionInsumo: conservacionInsumo
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;
@@ -2822,6 +3011,7 @@ window.CLOUD = {
       window.Engine.asegurarProveedores(s); window.Engine.unificarTextos(s);   // proveedores desde los "lugar"; familias/categorías sin variantes de mayúsculas
       window.Engine.asegurarDietas(s);   // pescados y mariscos: de "con carne/pescado" a pescetariano (una vez)
       window.Engine.etiquetarSalsas(s);   // bases que son salsas → etiqueta (una vez)
+      window.Engine.asegurarGrasa(s);   // % de grasa desde el nombre del insumo y congelado/refrigerado desde la cotización (una vez)
       window.Engine.normalizarMayusculas(s);   // mayúscula solo al iniciar oración y en nombres propios (una vez); antes de los combos: renombra las líneas
       window.Engine.asegurarCombos(s);   // combos y precio por línea (la primera vez, desde el antiguo precio de la Trilogía)
     }
@@ -3442,7 +3632,15 @@ window.CLOUD = {
     const conocido = insumoConocido(state, raw.url, ld.sku, raw.host);
     const sug = sugerirInsumos(nombre, (state.insumos || []).filter(function (i) { return i.activo !== false && !i.propuesto; }), [marca, sitio].concat(MARCAS));
     const mejor = sug[0], segundo = sug[1];
-    const elegido = conocido || (mejor && mejor.puntaje >= 0.8 && mejor.cobProd >= 0.5 && (!segundo || segundo.puntaje < mejor.puntaje) ? mejor.insumo : null);
+    let elegido = conocido || (mejor && mejor.puntaje >= 0.8 && mejor.cobProd >= 0.5 && (!segundo || segundo.puntaje < mejor.puntaje) ? mejor.insumo : null);
+    // carnes molidas: el % de grasa y la conservación que dice la página; con el % se prefiere el insumo de ese nivel de grasa (si el producto no estaba ya enlazado)
+    const textoCalidad = [nombre, raw.h1, og.description, tituloPagina].join(' ');
+    const grasaPct = Eng.grasaEnTexto(textoCalidad), conservacion = Eng.conservacionEnTexto(textoCalidad);
+    if (grasaPct != null && !conocido) {
+      const pool = (elegido ? [elegido].concat(Eng.hermanosFamilia({ state: state }, elegido)) : []).concat(sug.slice(0, 8).map(function (x) { return x.insumo; }));
+      const igual = pool.find(function (i) { return Eng.grasaDe(i) === grasaPct; });
+      if (igual && (elegido || (sug[0] && sug[0].puntaje >= 0.5))) elegido = igual;
+    }
     // unidad de un producto nuevo: la del tamaño escrito en el nombre (5 L → ml); líquidos conocidos en ml
     const enNombre = formatos([nombre, raw.nombre]);
     const liquido = LIQUIDOS.test(norm(nombre));
@@ -3466,7 +3664,7 @@ window.CLOUD = {
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
       soloWeb: !!raw.soloWeb, etiquetasPromo: (raw.etiquetas || []).slice(0, 25), formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: pc, promos: promos, conserva: cons, pack: pack,
       etiquetaOferta: (raw.etiquetas || []).some(function (t) { return /^(oferta|en oferta|precio oferta)$/i.test(String(t).trim()); }),
-      insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
+      grasaPct: grasaPct, conservacion: conservacion, insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
     };
   }
   // "Bebida" + lata + "350 ml" → "Bebida lata 350 ml" (como se cuenta: una unidad = un envase de ese tamaño)
@@ -3864,6 +4062,14 @@ window.CLOUD = {
     ['ins-categoria', 'Agrupa los insumos en listas y reportes. Elige una de la lista o crea una con "+ Nueva categoría…".'],
     ['ins-unidad', 'Unidad en que se usa en las recetas: g (gramos), ml (mililitros) o un (unidades). Todas las cantidades de receta van en esta unidad.'],
     ['ins-rend', 'Parte utilizable tras pelar o limpiar, en %. 100 = sin merma; 90 = pierdes un 10%. No incluyas la merma de cocción. En conservas es el drenado sobre el neto (atún: ~65%); cada cotización puede tener el suyo.'],
+    ['ins-grasa', '% de grasa de la carne molida (10, 7, 4…). Cada nivel de grasa es un insumo distinto de la misma familia, con su propio precio. El nombre se arma solo con este número. Vacío en lo que no es carne molida.'],
+    ['o-cons-', 'Si esta cotización es de carne refrigerada o congelada. Es la misma carne con otro precio: las recetas pueden pedir una u otra, o aceptar la más barata.'],
+    ['cot-cons', 'Si la carne es refrigerada o congelada. Si la dejas vacía y el nombre o la marca lo dicen, se detecta sola.'],
+    ['cap-cons', 'Refrigerado o congelado. Viene sugerido si la página lo dice; si no, déjalo vacío y el gerente lo completa.'],
+    ['l-el-', 'Cómo elige esta línea el insumo: solo el indicado, o el más barato entre sus alternativas o entre toda su familia (por ejemplo, la carne molida con menos grasa que aún no pasa del tope).'],
+    ['l-gm-', 'Tope de grasa (%) de esta línea. Solo usa carnes con ese % o menos. Si la línea de menú de la receta (premium, proteico…) ya tiene un tope en Ajustes, manda el más exigente.'],
+    ['l-cs-', 'Pide solo carne refrigerada o solo congelada para esta línea. "Cualquier conservación" toma la más barata.'],
+    ['par-grasaMaxLinea', 'Grasa máxima (%) de la carne molida que puede usar cada línea de menú. Vacío = sin tope.'],
     ['ins-fam', 'Agrupa insumos equivalentes (ej. ave, pescado-blanco) para sugerir sustitutos. Elige una de la lista o crea una con "+ Nueva familia…". Sin familia = sin sustitutos.'],
     ['ins-dieta', 'Dieta del insumo: vegano, vegetariano (lácteos/huevo), pescetariano (pescados y mariscos) u omnívoro (carnes y aves). Evita que un plato vegano o vegetariano sugiera lo que no corresponde.'],
     ['ins-variedad', 'Presentación que distingue a este insumo de otros parecidos: granel, deshuesada, en aceite, congelado, a la chilena… Ayuda a decidir qué cotizaciones unir.'],
@@ -5019,6 +5225,24 @@ window.CLOUD = {
     return sel;
   }
 
+  // crea otro nivel de grasa de la misma carne (misma familia, categoría, unidad, rendimiento y dieta)
+  function otroNivelGrasa(ins) {
+    App.prompt('% de grasa del nuevo insumo', '', function (v) {
+      const n = Number(String(v).replace(',', '.'));
+      if (!(n >= 0 && n <= 60)) { App.toast('Escribe un número entre 0 y 60'); return; }
+      const s = Store.get(), nombre = E.nombreConGrasa(ins.nombre, n);
+      if (s.insumos.some(function (x) { return E.normNombre(x.nombre) === E.normNombre(nombre); })) { App.toast('Ya existe ' + nombre); return; }
+      const id = Store.uid('INS-');
+      Store.mutate(function (st) {
+        st.insumos.push({ id: id, nombre: nombre, categoria: ins.categoria, unidad: ins.unidad, rendimiento: ins.rendimiento, familia: ins.familia || null, dieta: ins.dieta, grasaPct: n });
+        st.ofertas.push({ id: Store.uid('OF-'), insumoId: id, lugar: '', marca: '', formatoLabel: 'kg', formatoQty: 1000, precio: 0, rendimiento: null,
+          fecha: App.hoy(), fuente: 'estimado', disponible: true, preferida: true, nota: '' });
+      });
+      App.go('insumos', id);
+      App.toast('Creado: ' + nombre + '. Ponle su precio.');
+    }, 'ej. 7');
+  }
+
   function detalle(ins, ctx) {
     const s = Store.get(), esc = App.escenario(), p = ctx.p;
     const ofs = App.ofertasDe(ins.id);
@@ -5070,6 +5294,10 @@ window.CLOUD = {
           ph: 'Ej.: ave, pescado-blanco', onSet: function (v) { upd(function (x) { x.familia = v || null; }); } })),
         h('label', null, 'Dura guardado (días)', App.numInput({ fk: 'ins-dura', value: ins.duracionDias, ph: 'ej. 365',
           onChange: function (n) { if (n >= 0) upd(function (x) { x.duracionDias = n || null; }, 'du' + ins.id); }, onEmpty: function () { upd(function (x) { x.duracionDias = null; }); } })),
+        h('label', null, '% de grasa (carnes molidas)', App.numInput({ fk: 'ins-grasa', value: ins.grasaPct, ph: 'ej. 7', title: 'Cada nivel de grasa es un insumo distinto de la misma familia. El nombre se arma con este número.',
+          onChange: function (n) { if (n >= 0 && n <= 60) upd(function (x) { x.grasaPct = n; x.nombre = E.nombreConGrasa(x.nombre, n); }, 'gr' + ins.id); },
+          onEmpty: function () { upd(function (x) { delete x.grasaPct; x.nombre = E.nombreConGrasa(x.nombre, null); }); } }),
+          E.grasaDe(ins) != null ? App.btn('+ Otro nivel de grasa', function () { otroNivelGrasa(ins); }, 'small', 'Crea un insumo igual (misma familia y categoría) con otro % de grasa, para cotizarlo aparte') : null),
         h('label', null, 'Dieta', App.select({ fk: 'ins-dieta', value: ins.dieta || '', options: (ins.dieta ? [] : [['', '— elegir —']]).concat(DIETAS), onChange: function (v) { upd(function (x) { x.dieta = v || null; }); } })),
         h('label', null, 'Variedad (opcional)', App.textInput({ fk: 'ins-variedad', value: ins.variedad || '', list: 'dl-variedades', ph: 'ej. granel, deshuesada, en aceite',
           onChange: function (v) { upd(function (x) { x.variedad = v.trim() || undefined; }, 'va' + ins.id); } }),
@@ -5093,6 +5321,8 @@ window.CLOUD = {
           /^https?:\/\//i.test(o.url || '') ? h('div', { style: { textAlign: 'center' } }, h('a', { href: o.url, target: '_blank', rel: 'noopener', title: 'Abrir la página de origen de la cotización' }, '🌎')) : null,
           selProveedor(o), o.autor ? h('div', { style: { textAlign: 'center' } }, h('small', { class: 'mut' }, 'cotizó ' + o.autor)) : null),
         h('td', null, App.textInput({ fk: 'o-marca-' + o.id, value: o.marca, ph: 'Marca / detalle', onChange: function (v) { upO(o, function (x) { x.marca = v; }, 'mc' + o.id); } }),
+          App.select({ fk: 'o-cons-' + o.id, cls: 'w90', value: o.conservacion || '', options: [['', 'conservación…'], ['refrigerado', 'refrigerado'], ['congelado', 'congelado']],
+            onChange: function (v) { upO(o, function (x) { if (v) x.conservacion = v; else delete x.conservacion; }); } }),
           o.pendiente ? h('div', null, App.badge('por revisar', 'warn')) : null,
           App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null,
           h('div', { class: 'row gap wrap mini' },
@@ -5499,6 +5729,27 @@ window.CLOUD = {
 
     // ---- líneas ----
     const moverLinea = function (i, d) { upd(function (x) { const j = i + d; if (j < 0 || j >= x.lineas.length) return; const t = x.lineas[i]; x.lineas[i] = x.lineas[j]; x.lineas[j] = t; }); };
+    // flexibilidad de una línea: usar solo este insumo, o el más barato entre sus alternativas / su familia, con tope de grasa y conservación
+    const calidadLinea = function (l, i, ent, fila) {
+      const abiertos = App.ui.calidadAbierta = App.ui.calidadAbierta || {}, k = r.id + '#' + i;
+      const conAjustes = E.grasaDe(ent) != null || l.elegir || l.grasaMax != null || l.conservacion;
+      if (!conAjustes && !abiertos[k]) return ent && ent.familia ? h('div', null, App.btn('⚙ elegir por precio / grasa', function () { abiertos[k] = true; App.render(); }, 'small ghost', 'Que esta línea use la opción más barata de la familia, con un tope de grasa o una conservación')) : null;
+      const req = fila.req || {}, usada = fila.elegida && ent ? s.insumos.find(function (x) { return x.id === fila.ref; }) : null;
+      return h('div', { class: 'stack mini' },
+        h('div', { class: 'row gap wrap' },
+          App.select({ fk: 'l-el-' + r.id + '-' + i, cls: 'w140', value: l.elegir || '', options: [['', 'solo este insumo'], ['alternativas', 'el más barato de sus alternativas'], ['familia', 'el más barato de la familia']],
+            onChange: function (v) { upd(function (x) { if (v) x.lineas[i].elegir = v; else delete x.lineas[i].elegir; }); } }),
+          h('label', { class: 'row gap' }, h('small', { class: 'mut' }, 'grasa máx. %'),
+            App.numInput({ fk: 'l-gm-' + r.id + '-' + i, cls: 'w50', value: l.grasaMax != null ? l.grasaMax : '', ph: req.origenGrasa === 'linea' ? String(req.grasaMax) : '—',
+              title: req.origenGrasa === 'linea' ? 'La línea ' + r.linea + ' ya exige ' + E.textoPct(req.grasaMax) + '% o menos (Ajustes). Aquí puedes pedir uno más bajo.' : 'Tope de grasa de esta línea (carnes molidas)',
+              onChange: function (n) { if (n >= 0 && n <= 60) upd(function (x) { x.lineas[i].grasaMax = n; }); }, onEmpty: function () { upd(function (x) { delete x.lineas[i].grasaMax; }); } })),
+          App.select({ fk: 'l-cs-' + r.id + '-' + i, cls: 'w140', value: l.conservacion || '', options: [['', 'cualquier conservación'], ['refrigerado', 'solo refrigerado'], ['congelado', 'solo congelado']],
+            onChange: function (v) { upd(function (x) { if (v) x.lineas[i].conservacion = v; else delete x.lineas[i].conservacion; }); } })),
+        usada ? h('small', { class: 'ok-t' }, '→ hoy usa ' + usada.nombre + (fila.oferta && fila.oferta.conservacion ? ' (' + fila.oferta.conservacion + ')' : '')) : null,
+        fila.cumpleGrasa === false ? h('small', { class: 'bad-t' }, '⚠ ' + E.textoPct(fila.grasaPct) + '% de grasa: pide ' + E.textoPct(req.grasaMax) + '% o menos') : null,
+        fila.sinConservacion ? h('small', { class: 'warn-t' }, 'No hay cotizaciones ' + (fila.sinConservacion === 'congelado' ? 'congeladas' : 'refrigeradas') + ': se costea con las que hay') : null,
+        fila.extraGrasa > 0.5 ? h('small', { class: 'mut' }, 'Por ser más magra que ' + (fila.grasaBase ? fila.grasaBase.nombre : 'la más barata') + ': +' + App.clp(fila.extraGrasa / (r.porciones > 0 ? r.porciones : 1)) + ' por porción') : null);
+    };
     const filaLinea = function (l, i) {
       const fila = rc.lineas[i] || {};
       const esIns = l.tipo === 'insumo';
@@ -5520,6 +5771,7 @@ window.CLOUD = {
             else if (esIns) crearInsumoRapido(v, function (id) { upd(function (x) { x.lineas[i].ref = id; }); });
             else { App.toast('No hay una receta base con ese nombre'); App.render(); }
           } }),
+          esIns ? calidadLinea(l, i, ent, fila) : null,
           l.borrador ? h('span', null, ' ', h('small', { class: 'warn-t' }, 'borrador'), ' ',
             App.btn('✓ Validar', function () { upd(function (x) { x.lineas[i].borrador = false; }); }, 'small', 'La cantidad estimada está bien: dar esta línea por revisada')) : null, fila.sustituido ? h('small', { class: 'sim-t' }, ' 🧪 sustituido en escenario') : null),
         h('td', { class: 'r' }, cantInput, h('small', null, ' ' + unidad)),
@@ -5746,7 +5998,7 @@ window.CLOUD = {
     const opcs = E.opcionesGuarnicion(ctx, r.id);
     const alts = E.alternativasReceta(ctx, r.id);
     const mejores = [];
-    alts.forEach(function (a) { a.opciones.forEach(function (o) { if (o.deltaPorPorcion < -0.5) mejores.push({ linea: a, op: o }); }); });
+    alts.forEach(function (a) { a.opciones.forEach(function (o) { if (o.deltaPorPorcion < -0.5 && o.cumple !== false) mejores.push({ linea: a, op: o }); }); });
     mejores.sort(function (x, y) { return x.op.deltaPorPorcion - y.op.deltaPorPorcion; });
     const simPvp = F.simPvp != null ? F.simPvp : c.pvp;
     const simNeto = p.ivaOn ? simPvp / (1 + p.ivaPct / 100) : simPvp;
@@ -5766,6 +6018,7 @@ window.CLOUD = {
         h('b', null, App.clp(simPvp))),
       h('div', { class: 'help' }, 'Con ese precio: margen ' + App.clp(simMargen) + ' (' + App.pct(simNeto > 0 ? simMargen / simNeto * 100 : null) + ')  ',
         simPvp !== c.pvp ? App.btn('Usar este PVP', function () { Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = simPvp; }); F.simPvp = null; }, 'small') : null),
+      c.extraGrasa > 0.5 ? h('div', { class: 'aviso' }, h('b', null, '🥩 Carne más magra: '), '+' + App.clp(c.extraGrasa) + ' de costo por porción frente a la carne más barata de su familia. Precio sugerido ' + App.clp(c.pvpSugerido) + ' (sería ' + App.clp(c.pvpSugeridoSinExtraGrasa) + ' sin ese extra).') : null,
       h('h4', null, 'Dónde se va el costo'),
       h('table', { class: 'tbl compact' }, h('tbody', null, lineas.slice(0, 8).map(function (l) {
         return h('tr', null, h('td', null, l.nombre, l.tipo === 'receta' ? h('small', null, ' (sub-receta)') : null), h('td', { class: 'r' }, App.cantidad(l.cantidad, l.unidad)),
@@ -5969,7 +6222,7 @@ window.CLOUD = {
     const c = calc.get(id), alts = E.alternativasReceta(ctx, id), p = ctx.p;
     const sel = App.select({ fk: 'alt-plato', value: id, options: platos.map(function (x) { return [x.id, x.nombre]; }), onChange: function (v) { App.ui.altPlato = v; App.render(); } });
     const factor = 1 + p.imprevistosPct / 100;
-    const totalSav = alts.reduce(function (t, a) { const m = a.opciones.filter(function (o) { return o.deltaPorPorcion < 0; })[0]; return t + (m ? m.deltaPorPorcion : 0); }, 0);
+    const totalSav = alts.reduce(function (t, a) { const m = a.opciones.filter(function (o) { return o.deltaPorPorcion < 0 && o.cumple !== false; })[0]; return t + (m ? m.deltaPorPorcion : 0); }, 0);
 
     return h('div', { class: 'stack' },
       h('div', { class: 'row gap wrap' }, h('label', null, 'Plato ', sel), h('span', { class: 'spacer' }),
@@ -5979,13 +6232,15 @@ window.CLOUD = {
       alts.map(function (a) {
         const opciones = a.opciones.slice(0, 8);
         return App.card(a.nombre + ' · ' + App.cantidad(a.cantidad, a.unidad), h('div', null,
-          h('div', { class: 'help' }, 'Hoy: ', h('b', null, nombreOferta(a.actual.oferta)), ' a ', App.costoVisible(a.actual.unit, a.unidad), ' → ', App.clp(a.costoLinea), ' por porción'),
+          h('div', { class: 'help' }, a.elegida ? h('span', null, 'Línea flexible: usa ', h('b', null, a.nombre), ', la más barata que cumple' + (a.req.grasaMax != null ? ' ≤' + E.textoPct(a.req.grasaMax) + '% de grasa' : '') + (a.req.conservacion ? ' y ' + a.req.conservacion : '') + '. ') : null, 'Hoy: ', h('b', null, nombreOferta(a.actual.oferta)), ' a ', App.costoVisible(a.actual.unit, a.unidad), ' → ', App.clp(a.costoLinea), ' por porción'),
           opciones.length ? h('table', { class: 'tbl compact' },
             h('thead', null, h('tr', null, ['Opción', 'Costo neto', 'Δ por porción', 'Margen resultante', ''].map(function (t, i) { return h('th', { class: i === 1 || i === 2 || i === 3 ? 'r' : '' }, t); }))),
             h('tbody', null, opciones.map(function (o) {
               const nuevoCosto = c.costoTotal + o.deltaPorPorcion * factor;
               const nuevoMargen = c.pvpNeto > 0 ? (c.pvpNeto - nuevoCosto) / c.pvpNeto * 100 : null;
-              return h('tr', { class: o.enOferta ? 'en-oferta' : '' }, h('td', null, o.tipo === 'oferta' ? h('span', null, App.badge('misma materia prima', 'info'), ' ', nombreOferta({ lugar: o.lugar, marca: o.marca })) : h('span', null, App.badge('sustituto', 'warn'), ' ', o.nombre, o.lugar ? h('small', null, ' (' + o.lugar + ')') : null)),
+              const calidad = [o.grasaPct != null && o.tipo === 'sustituto' ? E.textoPct(o.grasaPct) + '% grasa' : null, o.conservacion].filter(Boolean).join(' · ');
+              return h('tr', { class: (o.enOferta ? 'en-oferta' : '') + (o.cumple === false ? ' off' : '') }, h('td', null, o.tipo === 'oferta' ? h('span', null, App.badge('misma materia prima', 'info'), ' ', nombreOferta({ lugar: o.lugar, marca: o.marca })) : h('span', null, App.badge('sustituto', 'warn'), ' ', o.nombre, o.lugar ? h('small', null, ' (' + o.lugar + ')') : null),
+                  calidad ? h('small', { class: 'mut' }, ' · ' + calidad) : null, o.cumple === false ? h('div', null, App.badge('no cumple lo que pide la receta', 'bad')) : null),
                 h('td', { class: 'r' }, App.costoVisible(o.unit, a.unidad)),
                 h('td', { class: 'r ' + (o.deltaPorPorcion < 0 ? 'good-t' : 'bad-t') }, App.sg(o.deltaPorPorcion * factor)),
                 h('td', { class: 'r' }, App.pct(nuevoMargen)),
@@ -6292,6 +6547,19 @@ window.CLOUD = {
       mias.length ? App.card('Mis avisos resueltos', h('table', { class: 'tbl compact' }, h('tbody', null, mias.map(function (u) { return fila(u, true); })))) : null);
   }
 
+  // línea flexible (grasa / conservación): cocina ve qué otras carnes sirven y qué conservación se pide, sin precios
+  function opcionesCocina(s, r, l) {
+    const ctx = E.makeCtx(s), req = E.requisitosLinea(ctx, r, l), partes = [];
+    if (l.elegir) {
+      const otros = E.candidatosLinea(ctx, r, l).filter(function (id) { return id !== l.ref && E.cumpleGrasa(ctx.insumos.get(id), req.grasaMax); })
+        .map(function (id) { return ctx.insumos.get(id).nombre; });
+      if (otros.length) partes.push('también sirve: ' + otros.join(', '));
+    }
+    if (req.grasaMax != null && E.grasaDe(ctx.insumos.get(l.ref)) != null) partes.push('máx. ' + E.textoPct(req.grasaMax) + '% de grasa');
+    if (req.conservacion) partes.push('solo ' + req.conservacion);
+    return partes.join(' · ');
+  }
+
   // líneas de ingredientes escaladas a N porciones, con sub-recetas expandidas (sin costos)
   function lineasEscaladas(s, r, porciones) {
     const f = porciones / (r.porciones > 0 ? r.porciones : 1);
@@ -6299,7 +6567,7 @@ window.CLOUD = {
     r.lineas.forEach(function (l) {
       if (l.tipo === 'insumo') {
         const ins = s.insumos.find(function (i) { return i.id === l.ref; });
-        if (ins) out.push({ nombre: ins.nombre, q: l.cantidad * f, unidad: ins.unidad, nota: l.nota || '' });
+        if (ins) out.push({ nombre: ins.nombre, q: l.cantidad * f, unidad: ins.unidad, nota: [l.nota || '', opcionesCocina(s, r, l)].filter(Boolean).join(' · ') });
       } else {
         const sub = s.recetas.find(function (x) { return x.id === l.ref; });
         if (!sub) return;
@@ -6507,9 +6775,9 @@ window.CLOUD = {
   // 🌐 solo online · ⭐ requiere membresía (avisa si está inactiva: así no entra a los costos)
   App.badgesCanal = function (o) {
     const ctx0 = App.ctx(), onl = !!o && E.esSoloOnline(ctx0, o), ec = o && E.campanaDe(ctx0, o), socio = !!o && (o.requiereMembresia || (ec && ec.c.requiereMembresia));
-    if (!o || (!onl && !socio && !o.promoCantidad)) return null;
+    if (!o || (!onl && !socio && !o.promoCantidad && !o.conservacion)) return null;
     const ctx = App.ctx(), habil = E.ofertaHabilitada(ctx, o);
-    return h('div', { class: 'row gap wrap' }, onl ? App.badge('🌐 solo online', 'info') : null,
+    return h('div', { class: 'row gap wrap' }, o.conservacion ? App.badge(o.conservacion === 'congelado' ? '🧊 congelado' : '❄️ refrigerado', 'info') : null, onl ? App.badge('🌐 solo online', 'info') : null,
       o.promoCantidad ? App.badge('🏷️ desde ' + o.promoCantidad.minimo + ': ' + App.clp(o.promoCantidad.precio) + ' c/u', 'good') : null,
       socio ? App.badge(habil ? '⭐ precio de socio' : '⭐ requiere membresía (inactiva: no se usa)', habil ? 'good' : 'warn') : null);
   };
@@ -6555,7 +6823,7 @@ window.CLOUD = {
         const prov = null;
         st.ofertas.push({ id: Store.uid('OF-'), insumoId: ins.id, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(), formatoLabel: F.fl || ins.unidad,
           formatoQty: F.fq, precio: F.precio, rendimiento: rend, pack: ins.unidad !== 'un' && F.packN > 1 ? { n: Math.round(F.packN) } : undefined, fecha: App.hoy(), fuente: 'cotizacion', disponible: true, preferida: false,
-          pendiente: true, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim(),
+          pendiente: true, autor: u.nombre, autorId: u.id, nota: (F.nota || '').trim(), conservacion: E.CONSERVACIONES.indexOf(F.cons) >= 0 ? F.cons : (E.conservacionEnTexto([F.marca, F.fl, F.nota].join(' ')) || undefined),
           // de una campaña existente: la fecha la pone la campaña; de una campaña nueva: temporal (sin fecha, la confirma el gerente)
           temporal: camp.campanaId ? undefined : F.temporal ? { hasta: F.hasta } : camp.campanaPropuesta ? { hasta: enUnaSemana() } : undefined,
           hastaPorConfirmar: camp.campanaPropuesta && !F.temporal ? true : undefined,
@@ -6564,7 +6832,7 @@ window.CLOUD = {
           promoCantidad: F.porCantidad ? { minimo: F.pcMin || 2, precio: F.pcPrecio, desde: App.hoy(), hasta: F.pcHasta || enUnaSemana() } : undefined });
       });
       App.toast(camp.campanaId || camp.campanaPropuesta ? 'Cotización de campaña enviada a revisión 🎯' : F.temporal ? 'Oferta temporal enviada a revisión 🔥' : 'Cotización enviada a revisión');
-      App.ui.cot = { insumo: '', lugar: F.lugar, marca: '', fl: '', fq: null, precio: null, nota: '', drenado: null, packN: null, temporal: false, hasta: enUnaSemana(), online: false, membresia: false, porCantidad: false, pcMin: 2, pcPrecio: null, pcHasta: null };
+      App.ui.cot = { insumo: '', lugar: F.lugar, marca: '', cons: '', fl: '', fq: null, precio: null, nota: '', drenado: null, packN: null, temporal: false, hasta: enUnaSemana(), online: false, membresia: false, porCantidad: false, pcMin: 2, pcPrecio: null, pcHasta: null };
       App.render();
     };
 
@@ -6576,6 +6844,8 @@ window.CLOUD = {
           onChange: function (v) { F.insumo = v; F.fl = ''; F.fq = null; App.render(); } })),
         h('label', null, 'Lugar', App.textInput({ fk: 'cot-lugar', value: F.lugar, list: 'dl-cot-lugar', ph: 'ej. Feria Playa Ancha', onChange: function (v) { F.lugar = v; }, onCommit: function () { App.render(); } })),
         h('label', null, 'Marca / detalle (opcional)', App.textInput({ fk: 'cot-marca', value: F.marca, ph: 'ej. Super Pollo, granel', onChange: function (v) { F.marca = v; } })),
+        ins && (E.grasaDe(ins) != null || ins.categoria === 'Carnes de Vacuno' || F.cons) ? h('label', null, 'Conservación', App.select({ fk: 'cot-cons', value: F.cons || '', options: [['', '— elegir —'], ['refrigerado', 'refrigerado'], ['congelado', 'congelado']],
+          onChange: function (v) { F.cons = v; } })) : null,
         h('label', null, 'Precio (CLP)', App.numInput({ fk: 'cot-precio', value: F.precio, ph: 'ej. 4500', onChange: function (n) { F.precio = n; App.render(); }, onEmpty: function () { F.precio = null; } }))),
       ins ? h('div', { class: 'stack' },
         h('div', { class: 'row gap wrap' }, h('small', { class: 'mut' }, 'Formato:'),
@@ -6818,11 +7088,11 @@ window.CLOUD = {
     U.r = r;
     U.F = {
       // sin un insumo claro queda como producto nuevo (con nombre limpio): enviar nunca se bloquea; el admin lo une a uno existente si corresponde
-      insumoId: r.insumo ? r.insumo.id : NUEVO, nombreNuevo: r.nombreLimpio || r.nombre, unidadNueva: r.unidadNueva,
+      insumoId: r.insumo ? r.insumo.id : NUEVO, nombreNuevo: r.grasaPct != null ? E.nombreConGrasa(r.nombreLimpio || r.nombre, r.grasaPct) : (r.nombreLimpio || r.nombre), unidadNueva: r.unidadNueva,
       precio: r.precio, precioNormal: r.precioNormal, oferta: !!r.precioNormal || !!r.etiquetaOferta, hasta: '',
       online: !!r.soloWeb, promos: (r.promos || []).map(function () { return true; }),
       drenado: r.conserva ? r.conserva.drenado * r.conserva.n : null, packN: r.pack ? r.pack.n : 1, lugar: r.proveedor ? r.proveedor.nombre : r.sitio, marca: r.marca, nota: r.tituloOriginal || r.nombre || '', fq: null, fl: '',
-      variedad: (r.variedad || []).join(', '), etiquetas: (r.etiquetas || []).slice(), dieta: r.dieta
+      variedad: (r.variedad || []).join(', '), etiquetas: (r.etiquetas || []).slice(), dieta: r.dieta, cons: r.conservacion || ''
     };
     elegirFormato(U);
   }
@@ -6895,14 +7165,14 @@ window.CLOUD = {
       if (nuevo) {
         insumoId = Store.uid('INS-');
         st.insumos.push({ id: insumoId, nombre: F.nombreNuevo.trim(), categoria: 'Por clasificar', unidad: unidad, rendimiento: rend || 1, familia: null, dieta: null,
-          propuesto: true, autor: u.nombre, autorId: u.id, propuestoEl: hoy, variedad: (F.variedad || '').trim() || undefined,
+          propuesto: true, grasaPct: r.grasaPct != null ? r.grasaPct : undefined, autor: u.nombre, autorId: u.id, propuestoEl: hoy, variedad: (F.variedad || '').trim() || undefined,
           etiquetas: F.etiquetas && F.etiquetas.length ? F.etiquetas.slice() : undefined });
         if (F.dieta) st.insumos[st.insumos.length - 1].dieta = F.dieta;
       }
       const prov = null;   // todas las cotizaciones quedan por revisar: el proveedor se vincula (o se crea) al aprobarla
       const base = { insumoId: insumoId, proveedorId: prov ? prov.id : undefined, lugar: prov ? prov.nombre : F.lugar.trim(), marca: (F.marca || '').trim(),
         formatoLabel: F.fl || unidad, formatoQty: sinFormato ? null : F.fq, rendimiento: rend, pack: pack, fecha: hoy, fuente: 'web', disponible: true, preferida: false,
-        pendiente: true, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, tituloWeb: r.tituloOriginal || r.nombre || undefined, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
+        pendiente: true, precioPorConfirmar: sinPrecio || undefined, formatoPorConfirmar: sinFormato || undefined, autor: u.nombre, autorId: u.id, nota: notas, conservacion: E.CONSERVACIONES.indexOf(F.cons) >= 0 ? F.cons : undefined, tituloWeb: r.tituloOriginal || r.nombre || undefined, url: r.url || undefined, sku: r.sku || undefined, imagen: r.imagen || undefined, host: r.host || undefined };
       const exige = App.exigenciasOferta(F);
       const lista = [];
       // oferta con precio normal visible: se guardan las dos (la normal es el precio de reposición)
@@ -7029,7 +7299,8 @@ window.CLOUD = {
             r.fuentePrecio === 'visible' || r.fuentePrecio === 'variante' || !r.precio ? null : h('small', { class: 'mut' }, 'Revisa que sea el precio que muestra la página.')),
           h('label', null, 'Tienda o proveedor', App.textInput({ fk: 'cap-lugar', value: F.lugar, onChange: function (v) { F.lugar = v; }, onCommit: function () { App.render(); } }),
             !r.proveedor && F.lugar ? h('small', { class: 'mut' }, '🏪 Proveedor nuevo: basta el nombre, el gerente completa el resto.') : null),
-          h('label', null, 'Marca (opcional)', App.textInput({ fk: 'cap-marca', value: F.marca, onChange: function (v) { F.marca = v; } }))),
+          h('label', null, 'Marca (opcional)', App.textInput({ fk: 'cap-marca', value: F.marca, onChange: function (v) { F.marca = v; } })),
+          h('label', null, 'Conservación', App.select({ fk: 'cap-cons', value: F.cons || '', options: [['', '— no aplica / no sé —'], ['refrigerado', 'refrigerado'], ['congelado', 'congelado']], onChange: function (v) { F.cons = v; } }))),
 
         unidad ? h('div', { class: 'stack' },
           // pack (3 latas, 6 yogures): se ingresa lo de cada unidad y el total del formato se arma solo
@@ -7172,7 +7443,7 @@ window.CLOUD = {
       out.push('== ' + lugar + ' ==');
       grupos[lugar].filas.forEach(function (f) {
         if (!f.packs && f.cubiertoStock > 0) return;   // cubierto por sobrestock: no hay que comprarlo
-        out.push('- ' + f.nombre + ': ' + (f.packs ? f.packs + ' × ' + f.formatoLabel + (f.unidadesPorFormato > 1 && f.unidad !== 'un' ? ' (' + f.packs * f.unidadesPorFormato + ' un)' : '') : App.cantidad(f.comprarBase, f.unidad)) + '  (' + App.clp(f.costo) + ')' + (f.oportunidad ? '  🔥 oferta hasta ' + App.fechaCorta(f.oportunidad) : ''));
+        out.push('- ' + f.nombre + (f.conservacion ? ' (' + f.conservacion + ')' : '') + ': ' + (f.packs ? f.packs + ' × ' + f.formatoLabel + (f.unidadesPorFormato > 1 && f.unidad !== 'un' ? ' (' + f.packs * f.unidadesPorFormato + ' un)' : '') : App.cantidad(f.comprarBase, f.unidad)) + '  (' + App.clp(f.costo) + ')' + (f.oportunidad ? '  🔥 oferta hasta ' + App.fechaCorta(f.oportunidad) : ''));
       });
       out.push('   Subtotal ' + lugar + ': ' + App.clp(grupos[lugar].total), '');
     });
@@ -7240,13 +7511,24 @@ window.CLOUD = {
     });
     const ahorroPromos = filas.reduce(function (t, f) { return t + (f.ahorroPromo || 0); }, 0);
     // etiquetas de las promociones que bajan el precio de una línea
-    const chipsPromo = function (f) {
+    // % de grasa y conservación de la carne que se compra (y avisos si las recetas piden cosas incompatibles)
+    const chipsCalidad = function (f) {
+      const b = [];
+      if (f.grasaPct != null) b.push(App.badge(E.textoPct(f.grasaPct) + '% grasa', 'info'));
+      const cons = f.conservacion || f.conservacionOferta;
+      if (cons) b.push(App.badge(cons === 'congelado' ? '🧊 congelado' : '❄️ refrigerado', f.conservacion ? 'info' : ''));
+      if (f.conflictoConservacion) b.push(App.badge('unas recetas piden refrigerado y otras congelado: compra por separado', 'warn'));
+      if (f.sinConservacion) b.push(App.badge('sin cotización ' + (f.sinConservacion === 'congelado' ? 'congelada' : 'refrigerada'), 'warn'));
+      return b.length ? h('div', { class: 'row gap wrap' }, b) : null;
+    };
+    const chipsPromo0 = function (f) {
       if (!f.promos || !f.promos.length) return f.oportunidad ? h('div', null, App.badge('🔥 oferta hasta ' + App.fechaCorta(f.oportunidad), 'good')) : null;
       return h('div', { class: 'row gap wrap' }, f.promos.map(function (p) {
         const ico = p.tipo === 'cantidad' ? '🏷️ ' : p.tipo === 'temporal' ? '🔥 ' : '🎯 ';
         return App.badge(ico + (p.tipo === 'temporal' ? 'oferta' : p.nombre) + (p.hasta ? ' hasta ' + App.fechaCorta(p.hasta) : '') + (p.monto > 0.5 ? ' −' + App.clp(p.monto) : ''), 'good');
       }));
     };
+    const chipsPromo = function (f) { return h('div', null, chipsCalidad(f), chipsPromo0(f)); };
     const teorico = filas.reduce(function (t, f) { return t + f.costoTeorico; }, 0);
     // ingresos y margen esperados del plan (con la mezcla de combos)
     const esp = esperado(ctx, calc, dias.map(function (d) { return porDia[d]; }));
@@ -7954,6 +8236,8 @@ window.CLOUD = {
       return App.card(i.nombre, h('div', { class: 'stack' },
         u.tipo === 'no_alcanza' ? h('div', { class: 'row gap wrap' }, tipoBadge, nota) : null,
         u.tipo === 'no_alcanza' ? bloqueReceta(u) : null,
+        r.conservacion ? h('div', { class: 'row gap wrap' }, App.badge((r.conservacion === 'congelado' ? '🧊 congelado' : '❄️ refrigerado') + ': las recetas del plan lo piden así', 'info'),
+          r.sinConservacion ? App.badge('sin cotizaciones ' + (r.conservacion === 'congelado' ? 'congeladas' : 'refrigeradas') + ': se muestran todas', 'warn') : null) : null,
         h('div', { class: 'row gap wrap' }, u.tipo !== 'no_alcanza' ? tipoBadge : null,
           h('span', null, 'Necesitas ', h('b', null, App.cantidad(usable, i.unidad)), u.cantidad ? '' : ' (' + u.dias + ' días de consumo)'),
           h('div', { class: 'chips' }, PLAZOS.map(function (p) { return App.chip(p[1], String(u.plazo == null ? '' : u.plazo) === p[0], function () { setU(function (x) { x.plazo = p[0]; }); }); })),
@@ -8903,7 +9187,7 @@ window.CLOUD = {
         paso('⭐', 'Opinión', 'Un insumo sirve (o no) para algo. Anota marca y dónde se compró.', avisos),
         h('h4', null, 'Anotar un precio que viste'),
         paso('➕', 'Cotizar desde una página web', 'En el computador: arrastra el botón ➕ Cotizar a tu barra de favoritos y úsalo en la página del producto. En el celular: copia el enlace y pégalo. Todo viene escrito: solo revisa y envía. Si falta algo, envíalo igual: el gerente lo completa.', function () { App.go('capturar'); }),
-        paso('🏷️', 'Cotizar a mano', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha. Si es de una campaña del lugar (ej. Barato a un click), elígela en "¿Es de una campaña?"; si no existe, marca "nueva". Si avisa un descuento por monto de compra, anota el precio normal: el descuento lo pone la app.', function () { App.go('cotizaciones'); }),
+        paso('🏷️', 'Cotizar a mano', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha. En carne molida elige el % de grasa y si es refrigerada o congelada. Si es de una campaña del lugar (ej. Barato a un click), elígela en "¿Es de una campaña?"; si no existe, marca "nueva". Si avisa un descuento por monto de compra, anota el precio normal: el descuento lo pone la app.', function () { App.go('cotizaciones'); }),
         h('h4', null, 'Ver recetas'),
         paso('📖', 'Cocina', 'Ingredientes y pasos. Elige las porciones y las cantidades se ajustan.', function () { App.go('cocina'); }),
         paso('🥗', 'Producción del día', 'Platos, más las entradas, ensaladas y postres de los combos (estimados) y los bebestibles envasados a despachar.', function () { App.go('cocina', 'dia'); }),
@@ -9198,7 +9482,12 @@ window.CLOUD = {
       ['porcionesSemana', 'Porciones vendidas por semana (supuesto)', 'porc.', 'Se usa para estimar ahorros y pesos cuando no hay plan semanal.'],
       ['stockMaxSemanas', 'Compras de oportunidad: máximo a guardar', 'semanas', 'Tope de semanas de consumo que se sugiere comprar en una oferta, aunque el producto dure más. Evita inmovilizar demasiada plata.'],
       ['costosFijosMes', 'Costos fijos mensuales', 'CLP', 'Para calcular el punto de equilibrio (internet, permisos, depreciación…).'],
-      ['diasOperacionMes', 'Días de operación al mes', 'días', '']]]
+      ['diasOperacionMes', 'Días de operación al mes', 'días', '']]],
+    ['Carnes molidas: grasa máxima por línea de menú', [
+      ['grasaMaxLinea:Gourmet / premium', 'Gourmet / premium', '% grasa máx.', 'Las recetas de esta línea solo usan carne molida con este % de grasa o menos (vacío = sin tope). Justifica un precio más alto.'],
+      ['grasaMaxLinea:Alto en proteína', 'Alto en proteína', '% grasa máx.', 'Las recetas de esta línea solo usan carne molida con este % de grasa o menos (vacío = sin tope).'],
+      ['grasaMaxLinea:Tradicional', 'Tradicional', '% grasa máx.', 'Vacío = puede usar cualquier nivel de grasa (se elige la más barata).'],
+      ['grasaMaxLinea:Hipocalórico', 'Hipocalórico', '% grasa máx.', 'Vacío = sin tope.']]]
   ];
 
   function paramControl(def, p) {
@@ -9208,6 +9497,11 @@ window.CLOUD = {
   }
   function paramControlBase(def, p) {
     const key = def[0];
+    if (key.indexOf('grasaMaxLinea:') === 0) {   // tope de grasa de una línea de menú: se guarda en params.grasaMaxLinea[línea]
+      const linea = key.slice(14), actual = (p.grasaMaxLinea || {})[linea];
+      const setG = function (v) { Store.mutate(function (st) { const m = Object.assign({}, st.params.grasaMaxLinea || p.grasaMaxLinea || {}); if (v == null) m[linea] = ''; else m[linea] = v; st.params.grasaMaxLinea = m; }, 'par' + key); };
+      return h('span', null, App.numInput({ fk: 'par-' + key, cls: 'w80', value: actual === '' || actual == null ? '' : actual, ph: 'sin tope', onChange: function (n) { if (n >= 0 && n <= 60) setG(n); }, onEmpty: function () { setG(null); } }), ' ', h('small', null, def[2]));
+    }
     const set = function (v) { Store.mutate(function (st) { st.params[key] = v; }, 'par' + key); };
     if (def[2] === 'bool') return h('input', { type: 'checkbox', checked: !!p[key], onchange: function (ev) { set(ev.target.checked); } });
     if (def[2] === 'ivarec') return App.select({ fk: 'par-' + key, value: p[key], options: [['potencial', 'Potencial (aún no afecto)'], ['si', 'Sí, lo recupero'], ['no', 'No']], onChange: set });
