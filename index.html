@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T10:08:23Z">
+<meta name="build" content="2026-10-05T10:21:03Z">
 <script>
-window.BUILD = "2026-10-05T10:08:23Z";
+window.BUILD = "2026-10-05T10:21:03Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -2957,6 +2957,21 @@ window.CLOUD = {
       var k = (m.getAttribute('property') || m.getAttribute('name')).replace(/^og:/, '');
       if (!out.og[k]) out.og[k] = limpio(m.getAttribute('content'), 300);
     });
+    // sin <h1> (Unimarc): el título del producto es el elemento visible cuyo texto es su nombre (JSON-LD o og:title sin la tienda)
+    var sinTienda = function (s) { return limpio(s, 200).replace(/\s*[|–]\s*[^|–]*$/, '').toLowerCase(); };
+    if (!modal && !(h1 && limpio(h1.textContent))) {
+      var nombres = [out.ld[0] && out.ld[0].nombre, out.og.title].filter(Boolean).map(sinTienda);
+      nombreEl = [].filter.call(d.querySelectorAll('body *'), function (e) {
+        if (e.children.length > 2 || nombres.indexOf(limpio(e.textContent, 200).toLowerCase()) < 0) return false;
+        var re0 = e.getBoundingClientRect(); return re0.width > 0 && re0.height > 0;
+      })[0] || null;
+      if (nombreEl) out.h1 = limpio(nombreEl.textContent, 200);
+    }
+    // fuera de una ventana, lo que viene después de "Productos similares" (y parecidos) son otros productos: ahí se deja de leer
+    if (!modal) corte = [].filter.call(d.querySelectorAll('h2,h3,h4,h5,h6,p,span,div'), function (e) {
+      if (e.children.length || !/^(productos similares|productos relacionados|tambi[eé]n te podr[ií]a interesar|te puede interesar|recomendados para ti|otros clientes tambi[eé]n compraron)/i.test(limpio(e.textContent, 60))) return false;
+      return !nombreEl && !h1 ? true : !!((nombreEl || h1).compareDocumentPosition(e) & 4);
+    })[0] || null;
     // precios visibles cerca del título: el que se ve grande es el que se paga; el tachado, el normal
     var ref = nombreEl || h1, y0 = ref ? ref.getBoundingClientRect().top + scrollY : 0, vistos = 0;
     var todos = (modal || d).querySelectorAll(modal ? '*' : 'body *');
@@ -3010,7 +3025,8 @@ window.CLOUD = {
     // frases útiles: compra mínima, precio por kilo/litro, formato del envase
     // solo el texto del producto: desde su título hasta antes de los productos similares (banners y otras tarjetas traen promos que no son de este producto)
     var cortes = /productos similares|tambi[eé]n te podr|relacionad|recomendad|te puede interesar|otros clientes|m[aá]s vendidos/i, completo = modal ? modal.innerText : d.body.innerText, ini = 0;
-    if (!modal && h1 && h1.innerText) { var pos = completo.indexOf(limpio(h1.innerText, 80).slice(0, 40)); if (pos > 0) ini = pos; }
+    var tit = h1 && h1.innerText ? h1 : nombreEl;
+    if (!modal && tit && tit.innerText) { var pos = completo.indexOf(limpio(tit.innerText, 80).slice(0, 40)); if (pos > 0) ini = pos; }
     var texto = limpio(completo.slice(ini).split(cortes)[0].slice(0, 3500), 20000), re = /(compra m[ií]nima[^\n.]{0,30}|m[ií]nimo de \d+[^\n.]{0,20}|\$\s?[\d.]+(?:,\d+)?\s*(?:x|por|\/)\s*(?:kg|kilo|lt|l|litro|un|unidad|100\s?g|100\s?ml)\b|llev[aá]\s*\d+\s*(?:x|por)\s*\$\s?[\d.]+|llev[aá]\s*\d+[^\n.]{0,40}|\d+\s*(?:x|por)\s*\$\s?[\d.]+)/gi, m;
     while ((m = re.exec(texto)) && out.textos.length < 10) out.textos.push(limpio(m[1], 80));
     // variante elegida en tiendas Shopify (ej. "Posta Paleta - 1 Kilo"): la del enlace (?variant=), la del formulario de compra o la que informa la tienda.
@@ -3234,8 +3250,15 @@ window.CLOUD = {
     const ld = (raw.ld || [])[0] || {};
     const ldP = ((ld.ofertas || [])[0] || {}), deLd = numero(ldP.precio), ogP = numero((raw.og || {})['price:amount'] || (raw.og || {})['product:price:amount']);
     const ogOrig = numero((raw.og || {})['product:original_price:amount'] || (raw.og || {})['original_price:amount']);
-    const vis = (raw.precios || []).filter(function (p) { return !/\b(x|por|\/)\s*\w+$|c\/u$/i.test(p.t); })   // los "$x por kg" no son el precio del producto
-      .map(function (p) { return Object.assign({}, p, { n: numero(p.t) }); }).filter(function (p) { return p.n > 0; });
+    // los "$x por kg" no son el precio del producto; un "$x c/u" sí lo es ("$5.990 c/u" del pack), salvo que sea el valor
+    // de cada unidad de una promo por cantidad ("2 x $1.000" → "$500 c/u")
+    const deCadaPromo = (raw.textos || []).map(function (t) { const m = /(\d+)\s*(?:x|por)\s*\$\s?([\d.]+)/i.exec(t); return m && parseInt(m[1], 10) >= 2 ? Math.round(numero(m[2]) / parseInt(m[1], 10)) : null; }).filter(Boolean);
+    const vis = (raw.precios || []).map(function (p) { return Object.assign({}, p, { n: numero(p.t) }); })
+      .filter(function (p) {
+        if (!(p.n > 0)) return false;
+        if (/c\/u$/i.test(p.t)) return !deCadaPromo.some(function (v) { return Math.abs(v - p.n) <= 1; });
+        return !/\b(x|por|\/)\s*\w+$/i.test(p.t);
+      });
     let actual = null, normal = null, fuente = 'ld';
     const conocidos = [deLd, ogP].filter(function (n) { return n > 0; });
     // candidatos visibles: los que coinciden con un precio estructurado, o los más destacados cerca del título
