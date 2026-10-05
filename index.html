@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T12:44:38Z">
+<meta name="build" content="2026-10-05T13:08:33Z">
 <script>
-window.BUILD = "2026-10-05T12:44:38Z";
+window.BUILD = "2026-10-05T13:08:33Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -3579,7 +3579,7 @@ window.CLOUD = {
   };
   App.textInput = function (o) {
     return h('input', { type: 'text', class: o.cls || '', value: o.value == null ? '' : o.value, 'data-fk': o.fk, placeholder: o.ph || '', list: o.list, title: o.title || '',
-      oninput: function (ev) { o.onChange(ev.target.value); }, onchange: o.onCommit ? function (ev) { o.onCommit(ev.target.value); } : null });
+      oninput: o.onChange ? function (ev) { o.onChange(ev.target.value); } : null, onchange: o.onCommit ? function (ev) { o.onCommit(ev.target.value); } : null });
   };
   App.select = function (o) {  // o.options: [[value,label],...]
     const sel = h('select', { class: o.cls || '', 'data-fk': o.fk, onchange: function (ev) { o.onChange(ev.target.value); } },
