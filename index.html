@@ -205,6 +205,32 @@ tr.subhead td { font-weight: 700; background: var(--surface2); } tr.hijo td { co
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
 .modal { background: var(--surface); border-radius: 12px; max-width: 520px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
 .modal-h { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 0; } .modal-b { padding: 12px 16px; } .modal-f { padding: 0 16px 14px; display: flex; justify-content: flex-end; gap: 8px; }
+/* visor de una cotización: panel lateral de solo lectura (bajo los modales, que pueden abrirse encima) */
+.visor-fondo { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.28); display: flex; justify-content: flex-end; }
+.visor { width: min(440px, 100vw); height: 100%; background: var(--surface); border-left: 1px solid var(--line); box-shadow: -10px 0 40px rgba(0,0,0,.22); display: flex; flex-direction: column; }
+.visor-fondo.entra { animation: visor-fondo .18s ease-out; } .visor-fondo.entra .visor { animation: visor-entra .22s ease-out; }
+@keyframes visor-fondo { from { background: rgba(0,0,0,0); } }
+@keyframes visor-entra { from { transform: translateX(40px); opacity: 0; } }
+.visor-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+.visor-h h3 { margin: 0; font-size: 17px; } .visor-h .row { flex: none; align-items: center; }
+.visor-b { flex: 1; overflow: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.visor-f { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+.visor-foto { display: flex; align-items: center; justify-content: center; min-height: 120px; max-height: 260px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface2); overflow: hidden; text-align: center; padding: 10px; }
+.visor-foto.con-img { background: #fff; }   /* las fotos de producto vienen sobre blanco */
+.visor-foto img { max-width: 100%; max-height: 240px; object-fit: contain; }
+.visor-foto .mut { font-size: 12.5px; }
+.visor-titulo { margin: 0; color: var(--mut); font-size: 13px; }
+.visor-monto { font-size: 28px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.visor-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.visor-kpis > div { background: var(--surface2); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.visor-kpis b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.visor-nota { margin: 0; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--surface2); border-radius: 0 8px 8px 0; font-style: italic; }
+.visor-datos { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13.5px; }
+.visor-datos dt { color: var(--mut); } .visor-datos dd { margin: 0; overflow-wrap: anywhere; }
+.tbl tr.link.on td:first-child { box-shadow: inset 3px 0 var(--accent); }   /* la cotización abierta en el visor */
+.tbl tr.resaltada td { animation: resaltar 2.4s ease-out; }
+@keyframes resaltar { 0%, 30% { background: var(--accent-soft); } }
+@media (prefers-reduced-motion: reduce) { .visor-fondo.entra, .visor-fondo.entra .visor, .tbl tr.resaltada td { animation: none; } }
 .toast.bad { background: #b42318; color: #fff; max-width: min(92vw, 520px); }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 9px; z-index: 200; box-shadow: var(--shadow); transition: opacity .4s; } .toast.out { opacity: 0; }
 details summary { cursor: pointer; color: var(--accent); margin: 6px 0; }
@@ -278,9 +304,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T22:18:47Z">
+<meta name="build" content="2026-10-05T23:08:22Z">
 <script>
-window.BUILD = "2026-10-05T22:18:47Z";
+window.BUILD = "2026-10-05T23:08:22Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -5339,7 +5365,13 @@ window.CLOUD = {
       const cn = E.costoNetoOferta(ctx, o);
       const esMejor = mejor && mejor.o.id === o.id && ofs.length > 1;
       const esUsada = activo.oferta && activo.oferta.id === o.id;
-      return h('tr', { class: (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada ' + (E.esTemporal(o) || activo.modo === 'oportunidad' ? 'usada-temp' : 'usada-normal') : (E.enOferta(ctx, o) ? 'en-oferta' : '')) },
+      // viene del visor de Cotizaciones ("Editar"): se lleva a la vista y parpadea una vez
+      const resaltar = App.ui.resaltarOferta === o.id;
+      if (resaltar) {
+        App.ui.resaltarOferta = null;
+        setTimeout(function () { const tr = document.querySelector('tr[data-oferta="' + o.id + '"]'); if (tr) tr.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 0);
+      }
+      return h('tr', { 'data-oferta': o.id, class: (resaltar ? 'resaltada ' : '') + (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada ' + (E.esTemporal(o) || activo.modo === 'oportunidad' ? 'usada-temp' : 'usada-normal') : (E.enOferta(ctx, o) ? 'en-oferta' : '')) },
         h('td', null,
           /^https?:\/\//i.test(o.url || '') ? h('div', { style: { textAlign: 'center' } }, h('a', { href: o.url, target: '_blank', rel: 'noopener', title: 'Abrir la página de origen de la cotización' }, '🌎')) : null,
           selProveedor(o), o.autor ? h('div', { style: { textAlign: 'center' } }, h('small', { class: 'mut' }, 'cotizó ' + o.autor)) : null),
@@ -7013,7 +7045,7 @@ window.CLOUD = {
         const nuevo = E.costoNetoOferta(ctx, o), sinDatos = o.precioPorConfirmar || o.formatoPorConfirmar;
         const dif = actual.missing || sinDatos ? null : (nuevo - actual.unit) / actual.unit * 100;
         const mes = actual.missing || sinDatos ? null : (nuevo - actual.unit) * (uso.get(o.insumoId) || 0) * 4.33;
-        return h('tr', { class: E.enOferta(ctx, o) ? 'en-oferta' : '' },
+        return h('tr', filaVisor(o, pend, { class: E.enOferta(ctx, o) ? 'en-oferta' : '' }),
           h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(o.insumoId) }, ins.nombre), h('div', null, h('small', null, (App.usoMap().get(o.insumoId) || []).length + ' platos'))),
           h('td', null, badgesWeb(o, ins, s), E.esTemporal(o) ? h('div', null, App.badgeTemporal(o)) : null,
             App.badgeCampanaPropuesta(o), selCampana(o), App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca && E.normNombre(o.marca) !== E.normNombre(o.lugar) ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
@@ -7048,7 +7080,7 @@ window.CLOUD = {
       h('thead', null, h('tr', null, h('th', null, 'Insumo'), h('th', null, 'Lugar'), h('th', { class: 'r' }, 'Precio'), h('th', null, 'Fecha'), h('th', null, 'Estado'), h('th'))),
       h('tbody', null, lista.slice(0, 40).map(function (o) {
         const ins = s.insumos.find(function (i) { return i.id === o.insumoId; });
-        return h('tr', { class: E.enOferta(App.ctx(), o) ? 'en-oferta' : '' }, h('td', null, ins ? ins.nombre : '?'), h('td', null, o.lugar + (o.marca ? ' · ' + o.marca : '')),
+        return h('tr', filaVisor(o, lista.slice(0, 40), { class: E.enOferta(App.ctx(), o) ? 'en-oferta' : '' }), h('td', null, ins ? ins.nombre : '?'), h('td', null, o.lugar + (o.marca ? ' · ' + o.marca : '')),
           h('td', { class: 'r' }, App.clp(o.precio) + ' / ' + o.formatoLabel, App.textoPack(o) ? h('div', null, App.textoPack(o)) : null), h('td', null, o.fecha || ''), h('td', null, estado(o)),
           h('td', null, !o.preferida && !o.usarMientrasDure ? App.btn('Retirar', function () {
             App.confirm('¿Retirar esta cotización?', function () { Store.mutate(function (st) { st.ofertas = st.ofertas.filter(function (x) { return x.id !== o.id; }); }); }, 'Retirar', true);
@@ -7056,12 +7088,124 @@ window.CLOUD = {
       })))));
   }
 
+  /* ---------- visor de una cotización (solo lectura) ---------- */
+  // clic en una fila → panel lateral con la foto y todo lo que se sabe de la cotización; para cambiar algo, "Editar" lleva
+  // a la ficha del insumo (ahí se edita cada cotización) y resalta su fila. App.ui.verCot = { id, ids } (ids: la lista donde se abrió)
+  function filaVisor(o, lista, props) {
+    const abrir = function () { App.ui.verCot = { id: o.id, ids: lista.map(function (x) { return x.id; }) }; App.ui.verCotAnim = true; App.render(); };
+    const sel = App.ui.verCot && App.ui.verCot.id === o.id;
+    return Object.assign({}, props, { class: ((props && props.class) || '') + ' link' + (sel ? ' on' : ''), tabindex: '0', title: 'Ver la cotización',
+      // los botones, enlaces y campos de la fila siguen haciendo lo suyo
+      onclick: function (ev) { if (!ev.target.closest('a,button,input,select,textarea,label')) abrir(); },
+      onkeydown: function (ev) { if (ev.key === 'Enter' && ev.target === ev.currentTarget) abrir(); } });
+  }
+  function cerrarVisor() { App.ui.verCot = null; App.render(); }
+  function moverVisor(paso) {
+    const v = App.ui.verCot, ofs = Store.get().ofertas;
+    if (!v) return;
+    const ids = v.ids.filter(function (id) { return ofs.some(function (o) { return o.id === id; }); });
+    const i = ids.indexOf(v.id) + paso;
+    if (i >= 0 && i < ids.length) { v.id = ids[i]; App.render(); }
+  }
+  document.addEventListener('keydown', function (ev) {
+    if (!App.ui.verCot || App.route.name !== 'cotizaciones' || document.querySelector('.overlay')) return;
+    if (/INPUT|TEXTAREA|SELECT/.test((ev.target || {}).tagName || '')) return;
+    if (ev.key === 'Escape') cerrarVisor();
+    else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') { ev.preventDefault(); moverVisor(-1); }
+    else if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') { ev.preventDefault(); moverVisor(1); }
+  });
+
+  function visor() {
+    const v = App.ui.verCot;
+    if (!v) return null;
+    const s = Store.get(), ctx = App.ctx(), staff = App.esStaff();
+    const o = s.ofertas.find(function (x) { return x.id === v.id; });
+    if (!o) { App.ui.verCot = null; return null; }   // la descartaron o retiraron
+    const ins = App.insumo(o.insumoId) || { nombre: '?', unidad: 'g', rendimiento: 1 };
+    const prov = App.proveedorDeOferta(o), ec = E.campanaDe(ctx, o);
+    const anim = App.ui.verCotAnim; App.ui.verCotAnim = false;   // la animación de entrada, solo al abrir
+    const ids = v.ids.filter(function (id) { return s.ofertas.some(function (x) { return x.id === id; }); }), pos = ids.indexOf(o.id);
+    const sinDatos = o.precioPorConfirmar || o.formatoPorConfirmar;
+
+    // estado: en uso / por revisar / alternativa
+    const estado = o.preferida ? App.badge('✓ En uso', 'good') : o.pendiente ? App.badge('Por revisar', 'warn')
+      : E.oportunidadActiva(ctx, o) ? App.badge('En uso mientras dure', 'good') : App.badge('Alternativa', 'info');
+    const provNuevo = !o.proveedorId && o.lugar && !(s.proveedores || []).some(function (p) { return E.normNombre(p.nombre) === E.normNombre(o.lugar) || (p.alias || []).some(function (a) { return E.normNombre(a) === E.normNombre(o.lugar); }); });
+
+    // comparación con lo que se usa hoy (solo staff: cocina no ve costos)
+    let comparar = null;
+    if (staff && !sinDatos) {
+      const actual = E.costoInsumo(ctx, o.insumoId), nuevo = E.costoNetoOferta(ctx, o), esta = actual.oferta && actual.oferta.id === o.id;
+      const dif = actual.missing || esta ? null : (nuevo - actual.unit) / actual.unit * 100;
+      const mes = dif == null ? null : (nuevo - actual.unit) * (E.usoSemanalInsumos(ctx).uso.get(o.insumoId) || 0) * 4.33;
+      comparar = h('div', { class: 'visor-kpis' },
+        h('div', null, h('small', null, 'Costo neto'), h('b', null, nuevo > 0 ? App.costoVisible(nuevo, ins.unidad) : '—')),
+        h('div', null, h('small', null, 'vs. en uso'), h('b', { class: dif == null ? '' : dif < 0 ? 'good-t' : 'bad-t' },
+          esta ? 'es la que se usa' : dif == null ? 'sin precio actual' : (dif > 0 ? '+' : '') + App.num(dif, 0) + '%'),
+          !esta && !actual.missing ? h('small', null, 'hoy ' + App.costoVisible(actual.unit, ins.unidad)) : null),
+        h('div', null, h('small', null, 'Impacto/mes'), h('b', { class: mes == null ? '' : mes < 0 ? 'good-t' : 'bad-t' }, mes == null ? '—' : App.sg(mes))));
+    }
+
+    // características: solo las que tienen dato
+    const rd = o.rendimiento != null ? o.rendimiento : ins.rendimiento;
+    const hasta = E.esTemporal(o) ? E.hastaOferta(ctx, o) : null;
+    const filas = [
+      ['Insumo', ins.nombre + (ins.variedad ? ' · ' + ins.variedad : '')],
+      ['Lugar', (prov ? prov.nombre : o.lugar || '—') + (prov && E.daFactura(prov) ? ' 🧾 da factura' : '')],
+      ['Marca / detalle', o.marca && E.normNombre(o.marca) !== E.normNombre(o.lugar) ? o.marca : null],
+      ['Formato', o.formatoPorConfirmar ? 'por confirmar' : (o.formatoLabel || '—') + (o.formatoQty > 0 && (o.formatoLabel || '').indexOf(App.cantidad(o.formatoQty, ins.unidad)) < 0 ? ' (' + App.cantidad(o.formatoQty, ins.unidad) + ')' : '')],
+      ['Pack', App.textoPack(o)],
+      ['Rendimiento', rd > 0 && rd < 1 ? App.pct(rd * 100) + (o.rendimiento != null ? ' propio de este producto' : ' del insumo') + (o.formatoQty > 0 ? ' · ' + App.cantidad(o.formatoQty * rd, ins.unidad) + ' útiles' : '') : null],
+      ['Conservación', o.conservacion === 'congelado' ? '🧊 congelado' : o.conservacion === 'refrigerado' ? '❄️ refrigerado' : null],
+      ['Promo por cantidad', o.promoCantidad ? 'desde ' + o.promoCantidad.minimo + ' un: ' + App.clp(o.promoCantidad.precio) + ' c/u' + (o.promoCantidad.hasta ? ' · hasta ' + App.fechaCorta(o.promoCantidad.hasta) : '') : null],
+      ['Campaña', ec ? '🎯 ' + (ec.c.nombre || 'campaña') : o.campanaPropuesta ? '🎯 por completar' + (o.campanaPropuesta.nombre ? ': ' + o.campanaPropuesta.nombre : '') : null],
+      ['Válida hasta', E.esTemporal(o) ? (o.hastaPorConfirmar ? '📅 fecha por confirmar' : hasta ? App.fechaCorta(hasta) : 'sin fecha de término') : null],
+      ['Condiciones', [E.esSoloOnline(ctx, o) ? '🌐 solo online' : '', o.requiereMembresia || (ec && ec.c.requiereMembresia) ? '⭐ requiere membresía' : '', o.promoSeleccionado ? 'en promo de despacho' : '', o.disponible === false ? 'no disponible' : ''].filter(Boolean).join(' · ') || null],
+      ['Fuente', ({ estimado: 'estimado', comprado: 'comprado', cotizacion: 'cotización', ODEPA: 'ODEPA', web: 'página web' })[o.fuente] || o.fuente || null],
+      ['Cotizó', (o.autor || '—') + (o.fecha ? ' · ' + o.fecha : '')],
+      ['Revisó', o.revisadoPor || null],
+      ['Código (SKU)', o.sku || null],
+      ['Página', /^https?:\/\//i.test(o.url || '') ? h('a', { href: o.url, target: '_blank', rel: 'noopener' }, (o.host || 'abrir') + ' ↗') : null]
+    ].filter(function (f) { return f[1] != null && f[1] !== ''; });
+    const historial = (o.historial || []).slice(-5).reverse();
+
+    return h('div', { class: 'visor-fondo' + (anim ? ' entra' : ''), onclick: function (ev) { if (ev.target === ev.currentTarget) cerrarVisor(); } },
+      h('aside', { class: 'visor', role: 'dialog', 'aria-label': 'Cotización de ' + ins.nombre },
+        h('div', { class: 'visor-h' },
+          h('div', null, h('h3', null, ins.nombre), h('small', null, (prov ? prov.nombre : o.lugar || '—') + (ids.length > 1 ? ' · ' + (pos + 1) + ' de ' + ids.length : ''))),
+          h('div', { class: 'row' },
+            ids.length > 1 ? App.btn('‹', function () { moverVisor(-1); }, 'small ghost', 'Anterior (←)') : null,
+            ids.length > 1 ? App.btn('›', function () { moverVisor(1); }, 'small ghost', 'Siguiente (→)') : null,
+            h('button', { class: 'x', onclick: cerrarVisor, 'aria-label': 'Cerrar', title: 'Cerrar (Esc)' }, '×'))),
+        h('div', { class: 'visor-b', 'data-sk': 'visor-' + o.id },
+          h('div', { class: 'visor-foto' + (o.imagen ? ' con-img' : '') }, o.imagen
+            ? h('img', { src: o.imagen, alt: o.tituloWeb || ins.nombre, referrerpolicy: 'no-referrer', onerror: function (ev) { ev.target.parentNode.classList.remove('con-img'); ev.target.replaceWith(h('span', { class: 'mut' }, 'No se pudo cargar la foto')); } })
+            : h('span', { class: 'mut' }, o.fuente === 'web' ? 'La página no traía foto' : 'Sin foto (las cotizaciones tomadas de una página web traen la suya)')),
+          o.tituloWeb ? h('p', { class: 'visor-titulo' }, o.tituloWeb) : null,
+          h('div', { class: 'visor-precio' },
+            h('span', { class: 'visor-monto' }, o.precioPorConfirmar ? 'Precio por confirmar' : App.clp(o.precio)),
+            !o.precioPorConfirmar ? h('span', { class: 'mut' }, ' / ' + (o.formatoLabel || ins.unidad)) : null,
+            !sinDatos ? h('div', null, h('small', null, 'Equivale a ' + precioPorBase(o.precio, o.formatoQty, ins.unidad) + ' (precio de compra, antes de mermas)')) : null),
+          h('div', { class: 'row gap wrap' }, estado, App.badgeTemporal(o), App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null,
+            ins.propuesto ? App.badge('🆕 producto nuevo', 'warn') : null, provNuevo ? App.badge('🏪 proveedor nuevo', 'warn') : null,
+            o.precioPorConfirmar ? App.badge('💲 precio por confirmar', 'warn') : null, o.formatoPorConfirmar ? App.badge('📦 formato por confirmar', 'warn') : null),
+          comparar,
+          o.nota ? h('blockquote', { class: 'visor-nota' }, o.nota) : null,
+          h('dl', { class: 'visor-datos' }, filas.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })),
+          historial.length ? h('div', null, h('h4', null, 'Precios anteriores'),
+            h('dl', { class: 'visor-datos' }, historial.map(function (x) { return [h('dt', null, x.fecha || '—'), h('dd', null, App.clp(x.precio))]; }))) : null),
+        h('div', { class: 'visor-f' },
+          staff ? App.btn('✏️ Editar', function () { App.ui.verCot = null; App.ui.resaltarOferta = o.id; App.go('insumos', o.insumoId); }, 'primary',
+            'Abre la ficha del insumo, donde se editan sus cotizaciones') : null,
+          App.btn('Cerrar', cerrarVisor))));
+  }
+
   App.views.cotizaciones = function () {
     return h('div', { class: 'stack' },
       h('div', { class: 'card row gap wrap' }, h('b', null, '¿Lo viste en una página web?'),
         h('a', { href: '#/capturar', class: 'btn primary', onclick: function () { App.ui.cap = {}; } }, '➕ Cotizar desde una página o enlace'),
         h('small', { class: 'mut' }, 'Precio, formato y tienda se llenan solos.')),
-      formulario(), App.esStaff() ? bandeja() : null, mias());
+      formulario(), App.esStaff() ? bandeja() : null, mias(), visor());
   };
 })();
 
