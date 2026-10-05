@@ -277,9 +277,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T06:57:27Z">
+<meta name="build" content="2026-10-05T07:40:20Z">
 <script>
-window.BUILD = "2026-10-05T06:57:27Z";
+window.BUILD = "2026-10-05T07:40:20Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -3287,9 +3287,21 @@ window.CLOUD = {
   }
 
   // raw (del botón o de un enlace) + estado de la app → propuesta lista para revisar
+  // ¿los datos estructurados son del producto que se ve? Las tiendas que cambian de producto sin recargar (Santa Isabel)
+  // actualizan el título visible pero dejan el JSON-LD y parte de las etiquetas og del producto anterior
+  function datosDelMismoProducto(nombreLd, h1) {
+    const a = fichas(nombreLd), b = new Set(fichas(h1));
+    if (!a.length || !b.size) return true;
+    return a.filter(function (t) { return b.has(t); }).length / a.length >= 0.5;
+  }
   function interpretar(raw, state) {
     raw = raw || {}; state = state || {};
-    const mo = raw.modal && raw.modal.nombre ? raw.modal : null;   // producto leído de una ventana emergente: manda sobre los datos de la página (que son del listado)
+    const ld0 = (raw.ld || [])[0];
+    if (!(raw.modal && raw.modal.nombre) && ld0 && raw.h1 && !datosDelMismoProducto(ld0.nombre, raw.h1)) {
+      // se descartan nombre, código, precio, marca e imagen viejos: manda lo visible (título y precios de la página)
+      raw = Object.assign({}, raw, { ld: [], og: { site_name: (raw.og || {}).site_name }, datosDesfasados: true });
+    }
+    const mo =raw.modal && raw.modal.nombre ? raw.modal : null;   // producto leído de una ventana emergente: manda sobre los datos de la página (que son del listado)
     const ld = mo ? { nombre: mo.nombre, marca: mo.marca || '', sku: mo.sku || '', gtin: '', imagen: '', descripcion: '', ofertas: [] } : (raw.ld || [])[0] || {};
     const og = mo ? {} : raw.og || {};
     const sitio = nombreSitio(raw.host, og.site_name);
