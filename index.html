@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T08:15:42Z">
+<meta name="build" content="2026-10-05T10:08:23Z">
 <script>
-window.BUILD = "2026-10-05T08:15:42Z";
+window.BUILD = "2026-10-05T10:08:23Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -3162,8 +3162,24 @@ window.CLOUD = {
     [/^(un|und|unid|unidades?|u|uds?)$/, 'un', 1]
   ];
   function unidadDe(u) { for (const x of UNID) if (x[0].test(u)) return x; return null; }
+  // pack de envases iguales: "6 x 350 ml", "6 un de 350 ml", "lata 6 U x 350 ml" → cada envase es una unidad
+  // (ej. bebidas en lata: se venden por unidad; el pack trae 6 o 12) y el total es la suma
+  const PACK = /(\d+)\s*(?:x|(?:un|und|unid|unidades|u|uds?)\.?\s*(?:de|x))\s*(\d+(?:\.\d+)?)\s*(kgs?|kilos?|grs?|gramos?|g|lts?|litros?|l|ml|cc)\b/;
+  function packDe(textos) {
+    for (const txt of [].concat(textos).filter(Boolean)) {
+      const pk = PACK.exec(String(txt).toLowerCase().replace(/(\d),(\d)/g, '$1.$2')), u = pk && unidadDe(pk[3]);
+      if (!u || !(parseInt(pk[1], 10) >= 2) || !(parseFloat(pk[2]) > 0)) continue;
+      const etU = u[2] === 1000 ? (u[1] === 'g' ? 'kg' : 'L') : u[1];
+      return { n: parseInt(pk[1], 10), cada: parseFloat(pk[2]) * u[2], unidad: u[1], label: String(parseFloat(pk[2])).replace('.', ',') + ' ' + etU };
+    }
+    return null;
+  }
   function formatos(textos) {
-    const r = {};
+    const r = {}, pk = packDe(textos);
+    if (pk) {
+      r.un = { qty: pk.n, label: pk.n + ' un de ' + pk.label };
+      r[pk.unidad] = { qty: Math.round(pk.cada * pk.n * 1000) / 1000, label: pk.n + ' x ' + pk.label };
+    }
     [].concat(textos).filter(Boolean).forEach(function (txt) {
       const t = String(txt).toLowerCase().replace(/(\d),(\d)/g, '$1.$2');
       const re = /(?:(\d+)\s*x\s*)?(\d+(?:\.\d+)?)\s*(kgs?|kilos?|k|grs?|gramos?|g|lts?|litros?|l|ml|cc|unidades?|unid|und|uds?|un|u)\b/g;
@@ -3343,7 +3359,11 @@ window.CLOUD = {
     // unidad de un producto nuevo: la del tamaño escrito en el nombre (5 L → ml); líquidos conocidos en ml
     const enNombre = formatos([nombre, raw.nombre]);
     const liquido = LIQUIDOS.test(norm(nombre));
-    const unidadNueva = liquido && (fmts.ml || !fmts.g) ? 'ml' : enNombre.g ? 'g' : enNombre.ml ? 'ml' : enNombre.un && !fmts.g && !fmts.ml ? 'un' : fmts.g ? 'g' : fmts.ml ? 'ml' : liquido ? 'ml' : fmts.un ? 'un' : 'g';
+    // envases que se venden por unidad: un pack de envases iguales (6 x 350 ml) o una lata suelta → la unidad es cada envase
+    const pk = packDe(textosFormato), lata = /\blatas?\b/.test(norm(nombre));
+    if (!pk && lata && (fmts.ml || fmts.g) && !fmts.un) fmts.un = { qty: 1, label: '1 un' };
+    const porEnvase = pk ? pk.label : lata && (fmts.ml || fmts.g) ? (fmts.ml || fmts.g).label : null;
+    const unidadNueva = porEnvase ? 'un' : liquido && (fmts.ml || !fmts.g) ? 'ml' : enNombre.g ? 'g' : enNombre.ml ? 'ml' : enNombre.un && !fmts.g && !fmts.ml ? 'un' : fmts.g ? 'g' : fmts.ml ? 'ml' : liquido ? 'ml' : fmts.un ? 'un' : 'g';
     // envase en la etiqueta del formato ("bidón 5 L")
     const env = envase([nombre, raw.h1, og.description]);
     if (env) Object.keys(fmts).forEach(function (k) { if (norm(fmts[k].label).indexOf(norm(env)) < 0) fmts[k].label = env + ' ' + fmts[k].label; });
@@ -3351,13 +3371,18 @@ window.CLOUD = {
     const marcasConocidas = Array.from(new Set((state.ofertas || []).map(function (o) { return o.marca; }).filter(function (m) { return m && m.length >= 3; })));
     const limpio = limpiarNombre(nombre, marca, sitio, marcasConocidas);
     return {
-      url: raw.url || '', host: raw.host || '', nombre: nombre, tituloOriginal: Eng.oracion(tituloPagina, propios), nombreLimpio: limpio.nombre || nombre, extras: limpio.extras || [], variedad: limpio.variedad || [],
+      url: raw.url || '', host: raw.host || '', nombre: nombre, tituloOriginal: Eng.oracion(tituloPagina, propios), nombreLimpio: porEnvase ? App_nombreEnvase(limpio.nombre || nombre, lata, porEnvase) : limpio.nombre || nombre, porEnvase: porEnvase, extras: limpio.extras || [], variedad: limpio.variedad || [],
       etiquetas: etiquetas([nombre, raw.h1, og.description, ld.descripcion]), dieta: dietaSugerida(nombre), marca: marca || limpio.marca, envase: env, sku: ld.sku || '', gtin: ld.gtin || '', imagen: ld.imagen || og.image || '',
       sitio: sitio, proveedor: prov, precio: p.actual, precioNormal: p.normal, fuentePrecio: p.fuente, precioDudoso: p.dudoso,
       soloWeb: !!raw.soloWeb, etiquetasPromo: (raw.etiquetas || []).slice(0, 25), formatos: fmts, unidadNueva: unidadNueva, compraMinima: compraMinima(raw.textos), precioPorUnidad: ppu, promoCantidad: pc,
       etiquetaOferta: (raw.etiquetas || []).some(function (t) { return /^(oferta|en oferta|precio oferta)$/i.test(String(t).trim()); }),
       insumo: elegido, recordado: !!conocido, sugerencias: sug.slice(0, 8).map(function (x) { return x.insumo; })
     };
+  }
+  // "Bebida" + lata + "350 ml" → "Bebida lata 350 ml" (como se cuenta: una unidad = un envase de ese tamaño)
+  function App_nombreEnvase(nombre, lata, tam) {
+    const n = norm(nombre);
+    return nombre + (lata && !/\blatas?\b/.test(n) ? ' lata' : '') + (n.indexOf(norm(tam)) < 0 ? ' ' + tam : '');
   }
   function App_cant(q, u) { return u === 'un' ? q + ' un' : q >= 1000 ? String(Math.round(q / 10) / 100).replace('.', ',') + (u === 'g' ? ' kg' : ' L') : q + ' ' + u; }
 
@@ -6844,7 +6869,9 @@ window.CLOUD = {
                 })),
               h('input', { type: 'date', value: F.hasta || '', min: App.hoy(), 'data-fk': 'cap-hasta', onchange: function (ev) { F.hasta = ev.target.value; App.render(); } }))) : null,
           r.promoCantidad ? h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!F.promo, onchange: function (ev) { F.promo = ev.target.checked; } }),
-            ' 🏷️ Promo: llevando ' + r.promoCantidad.minimo + ', ' + App.clp(r.promoCantidad.precio) + ' c/u') : null,
+            // el precio de la promo es por formato (un pack de 6, una bolsa…); si el insumo se cuenta por unidad, se muestra también por unidad
+            ' 🏷️ Promo: llevando ' + r.promoCantidad.minimo + (F.fl ? ' (' + F.fl + ')' : '') + ', ' + App.clp(r.promoCantidad.precio) + ' cada uno' +
+              (unidad === 'un' && F.fq > 1 ? ' = ' + App.clp(r.promoCantidad.precio / F.fq) + ' por unidad' : '')) : null,
           r.compraMinima ? h('small', { class: 'mut' }, 'La página exige compra mínima de ' + r.compraMinima + ' unidades (queda anotado).') : null),
 
         h('label', { class: 'block' }, 'Nota (opcional) · trae el nombre tal como sale en la página', App.textInput({ fk: 'cap-nota', value: F.nota, ph: 'ej. buena calidad, solo despacho los martes…', onChange: function (v) { F.nota = v; } })),
