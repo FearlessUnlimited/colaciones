@@ -227,6 +227,17 @@ tr.subhead td { font-weight: 700; background: var(--surface2); } tr.hijo td { co
 .visor-nota { margin: 0; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--surface2); border-radius: 0 8px 8px 0; font-style: italic; }
 .visor-datos { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 13.5px; }
 .visor-datos dt { color: var(--mut); } .visor-datos dd { margin: 0; overflow-wrap: anywhere; }
+.visor-contenido { display: flex; flex-direction: column; gap: 12px; } .visor-info { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.visor-revisar { margin-right: auto; }   /* aprobar a la izquierda, editar a la derecha */
+/* a lo ancho (ficha del insumo): foto a la izquierda; las características en dos columnas si caben */
+.visor-ancho .visor-contenido { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; }
+.visor-ancho .visor-foto { min-height: 160px; } .visor-ancho .visor-foto img { max-height: 200px; }
+.visor-ancho .visor-kpis { max-width: 520px; }
+@media (min-width: 1200px) { .visor-ancho .visor-datos { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); } }
+@media (max-width: 700px) { .visor-ancho .visor-contenido { grid-template-columns: minmax(0, 1fr); } }
+.visor-ancho .card-h { flex-wrap: wrap; gap: 8px; }
+.tbl tr.elegible > td { cursor: pointer; }
+.tbl tr.visto td { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }   /* la que muestra el visor */
 .tbl tr.link.on td:first-child { box-shadow: inset 3px 0 var(--accent); }   /* la cotización abierta en el visor */
 .tbl tr.resaltada td { animation: resaltar 2.4s ease-out; }
 @keyframes resaltar { 0%, 30% { background: var(--accent-soft); } }
@@ -265,6 +276,7 @@ select.w-prov { width: 160px; }
 .w100 { width: 110px; } .w120 { width: 140px; }
 .aviso { border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
 .aviso.warn { background: var(--warn-soft); border: 1px solid var(--warn); }
+.aviso.info { background: var(--info-soft); border: 1px solid var(--info); } .aviso.info ul { margin: 0; }
 .cap-prod { display: flex; gap: 12px; align-items: center; }
 .cap-prod .nm { font-weight: 600; font-size: 15px; }
 .cap-img { width: 72px; height: 72px; object-fit: contain; border-radius: 8px; background: #fff; border: 1px solid var(--line); flex: none; }
@@ -304,9 +316,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T23:08:22Z">
+<meta name="build" content="2026-10-05T23:36:22Z">
 <script>
-window.BUILD = "2026-10-05T23:08:22Z";
+window.BUILD = "2026-10-05T23:36:22Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -3603,6 +3615,42 @@ window.CLOUD = {
     if (o && insDe(o.insumoId)) return insDe(o.insumoId);
     return (state.insumos || []).find(function (i) { return (i.enlaces || []).some(mismo); }) || null;
   }
+  /* ---------- volver a medir una página ya cotizada ---------- */
+  // misma página: mismo enlace (sin parámetros) o mismo código de producto en la misma tienda
+  function mismaPagina(a, b) {
+    if (!a || !b) return false;
+    if (a.url && b.url && claveUrl(a.url) === claveUrl(b.url)) return true;
+    return !!(a.sku && b.sku && a.host && b.host && dominio(a.host) === dominio(b.host) && String(a.sku) === String(b.sku));
+  }
+  // qué precio de la página es: 'normal', 'oferta' (temporal o de campaña) o 'promo:N' (llevando N)
+  function tipoPrecio(o) {
+    const n = o.promoMinimo || (/^Promo llevando (\d+)/.exec(o.nota || '') || [])[1];
+    if (n) return 'promo:' + n;
+    return o.temporal || o.campanaId || o.campanaPropuesta ? 'oferta' : 'normal';
+  }
+  // formato de cada envase: una promo "llevando N" guarda N × el formato de la página
+  const formatoBase = function (o) { const t = tipoPrecio(o); return o.formatoQty / (t.indexOf('promo:') === 0 ? Number(t.slice(6)) || 1 : 1); };
+  const mismoFormato = function (a, b) { const x = formatoBase(a), y = formatoBase(b); return !(x > 0) || !(y > 0) || Math.abs(x - y) <= 0.001 * y; };
+  const ultimaVez = function (o) { const c = o.confirmadoEl || '', f = o.fecha || ''; return c > f ? c : f; };
+  // la cotización ya aprobada que esta (nueva, por revisar, tomada de la web) vuelve a medir:
+  // misma página, mismo tipo de precio y mismo formato; si hay varias, la vista más recientemente
+  function antecesora(state, p) {
+    if (!p || !p.pendiente || p.fuente !== 'web') return null;
+    const t = tipoPrecio(p);
+    return (state.ofertas || []).filter(function (x) { return x.id !== p.id && !x.pendiente && mismaPagina(x, p) && tipoPrecio(x) === t && mismoFormato(x, p); })
+      .sort(function (a, b) { return ultimaVez(b).localeCompare(ultimaVez(a)); })[0] || null;
+  }
+  // ofertas y promos aprobadas de esa página que siguen vigentes (vigente(x)) pero no aparecieron en esta captura
+  // (la captura = lo que guardó la misma persona, el mismo día, desde esa página). Se calcula sobre su precio normal.
+  function yaNoEstan(state, p, vigente) {
+    if (!p || !p.pendiente || p.fuente !== 'web' || tipoPrecio(p) !== 'normal') return [];
+    const tipos = new Set((state.ofertas || []).filter(function (x) { return x.pendiente && x.fecha === p.fecha && x.autorId === p.autorId && mismaPagina(x, p); }).map(tipoPrecio));
+    return (state.ofertas || []).filter(function (x) { return !x.pendiente && mismaPagina(x, p) && mismoFormato(x, p) && !tipos.has(tipoPrecio(x)) && (!vigente || vigente(x)); });
+  }
+  // cotizaciones aprobadas de una página (para avisar al capturarla de nuevo)
+  function yaCotizadas(state, pagina) {
+    return (state.ofertas || []).filter(function (x) { return !x.pendiente && mismaPagina(x, pagina); });
+  }
   function proveedorDe(state, host, nombre) {
     const dom = dominio(host), k = norm(nombre);
     return (state.proveedores || []).find(function (p) { return p.web && dominio(p.web) === dom; }) ||
@@ -3715,7 +3763,7 @@ window.CLOUD = {
   }
 
   const Captura = { extraer: extraer, marcador: marcador, interpretar: interpretar, desdeUrl: desdeUrl, limpiarNombre: limpiarNombre, envase: envase, etiquetas: etiquetas, dietaSugerida: dietaSugerida, VARIEDADES: VARIEDADES, formatos: formatos, precios: precios, numero: numero,
-    nombreSitio: nombreSitio, dominio: dominio, sugerirInsumos: sugerirInsumos, claveUrl: claveUrl, precioPorUnidad: precioPorUnidad, compraMinima: compraMinima };
+    nombreSitio: nombreSitio, dominio: dominio, sugerirInsumos: sugerirInsumos, claveUrl: claveUrl, mismaPagina: mismaPagina, tipoPrecio: tipoPrecio, antecesora: antecesora, yaNoEstan: yaNoEstan, yaCotizadas: yaCotizadas, ultimaVez: ultimaVez, precioPorUnidad: precioPorUnidad, compraMinima: compraMinima };
   if (typeof module !== 'undefined' && module.exports) module.exports = Captura;
   else root.Captura = Captura;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -5357,7 +5405,17 @@ window.CLOUD = {
         })))),
       h('div', { class: 'help' }, 'Cantidades en recetas = peso utilizable crudo/seco tal como se compra. El rendimiento solo descuenta limpieza o pelado, no la cocción.'));
 
-    // ofertas
+    // ofertas: la que se usa primero; luego de menor a mayor costo neto (sin costo al final)
+    const ofsOrden = ofs.slice().sort(function (a, b) {
+      const ua = activo.oferta && activo.oferta.id === a.id, ub = activo.oferta && activo.oferta.id === b.id;
+      if (ua !== ub) return ua ? -1 : 1;
+      const ca = E.costoNetoOferta(ctx, a), cb = E.costoNetoOferta(ctx, b);
+      return (ca > 0 ? ca : Infinity) - (cb > 0 ? cb : Infinity) || 0;
+    });
+    // visor (solo lectura) de la cotización elegida con un clic en su fila; por defecto, la que se usa
+    const verOf = App.ui.verOfIns = App.ui.verOfIns || {};
+    const oVer = ofsOrden.find(function (o) { return o.id === verOf[ins.id]; }) || ofsOrden[0];
+    const elegir = function (o) { if (verOf[ins.id] !== o.id || App.ui.visorInsOculto) { verOf[ins.id] = o.id; App.ui.visorInsOculto = false; App.render(); } };
     const upO = function (o, fn, key) { Store.mutate(function (st) { fn(st.ofertas.find(function (x) { return x.id === o.id; })); }, key); };
     const filaOferta = function (o) {
       const precioSim = esc && esc.precios && esc.precios[o.id] != null ? esc.precios[o.id] : null;
@@ -5371,7 +5429,8 @@ window.CLOUD = {
         App.ui.resaltarOferta = null;
         setTimeout(function () { const tr = document.querySelector('tr[data-oferta="' + o.id + '"]'); if (tr) tr.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 0);
       }
-      return h('tr', { 'data-oferta': o.id, class: (resaltar ? 'resaltada ' : '') + (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada ' + (E.esTemporal(o) || activo.modo === 'oportunidad' ? 'usada-temp' : 'usada-normal') : (E.enOferta(ctx, o) ? 'en-oferta' : '')) },
+      return h('tr', { 'data-oferta': o.id, onclick: function (ev) { if (!ev.target.closest('a,button,input,select,textarea,label')) elegir(o); },
+        class: 'elegible ' + (oVer && oVer.id === o.id && !App.ui.visorInsOculto ? 'visto ' : '') + (resaltar ? 'resaltada ' : '') + (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada ' + (E.esTemporal(o) || activo.modo === 'oportunidad' ? 'usada-temp' : 'usada-normal') : (E.enOferta(ctx, o) ? 'en-oferta' : '')) },
         h('td', null,
           /^https?:\/\//i.test(o.url || '') ? h('div', { style: { textAlign: 'center' } }, h('a', { href: o.url, target: '_blank', rel: 'noopener', title: 'Abrir la página de origen de la cotización' }, '🌎')) : null,
           selProveedor(o), o.autor ? h('div', { style: { textAlign: 'center' } }, h('small', { class: 'mut' }, 'cotizó ' + o.autor)) : null),
@@ -5444,12 +5503,7 @@ window.CLOUD = {
     const tablaOfertas = App.card('Dónde y a qué precio lo compras',
       h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
         h('thead', null, h('tr', null, ['Proveedor', 'Marca / detalle', 'Formato', 'Cant. formato', 'Precio formato', 'Rend. %', 'Costo neto', 'Fuente / fecha', 'Usar', 'Disp.', ''].map(function (t, i) { return h('th', { class: i === 6 ? 'r' : (i === 8 || i === 9 ? 'c' : '') }, t); }))),
-        h('tbody', null, ofs.slice().sort(function (a, b) {   // la que se usa primero; luego de menor a mayor costo neto (sin costo al final)
-          const ua = activo.oferta && activo.oferta.id === a.id, ub = activo.oferta && activo.oferta.id === b.id;
-          if (ua !== ub) return ua ? -1 : 1;
-          const ca = E.costoNetoOferta(ctx, a), cb = E.costoNetoOferta(ctx, b);
-          return (ca > 0 ? ca : Infinity) - (cb > 0 ? cb : Infinity) || 0;
-        }).map(filaOferta)))),
+        h('tbody', null, ofsOrden.map(filaOferta)))),
       '', App.btn('+ Agregar cotización', nuevaOferta, 'small primary'));
 
     // impacto
@@ -5503,7 +5557,18 @@ window.CLOUD = {
         h('td', null, h('small', null, o ? (o.lugar || '—') + (o.marca ? ' · ' + o.marca : '') + ' · ' + o.formatoLabel : (App.textoMarcaLugar(c) || 'en general'))),
         h('td', null, h('small', { class: 'mut' }, (c.autor || '') + ' · ' + App.fechaCorta(c.fecha))));
     })))) : null;
-    return h('div', { class: 'stack' }, cabecera, tOpin, tablaOfertas, impacto, tUsos, tHist);
+    const iVer = oVer ? ofsOrden.indexOf(oVer) : -1, oculto = !!App.ui.visorInsOculto;
+    const panelVer = oVer ? App.card(h('span', null, '🔎 ', oVer.lugar || 'Cotización', oVer.marca && E.normNombre(oVer.marca) !== E.normNombre(oVer.lugar) ? h('span', { class: 'mut' }, ' · ' + oVer.marca) : null),
+      oculto ? null : App.contenidoCotizacion(oVer, { enInsumo: true }), 'visor-ancho',
+      h('div', { class: 'row gap wrap' },
+        !oculto && App.esStaff() && oVer.pendiente ? App.botonesRevision(oVer, ins) : null,
+        ofsOrden.length > 1 ? h('span', { class: 'row' },
+          App.btn('‹', function () { elegir(ofsOrden[iVer - 1] || ofsOrden[ofsOrden.length - 1]); }, 'small ghost', 'Cotización anterior'),
+          h('small', { class: 'mut nowrap' }, (iVer + 1) + ' de ' + ofsOrden.length),
+          App.btn('›', function () { elegir(ofsOrden[iVer + 1] || ofsOrden[0]); }, 'small ghost', 'Cotización siguiente')) : null,
+        oculto ? null : App.btn('✏️ Editar', function () { App.ui.resaltarOferta = oVer.id; App.render(); }, 'small', 'Lleva a su fila en la tabla de abajo, donde se edita'),
+        App.btn(oculto ? 'Mostrar ▾' : 'Ocultar ▴', function () { App.ui.visorInsOculto = !oculto; App.render(); }, 'small ghost'))) : null;
+    return h('div', { class: 'stack' }, cabecera, tOpin, panelVer, tablaOfertas, impacto, tUsos, tHist);
   }
 
   // saca el insumo del sistema; si `destinoId`, todo lo que lo usaba pasa a ese otro insumo (misma cantidad)
@@ -6980,44 +7045,142 @@ window.CLOUD = {
       o.formatoPorConfirmar ? App.badge('📦 formato por confirmar', 'warn') : null);
   }
 
+  /* ---------- aprobar o descartar (bandeja y visor) ---------- */
+  // una cotización sin precio o sin formato no se puede aprobar: primero se completa en su fila de "Por revisar"
+  function incompleta(o) {
+    if (o.precioPorConfirmar || o.formatoPorConfirmar) { App.toast('Primero completa ' + (o.precioPorConfirmar ? 'el precio' : 'el formato') + ' en su fila de "Por revisar"'); return true; }
+    return false;
+  }
+  // la marca revisada (fn hace lo propio de cada decisión) y aprende su enlace y proveedor
+  function revisar(o, fn) {
+    Store.mutate(function (st) {
+      const y = st.ofertas.find(function (x) { return x.id === o.id; });
+      if (fn) fn(y, st);
+      y.pendiente = false; y.revisadoPor = yo().nombre;
+      App.aprenderCotizacion(st, y);
+    });
+  }
+  // cada acción devuelve true si se hizo (false si faltaba algo y solo avisó)
+  function usar(o) {
+    if (incompleta(o)) return false;
+    revisar(o, function (y, st) { st.ofertas.forEach(function (x) { if (x.insumoId === o.insumoId) x.preferida = (x.id === o.id); }); });
+    App.toast('Ahora se usa la cotización de ' + (o.lugar || 'ese lugar'));
+    return true;
+  }
+  function alternativa(o) {
+    if (incompleta(o)) return false;
+    revisar(o, function (y) { y.usarMientrasDure = false; });
+    App.toast('Guardada como alternativa');
+    return true;
+  }
+  // oferta temporal: se usa en los costos hasta su fecha de término y luego vuelve sola al precio normal
+  function usarMientrasDure(o) {
+    if (incompleta(o)) return false;
+    if (o.hastaPorConfirmar) { App.toast('Primero confirma hasta cuándo dura la oferta (📅 en su fila de "Por revisar")'); return false; }
+    revisar(o, function (y) { y.usarMientrasDure = true; });
+    App.toast('Se usará hasta el ' + App.fechaCorta(E.hastaOferta(App.ctx(), o)) + '; después los costos vuelven solos al precio normal');
+    return true;
+  }
+  // de una campaña: al aprobarla, la campaña decide si entra a los costos y hasta cuándo
+  function aprobarCampana(o) {
+    if (incompleta(o)) return false;
+    const e = E.campanaDe(App.ctx(), o);
+    revisar(o);
+    App.toast(e && e.c.usarEnCostos === false ? 'Aprobada: la campaña no se usa en los costos (sí al planificar compras)'
+      : 'Aprobada: se usa en los costos ' + (e && e.c.hasta ? 'hasta el ' + App.fechaCorta(e.c.hasta) : 'mientras dure la campaña'));
+    return true;
+  }
+  /* ---------- volver a medir una página ya cotizada ---------- */
+  const C = function () { return window.Captura; };
+  // la cotización que esta nueva vuelve a medir (misma página, mismo tipo de precio y formato), o null
+  App.antecesora = function (o) { return o && o.pendiente && o.fuente === 'web' ? C().antecesora(Store.get(), o) : null; };
+  // ofertas y promos de esa página que siguen vigentes pero no salieron en esta captura
+  App.yaNoEstan = function (o) {
+    const ctx = App.ctx();
+    return o && o.pendiente && o.fuente === 'web' ? C().yaNoEstan(Store.get(), o, function (x) { return x.disponible !== false && !E.ofertaVencida(ctx, x); }) : [];
+  };
+  // días desde que se vio el precio en la página, si ya toca volver a mirarla (o null): solo las tomadas de la web
+  App.porReconfirmar = function (o) {
+    if (!o || o.pendiente || !/^https?:\/\//i.test(o.url || '') || o.disponible === false) return null;
+    const ctx = App.ctx();
+    if (E.esTemporal(o) && E.ofertaVencida(ctx, o)) return null;
+    const d = E.diasEntre(C().ultimaVez(o), App.hoy());
+    return d > ctx.p.precioViejoDias ? d : null;
+  };
+  // la nueva captura pasa su precio (y su fecha) a la que ya existía y se descarta: no se duplica
+  function actualizarExistente(p, a) {
+    if (p.precioPorConfirmar) { App.toast('Primero completa el precio en su fila de "Por revisar"'); return false; }
+    const igual = p.precio === a.precio, hoy = App.hoy();
+    Store.mutate(function (st) {
+      const x = st.ofertas.find(function (y) { return y.id === a.id; }), n = st.ofertas.find(function (y) { return y.id === p.id; });
+      if (!igual) { App.registrarPrecio(x, n.precio); x.precio = n.precio; }
+      x.fecha = hoy; x.confirmadoEl = hoy; x.confirmadoPor = n.autor || yo().nombre; x.disponible = true;
+      if (n.imagen) x.imagen = n.imagen;
+      if (n.tituloWeb) x.tituloWeb = n.tituloWeb;
+      // una oferta que sigue en la página: su nueva fecha de término (si la persona la supo) o la de su campaña
+      if (n.campanaId) { x.campanaId = n.campanaId; delete x.hastaPorConfirmar; }
+      else if (n.temporal && !n.hastaPorConfirmar) { x.temporal = { hasta: n.temporal.hasta }; delete x.hastaPorConfirmar; }
+      else if (n.temporal && x.temporal && x.temporal.hasta < hoy) { x.temporal = { hasta: n.temporal.hasta }; x.hastaPorConfirmar = true; }
+      st.ofertas = st.ofertas.filter(function (y) { return y.id !== p.id; });
+    });
+    App.toast(igual ? '✓ Confirmada: sigue a ' + App.clp(a.precio) : 'Precio actualizado: ' + App.clp(a.precio) + ' → ' + App.clp(p.precio));
+    return true;
+  }
+  // la oferta ya no sale en la página: termina ayer (las de campaña quedan no disponibles; su campaña sigue para otros productos)
+  function terminarOferta(x) {
+    Store.mutate(function (st) {
+      const y = st.ofertas.find(function (z) { return z.id === x.id; });
+      if (y.campanaId || !y.temporal) y.disponible = false;
+      else { y.temporal = { hasta: E.fechaMenos(App.hoy(), 1) }; delete y.hastaPorConfirmar; }
+    });
+    App.toast('Listo: los costos ya no usan la oferta de ' + App.clp(x.precio));
+  }
+  const queEs = function (x) { return C().tipoPrecio(x) === 'oferta' ? 'la oferta' : 'la promo'; };
+  // marcas de una cotización nueva que vuelve a medir una página: antes/ahora y las ofertas que ya no aparecen
+  App.badgeReconfirma = function (o) {
+    const a = App.antecesora(o), fuera = App.yaNoEstan(o);
+    if (!a && !fuera.length) return null;
+    const dif = a && o.precio > 0 && a.precio > 0 ? (o.precio - a.precio) / a.precio * 100 : null;
+    return h('div', { class: 'row gap wrap' },
+      a ? App.badge('🔁 ya cotizada: ' + App.clp(a.precio) + ' el ' + App.fechaCorta(C().ultimaVez(a)) +
+        (dif == null ? '' : Math.abs(dif) < 0.05 ? ' · mismo precio' : ' · ' + (dif > 0 ? '+' : '') + App.num(dif, 0) + '%'), dif == null || Math.abs(dif) < 0.05 ? 'info' : dif > 0 ? 'warn' : 'good') : null,
+      fuera.map(function (x) {
+        return h('button', { type: 'button', class: 'badge warn badge-btn', title: 'La página ya no la muestra. Clic: dejar de usarla en los costos',
+          onclick: function () { App.confirm('¿Terminar ' + queEs(x) + ' de ' + App.clp(x.precio) + ' / ' + (x.formatoLabel || '') + '? La página ya no la muestra.', function () { terminarOferta(x); }, 'Terminarla'); } },
+          '🔥 ya no aparece ' + queEs(x) + ' de ' + App.clp(x.precio) + ' · terminar');
+      }));
+  };
+  function descartarCot(o, despues) {
+    App.confirm('¿Descartar la cotización de ' + (o.lugar || '') + '?', function () {
+      if (despues) despues();   // antes de borrarla: el visor sabe cuál venía después
+      Store.mutate(function (st) { st.ofertas = st.ofertas.filter(function (x) { return x.id !== o.id; }); });
+    }, 'Descartar', true);
+  }
+
+  // botones de una cotización por revisar; despues(): tras aprobarla o descartarla (el visor pasa a la siguiente)
+  App.botonesRevision = function (o, ins, despues) {
+    const hecho = function (ok) { if (ok && despues) despues(); };
+    // la página ya estaba cotizada: lo normal es actualizar la existente (no duplicarla)
+    const a = !ins.propuesto && App.antecesora(o);
+    if (a) {
+      const igual = o.precio === a.precio;
+      return [App.btn(igual ? '✓ Sigue igual' : '🔁 Actualizar la existente', function () { hecho(actualizarExistente(o, a)); }, 'small primary',
+        igual ? 'Confirma la cotización que ya existía (misma página y precio) y descarta esta' : 'Pasa este precio a la cotización que ya existía (el anterior queda en su historial) y descarta esta'),
+        App.btn('Guardar aparte', function () { hecho(alternativa(o)); }, 'small', 'Guardarla como otra cotización, sin tocar la existente'),
+        App.btn('✕', function () { descartarCot(o, despues); }, 'small ghost', 'Descartar')];
+    }
+    return [ins.propuesto ? App.btn('Completar producto', function () { App.ui.verCot = null; App.go('insumos', ins.id); }, 'small primary', 'Es un producto nuevo: revisa su categoría, unidad y rendimiento y valídalo antes de usar esta cotización')
+      : o.campanaId ? App.btn('Aprobar', function () { hecho(aprobarCampana(o)); }, 'small primary', 'Es de una campaña: se usa en los costos mientras dure, si la campaña lo indica')
+      : o.temporal ? App.btn('Usar mientras dure', function () { hecho(usarMientrasDure(o)); }, 'small primary', 'Se usa en los costos hasta su fecha de término')
+      : App.btn('Usar esta', function () { hecho(usar(o)); }, 'small primary'),
+      App.btn('Alternativa', function () { hecho(alternativa(o)); }, 'small', 'Aprobar sin usarla todavía (queda para comparar)'),
+      App.btn('✕', function () { descartarCot(o, despues); }, 'small ghost', 'Descartar')];
+  };
+
   function bandeja() {
     const s = Store.get(), ctx = App.ctx();
     const pend = s.ofertas.filter(function (o) { return o.pendiente; }).sort(function (a, b) { return (b.fecha || '').localeCompare(a.fecha || ''); });
     const uso = E.usoSemanalInsumos(ctx).uso;
-    // una cotización sin precio o sin formato no se puede aprobar: primero se completa en la fila
-    const incompleta = function (o) {
-      if (o.precioPorConfirmar || o.formatoPorConfirmar) { App.toast('Primero completa ' + (o.precioPorConfirmar ? 'el precio' : 'el formato') + ' en la fila'); return true; }
-      return false;
-    };
-    const usar = function (o) {
-      if (incompleta(o)) return;
-      Store.mutate(function (st) {
-        st.ofertas.forEach(function (x) { if (x.insumoId === o.insumoId) x.preferida = (x.id === o.id); });
-        const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.revisadoPor = yo().nombre;
-        App.aprenderCotizacion(st, y);
-      });
-      App.toast('Ahora se usa la cotización de ' + (o.lugar || 'ese lugar'));
-    };
-    const alternativa = function (o) {
-      if (incompleta(o)) return;
-      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = false; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
-      App.toast('Guardada como alternativa');
-    };
-    // oferta temporal: se usa en los costos hasta su fecha de término y luego vuelve sola al precio normal
-    const usarMientrasDure = function (o) {
-      if (incompleta(o)) return;
-      if (o.hastaPorConfirmar) { App.toast('Primero confirma hasta cuándo dura la oferta (fecha en la fila)'); return; }
-      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.usarMientrasDure = true; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
-      App.toast('Se usará hasta el ' + App.fechaCorta(E.hastaOferta(ctx, o)) + '; después los costos vuelven solos al precio normal');
-    };
-    // de una campaña: al aprobarla, la campaña decide si entra a los costos y hasta cuándo
-    const aprobarCampana = function (o) {
-      if (incompleta(o)) return;
-      const e = E.campanaDe(ctx, o);
-      Store.mutate(function (st) { const y = st.ofertas.find(function (x) { return x.id === o.id; }); y.pendiente = false; y.revisadoPor = yo().nombre; App.aprenderCotizacion(st, y); });
-      App.toast(e && e.c.usarEnCostos === false ? 'Aprobada: la campaña no se usa en los costos (sí al planificar compras)'
-        : 'Aprobada: se usa en los costos ' + (e && e.c.hasta ? 'hasta el ' + App.fechaCorta(e.c.hasta) : 'mientras dure la campaña'));
-    };
     // unir la cotización a una campaña del proveedor (o soltarla): la fecha pasa a ser la de la campaña
     const selCampana = function (o) {
       const p = E.proveedorDe(ctx, o);
@@ -7033,9 +7196,6 @@ window.CLOUD = {
           });
         } });
     };
-    const descartar = function (o) {
-      App.confirm('¿Descartar la cotización de ' + (o.lugar || '') + '?', function () { Store.mutate(function (st) { st.ofertas = st.ofertas.filter(function (x) { return x.id !== o.id; }); }); }, 'Descartar', true);
-    };
     return App.card('Por revisar (' + pend.length + ')', pend.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' },
       h('thead', null, h('tr', null, ['Insumo', 'Dónde / quién', 'Formato y precio', 'vs. en uso', 'Impacto/mes', ''].map(function (t, i) { return h('th', { class: i === 3 || i === 4 ? 'r' : '' }, t); }))),
       h('tbody', null, pend.map(function (o) {
@@ -7048,7 +7208,7 @@ window.CLOUD = {
         return h('tr', filaVisor(o, pend, { class: E.enOferta(ctx, o) ? 'en-oferta' : '' }),
           h('td', null, h('a', { href: '#/insumos/' + encodeURIComponent(o.insumoId) }, ins.nombre), h('div', null, h('small', null, (App.usoMap().get(o.insumoId) || []).length + ' platos'))),
           h('td', null, badgesWeb(o, ins, s), E.esTemporal(o) ? h('div', null, App.badgeTemporal(o)) : null,
-            App.badgeCampanaPropuesta(o), selCampana(o), App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca && E.normNombre(o.marca) !== E.normNombre(o.lugar) ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
+            App.badgeCampanaPropuesta(o), selCampana(o), App.badgesCanal(o), App.badgeReconfirma(o), App.badgeOpinion ? App.badgeOpinion(o) : null, h('b', null, o.lugar || '—'), o.marca && E.normNombre(o.marca) !== E.normNombre(o.lugar) ? ' · ' + o.marca : '', h('div', null, h('small', null, (o.autor || '—') + ' · ' + (o.fecha || ''))), o.nota ? h('div', null, h('small', { class: 'mut' }, '“' + o.nota + '”')) : null),
           h('td', null, o.precioPorConfirmar || o.formatoPorConfirmar ? h('div', { class: 'stack' },
               o.precioPorConfirmar ? h('label', { class: 'row gap' }, h('small', { class: 'mut' }, 'precio $'), App.numInput({ fk: 'pc-p-' + o.id, cls: 'w80', ph: 'precio',
                 onBlur: function (ev) { const n = App.parseNum(ev.target.value); if (n > 0) completar(function (y) { y.precio = n; delete y.precioPorConfirmar; }); } })) : h('span', null, App.clp(o.precio)),
@@ -7058,13 +7218,32 @@ window.CLOUD = {
           h('td', { class: 'r ' + (dif == null ? '' : dif < 0 ? 'good-t' : 'bad-t') }, sinDatos ? '—' : dif == null ? 'sin precio actual' : (dif > 0 ? '+' : '') + App.num(dif, 0) + '%',
             actual.oferta ? h('div', null, h('small', { class: 'mut' }, 'hoy ' + App.costoVisible(actual.unit, ins.unidad))) : null),
           h('td', { class: 'r ' + (mes == null ? '' : mes < 0 ? 'good-t' : 'bad-t') }, mes == null ? '—' : App.sg(mes)),
-          h('td', { class: 'nowrap' }, ins.propuesto ? App.btn('Completar producto', function () { App.go('insumos', ins.id); }, 'small primary', 'Es un producto nuevo: revisa su categoría, unidad y rendimiento y valídalo antes de usar esta cotización')
-            : o.campanaId ? App.btn('Aprobar', function () { aprobarCampana(o); }, 'small primary', 'Es de una campaña: se usa en los costos mientras dure, si la campaña lo indica')
-            : o.temporal ? App.btn('Usar mientras dure', function () { usarMientrasDure(o); }, 'small primary', 'Se usa en los costos hasta su fecha de término')
-            : App.btn('Usar esta', function () { usar(o); }, 'small primary'), App.btn('Alternativa', function () { alternativa(o); }, 'small', 'Aprobar sin usarla todavía (queda para comparar)'),
-            App.btn('✕', function () { descartar(o); }, 'small ghost', 'Descartar')));
+          h('td', { class: 'nowrap' }, App.botonesRevision(o, ins)));
       })))) : App.empty('No hay cotizaciones nuevas. Las que registren tú o el equipo aparecerán aquí.'),
       '', null);
+  }
+
+  /* ---------- por reconfirmar (admin/gerente) ---------- */
+  // cotizaciones tomadas de la web que nadie ha vuelto a mirar en su página hace más de "precio desactualizado" días; las en uso primero
+  function porReconfirmarCard() {
+    const s = Store.get(), ctx = App.ctx();
+    const enUso = function (o) { return !!o.preferida || E.oportunidadActiva(ctx, o); };
+    const lista = s.ofertas.map(function (o) { return { o: o, d: App.porReconfirmar(o) }; }).filter(function (x) { return x.d; })
+      .sort(function (a, b) { return (enUso(b.o) - enUso(a.o)) || b.d - a.d; });
+    if (!lista.length) return null;
+    const ofs = lista.slice(0, 30).map(function (x) { return x.o; });
+    return App.card('🔁 Por reconfirmar (' + lista.length + ')', h('div', { class: 'stack' },
+      h('p', { class: 'help' }, 'Precios tomados de páginas web que nadie ha vuelto a mirar en más de ' + ctx.p.precioViejoDias + ' días. Abre la página y usa ➕ Cotizar (o anota el precio a mano): al revisarla se actualiza la misma cotización.'),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, h('th', null, 'Insumo'), h('th', null, 'Lugar'), h('th', { class: 'r' }, 'Precio'), h('th', null, 'Visto'), h('th', null, 'Estado'), h('th'))),
+        h('tbody', null, lista.slice(0, 30).map(function (x) {
+          const o = x.o, ins = App.insumo(o.insumoId);
+          return h('tr', filaVisor(o, ofs, {}), h('td', null, ins ? ins.nombre : '?'), h('td', null, (o.lugar || '—') + (o.marca ? ' · ' + o.marca : '')),
+            h('td', { class: 'r' }, App.clp(o.precio) + ' / ' + (o.formatoLabel || '')), h('td', null, h('small', { class: x.d > 2 * ctx.p.precioViejoDias ? 'bad-t' : 'warn-t' }, 'hace ' + x.d + ' días')),
+            h('td', null, enUso(o) ? App.badge('✓ En uso', 'good') : App.badge('Alternativa', 'info')),
+            h('td', null, h('a', { href: o.url, target: '_blank', rel: 'noopener', class: 'btn small' }, 'Abrir ↗')));
+        })))),
+      lista.length > 30 ? h('small', { class: 'mut' }, 'Se muestran las 30 primeras.') : null));
   }
 
   /* ---------- mis cotizaciones ---------- */
@@ -7115,16 +7294,13 @@ window.CLOUD = {
     else if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') { ev.preventDefault(); moverVisor(1); }
   });
 
-  function visor() {
-    const v = App.ui.verCot;
-    if (!v) return null;
+  // lo que muestra el visor (en Cotizaciones como panel lateral; en la ficha del insumo, a lo ancho sobre la tabla)
+  // opts.enInsumo: se omite el nombre del insumo (ya está en la ficha)
+  App.contenidoCotizacion = function (o, opts) {
+    opts = opts || {};
     const s = Store.get(), ctx = App.ctx(), staff = App.esStaff();
-    const o = s.ofertas.find(function (x) { return x.id === v.id; });
-    if (!o) { App.ui.verCot = null; return null; }   // la descartaron o retiraron
     const ins = App.insumo(o.insumoId) || { nombre: '?', unidad: 'g', rendimiento: 1 };
     const prov = App.proveedorDeOferta(o), ec = E.campanaDe(ctx, o);
-    const anim = App.ui.verCotAnim; App.ui.verCotAnim = false;   // la animación de entrada, solo al abrir
-    const ids = v.ids.filter(function (id) { return s.ofertas.some(function (x) { return x.id === id; }); }), pos = ids.indexOf(o.id);
     const sinDatos = o.precioPorConfirmar || o.formatoPorConfirmar;
 
     // estado: en uso / por revisar / alternativa
@@ -7150,7 +7326,7 @@ window.CLOUD = {
     const rd = o.rendimiento != null ? o.rendimiento : ins.rendimiento;
     const hasta = E.esTemporal(o) ? E.hastaOferta(ctx, o) : null;
     const filas = [
-      ['Insumo', ins.nombre + (ins.variedad ? ' · ' + ins.variedad : '')],
+      ['Insumo', opts.enInsumo ? null : ins.nombre + (ins.variedad ? ' · ' + ins.variedad : '')],
       ['Lugar', (prov ? prov.nombre : o.lugar || '—') + (prov && E.daFactura(prov) ? ' 🧾 da factura' : '')],
       ['Marca / detalle', o.marca && E.normNombre(o.marca) !== E.normNombre(o.lugar) ? o.marca : null],
       ['Formato', o.formatoPorConfirmar ? 'por confirmar' : (o.formatoLabel || '—') + (o.formatoQty > 0 && (o.formatoLabel || '').indexOf(App.cantidad(o.formatoQty, ins.unidad)) < 0 ? ' (' + App.cantidad(o.formatoQty, ins.unidad) + ')' : '')],
@@ -7164,10 +7340,64 @@ window.CLOUD = {
       ['Fuente', ({ estimado: 'estimado', comprado: 'comprado', cotizacion: 'cotización', ODEPA: 'ODEPA', web: 'página web' })[o.fuente] || o.fuente || null],
       ['Cotizó', (o.autor || '—') + (o.fecha ? ' · ' + o.fecha : '')],
       ['Revisó', o.revisadoPor || null],
+      ['Visto en la página', o.confirmadoEl ? App.fechaCorta(o.confirmadoEl) + (o.confirmadoPor ? ' · ' + o.confirmadoPor : '') : null],
       ['Código (SKU)', o.sku || null],
       ['Página', /^https?:\/\//i.test(o.url || '') ? h('a', { href: o.url, target: '_blank', rel: 'noopener' }, (o.host || 'abrir') + ' ↗') : null]
     ].filter(function (f) { return f[1] != null && f[1] !== ''; });
     const historial = (o.historial || []).slice(-5).reverse();
+    // hace tiempo que nadie mira la página: abrirla (y en el computador usar ➕ Cotizar) o anotar el precio de hoy a mano
+    const dias = staff ? App.porReconfirmar(o) : null;
+    const reconfirmar = dias ? h('div', { class: 'aviso info stack' },
+      h('div', null, h('b', null, '🔁 Por reconfirmar'), ': hace ' + dias + ' días que nadie revisa este precio en la página.'),
+      h('div', { class: 'row gap wrap' },
+        h('a', { href: o.url, target: '_blank', rel: 'noopener', class: 'btn small primary' }, 'Abrir la página ↗'),
+        App.btn('Anotar el precio de hoy', function () { const raw = C().desdeUrl(o.url); if (!raw) return; App.ui.verCot = null; App.ui.cap = { raw: raw }; App.go('capturar'); }, 'small')),
+      h('small', null, 'En el computador, usa ➕ Cotizar en esa página. Al revisarla se actualiza esta misma cotización (o se confirma que sigue igual).')) : null;
+
+    return h('div', { class: 'visor-contenido' },
+      h('div', { class: 'visor-foto' + (o.imagen ? ' con-img' : '') }, o.imagen
+        ? h('img', { src: o.imagen, alt: o.tituloWeb || ins.nombre, referrerpolicy: 'no-referrer', onerror: function (ev) {
+          // la foto se muestra desde la tienda: si ya no carga, puede que hayan retirado o cambiado el producto (o que no haya internet)
+          ev.target.parentNode.classList.remove('con-img');
+          ev.target.replaceWith(h('span', { class: 'warn-t' }, '⚠ La foto ya no carga desde la página de origen: puede que hayan retirado o cambiado el producto. Revisa la página.'));
+        } })
+        : h('span', { class: 'mut' }, o.fuente === 'web' ? 'La página no traía foto' : 'Sin foto (las cotizaciones tomadas de una página web traen la suya)')),
+      h('div', { class: 'visor-info' },
+        o.tituloWeb ? h('p', { class: 'visor-titulo' }, o.tituloWeb) : null,
+        h('div', { class: 'visor-precio' },
+          h('span', { class: 'visor-monto' }, o.precioPorConfirmar ? 'Precio por confirmar' : App.clp(o.precio)),
+          !o.precioPorConfirmar ? h('span', { class: 'mut' }, ' / ' + (o.formatoLabel || ins.unidad)) : null,
+          !sinDatos ? h('div', null, h('small', null, 'Equivale a ' + precioPorBase(o.precio, o.formatoQty, ins.unidad) + ' (precio de compra, antes de mermas)')) : null),
+        App.badgeReconfirma(o),
+        reconfirmar,
+        h('div', { class: 'row gap wrap' }, estado, App.badgeTemporal(o), App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null,
+          ins.propuesto ? App.badge('🆕 producto nuevo', 'warn') : null, provNuevo ? App.badge('🏪 proveedor nuevo', 'warn') : null,
+          o.precioPorConfirmar ? App.badge('💲 precio por confirmar', 'warn') : null, o.formatoPorConfirmar ? App.badge('📦 formato por confirmar', 'warn') : null),
+        comparar,
+        o.nota ? h('blockquote', { class: 'visor-nota' }, o.nota) : null,
+        h('dl', { class: 'visor-datos' }, filas.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })),
+        historial.length ? h('div', null, h('h4', null, 'Precios anteriores'),
+          h('dl', { class: 'visor-datos' }, historial.map(function (x) { return [h('dt', null, x.fecha || '—'), h('dd', null, App.clp(x.precio))]; }))) : null));
+  };
+
+  function visor() {
+    const v = App.ui.verCot;
+    if (!v) return null;
+    const s = Store.get(), staff = App.esStaff();
+    const o = s.ofertas.find(function (x) { return x.id === v.id; });
+    if (!o) { App.ui.verCot = null; return null; }   // la descartaron o retiraron
+    const ins = App.insumo(o.insumoId) || { nombre: '?', unidad: 'g', rendimiento: 1 };
+    const prov = App.proveedorDeOferta(o);
+    const anim = App.ui.verCotAnim; App.ui.verCotAnim = false;   // la animación de entrada, solo al abrir
+    const ids = v.ids.filter(function (id) { return s.ofertas.some(function (x) { return x.id === id; }); }), pos = ids.indexOf(o.id);
+    // al aprobar o descartar desde el visor: pasa a la siguiente por revisar de la lista (o se cierra si no quedan)
+    const siguiente = function () {
+      const pend = function (id) { const x = Store.get().ofertas.find(function (y) { return y.id === id; }); return id !== o.id && x && x.pendiente; };
+      const otra = v.ids.slice(v.ids.indexOf(o.id) + 1).find(pend) || v.ids.slice(0, v.ids.indexOf(o.id)).find(pend);
+      if (otra) v.id = otra; else App.ui.verCot = null;
+      App.render();
+    };
+    const revisar = staff && o.pendiente;
 
     return h('div', { class: 'visor-fondo' + (anim ? ' entra' : ''), onclick: function (ev) { if (ev.target === ev.currentTarget) cerrarVisor(); } },
       h('aside', { class: 'visor', role: 'dialog', 'aria-label': 'Cotización de ' + ins.nombre },
@@ -7177,27 +7407,12 @@ window.CLOUD = {
             ids.length > 1 ? App.btn('‹', function () { moverVisor(-1); }, 'small ghost', 'Anterior (←)') : null,
             ids.length > 1 ? App.btn('›', function () { moverVisor(1); }, 'small ghost', 'Siguiente (→)') : null,
             h('button', { class: 'x', onclick: cerrarVisor, 'aria-label': 'Cerrar', title: 'Cerrar (Esc)' }, '×'))),
-        h('div', { class: 'visor-b', 'data-sk': 'visor-' + o.id },
-          h('div', { class: 'visor-foto' + (o.imagen ? ' con-img' : '') }, o.imagen
-            ? h('img', { src: o.imagen, alt: o.tituloWeb || ins.nombre, referrerpolicy: 'no-referrer', onerror: function (ev) { ev.target.parentNode.classList.remove('con-img'); ev.target.replaceWith(h('span', { class: 'mut' }, 'No se pudo cargar la foto')); } })
-            : h('span', { class: 'mut' }, o.fuente === 'web' ? 'La página no traía foto' : 'Sin foto (las cotizaciones tomadas de una página web traen la suya)')),
-          o.tituloWeb ? h('p', { class: 'visor-titulo' }, o.tituloWeb) : null,
-          h('div', { class: 'visor-precio' },
-            h('span', { class: 'visor-monto' }, o.precioPorConfirmar ? 'Precio por confirmar' : App.clp(o.precio)),
-            !o.precioPorConfirmar ? h('span', { class: 'mut' }, ' / ' + (o.formatoLabel || ins.unidad)) : null,
-            !sinDatos ? h('div', null, h('small', null, 'Equivale a ' + precioPorBase(o.precio, o.formatoQty, ins.unidad) + ' (precio de compra, antes de mermas)')) : null),
-          h('div', { class: 'row gap wrap' }, estado, App.badgeTemporal(o), App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null,
-            ins.propuesto ? App.badge('🆕 producto nuevo', 'warn') : null, provNuevo ? App.badge('🏪 proveedor nuevo', 'warn') : null,
-            o.precioPorConfirmar ? App.badge('💲 precio por confirmar', 'warn') : null, o.formatoPorConfirmar ? App.badge('📦 formato por confirmar', 'warn') : null),
-          comparar,
-          o.nota ? h('blockquote', { class: 'visor-nota' }, o.nota) : null,
-          h('dl', { class: 'visor-datos' }, filas.map(function (f) { return [h('dt', null, f[0]), h('dd', null, f[1])]; })),
-          historial.length ? h('div', null, h('h4', null, 'Precios anteriores'),
-            h('dl', { class: 'visor-datos' }, historial.map(function (x) { return [h('dt', null, x.fecha || '—'), h('dd', null, App.clp(x.precio))]; }))) : null),
+        h('div', { class: 'visor-b', 'data-sk': 'visor-' + o.id }, App.contenidoCotizacion(o)),
         h('div', { class: 'visor-f' },
-          staff ? App.btn('✏️ Editar', function () { App.ui.verCot = null; App.ui.resaltarOferta = o.id; App.go('insumos', o.insumoId); }, 'primary',
+          revisar ? h('div', { class: 'row gap wrap visor-revisar' }, App.botonesRevision(o, ins, siguiente)) : null,
+          staff ? App.btn('✏️ Editar', function () { App.ui.verCot = null; App.ui.resaltarOferta = o.id; App.go('insumos', o.insumoId); }, revisar ? 'small' : 'primary',
             'Abre la ficha del insumo, donde se editan sus cotizaciones') : null,
-          App.btn('Cerrar', cerrarVisor))));
+          revisar ? null : App.btn('Cerrar', cerrarVisor))));
   }
 
   App.views.cotizaciones = function () {
@@ -7205,7 +7420,7 @@ window.CLOUD = {
       h('div', { class: 'card row gap wrap' }, h('b', null, '¿Lo viste en una página web?'),
         h('a', { href: '#/capturar', class: 'btn primary', onclick: function () { App.ui.cap = {}; } }, '➕ Cotizar desde una página o enlace'),
         h('small', { class: 'mut' }, 'Precio, formato y tienda se llenan solos.')),
-      formulario(), App.esStaff() ? bandeja() : null, mias(), visor());
+      formulario(), App.esStaff() ? bandeja() : null, App.esStaff() ? porReconfirmarCard() : null, mias(), visor());
   };
 })();
 
@@ -7356,13 +7571,13 @@ window.CLOUD = {
         // la promo lleva "mínimo" formatos: sus unidades son mínimo × las del formato (en "un", el formato ya las cuenta)
         pack: unidad === 'un' ? (pack ? { n: pc.minimo * F.fq, cada: pack.cada } : undefined)
           : F.fq > 0 ? { n: pc.minimo * nPack, cada: (pack && pack.cada) || cadaTxt(F, unidad, r) || App.cantidad(F.fq, unidad) } : undefined,
-        nota: 'Promo llevando ' + pc.minimo + ': ' + App.clp(pc.total || pc.minimo * pc.precio) + ' · ' + notas,
+        promoMinimo: pc.minimo, nota: 'Promo llevando ' + pc.minimo + ': ' + App.clp(pc.total || pc.minimo * pc.precio) + ' · ' + notas,
         temporal: camp.campanaId ? undefined : { hasta: F.hasta || masDias(7) }, hastaPorConfirmar: camp.campanaId || F.hasta ? undefined : true,
         campanaId: camp.campanaId, campanaPropuesta: camp.campanaPropuesta, soloOnline: exige.soloOnline, requiereMembresia: exige.requiereMembresia })); });
       lista.forEach(function (o) { o.id = Store.uid('OF-'); ids.push(o.id); Object.keys(o).forEach(function (k) { if (o[k] === undefined) delete o[k]; }); st.ofertas.push(o); });
     });
     olvidar();
-    App.ui.cap = { enviado: { n: ids.length, nombre: nuevo ? F.nombreNuevo.trim() : (App.insumo(insumoId) || {}).nombre, nuevo: nuevo, staff: staff && !sinPrecio && !sinFormato,
+    App.ui.cap = { enviado: { ids: ids, n: ids.length, nombre: nuevo ? F.nombreNuevo.trim() : (App.insumo(insumoId) || {}).nombre, nuevo: nuevo, staff: staff && !sinPrecio && !sinFormato,
       faltan: [sinPrecio ? 'el precio' : '', sinFormato ? 'el formato' : ''].filter(Boolean) } };
     App.render();
   }
@@ -7408,7 +7623,9 @@ window.CLOUD = {
       h('p', { class: 'help' }, e.staff ? 'Quedó en Cotizaciones → Por revisar: ahí decides si se usa en los costos.'
         : 'El gerente la revisa y decide si se usa.' + (e.nuevo ? ' Como es un producto nuevo, también completará sus datos.' : '')),
       h('div', { class: 'row gap wrap' },
-        App.btn('Cerrar esta pestaña', function () { window.close(); setTimeout(function () { App.toast('Ciérrala con la ✕ de la pestaña'); }, 300); }, 'primary'),
+        // admin/gerente: revisarla al tiro en el visor (si la página ya estaba cotizada, ahí se actualiza la existente)
+        App.esStaff() && e.ids && e.ids.length ? App.btn('Revisarla ahora', function () { App.ui.cap = {}; App.ui.verCot = { id: e.ids[e.ids.length - 1], ids: e.ids.slice().reverse() }; App.ui.verCotAnim = true; App.go('cotizaciones'); }, 'primary') : null,
+        App.btn('Cerrar esta pestaña', function () { window.close(); setTimeout(function () { App.toast('Ciérrala con la ✕ de la pestaña'); }, 300); }, App.esStaff() ? '' : 'primary'),
         App.btn('Cotizar otro por enlace', function () { App.ui.cap = {}; App.render(); }),
         App.btn('Ver mis cotizaciones', function () { App.ui.cap = {}; App.go('cotizaciones'); }))));
   }
@@ -7417,6 +7634,19 @@ window.CLOUD = {
   function porPrecio(lista) {
     const ctx = App.ctx(), u = function (i) { const c = window.Engine.costoInsumo(ctx, i.id); return c.missing ? Infinity : c.unit; };
     return lista.slice().sort(function (a, b) { return u(a) - u(b); });
+  }
+
+  // la página ya tiene cotizaciones aprobadas (quien no es staff solo ve las suyas): se avisa con lo guardado
+  function yaCotizada(r) {
+    const ctx = App.ctx();   // las ofertas que ya terminaron no cuentan
+    const ya = C.yaCotizadas(Store.get(), { url: r.url, sku: r.sku, host: r.host }).filter(function (o) { return o.disponible !== false && !(E.esTemporal(o) && E.ofertaVencida(ctx, o)); });
+    if (!ya.length) return null;
+    return h('div', { class: 'aviso info stack' },
+      h('div', null, h('b', null, '🔁 Esta página ya está cotizada'), ' · lo guardado:'),
+      h('ul', { class: 'help' }, ya.slice(0, 4).map(function (o) {
+        return h('li', null, App.clp(o.precio) + ' / ' + (o.formatoLabel || '') + (C.tipoPrecio(o) === 'normal' ? '' : C.tipoPrecio(o) === 'oferta' ? ' (oferta)' : ' (promo)') + ' · visto el ' + App.fechaCorta(C.ultimaVez(o)));
+      })),
+      h('small', null, 'Envíala igual con el precio de hoy: al revisarla se actualiza la que ya existe (o se confirma que sigue igual), sin duplicarla.'));
   }
 
   function formulario(U) {
@@ -7445,6 +7675,7 @@ window.CLOUD = {
             h('div', { class: 'nm' }, r.nombre || 'Producto sin nombre'),
             h('small', null, [r.marca, r.sitio].filter(Boolean).join(' · ')),
             r.url ? h('div', null, h('a', { href: r.url, target: '_blank', rel: 'noopener' }, h('small', null, 'Ver la página ↗'))) : null)),
+        yaCotizada(r),
 
         h('label', { class: 'block' }, 'Insumo', selIns,
           U.r.recordado && ins ? h('small', { class: 'good-t' }, '✓ Ya se había cotizado este producto como "' + ins.nombre + '"') : null,
@@ -9353,7 +9584,7 @@ window.CLOUD = {
         paso('🍳', 'No alcanzó', 'La receta rindió menos de lo planificado. Anota para cuántas porciones preparaste y cuántas salieron.', avisos),
         paso('⭐', 'Opinión', 'Un insumo sirve (o no) para algo. Anota marca y dónde se compró.', avisos),
         h('h4', null, 'Anotar un precio que viste'),
-        paso('➕', 'Cotizar desde una página web', 'En el computador: arrastra el botón ➕ Cotizar a tu barra de favoritos y úsalo en la página del producto. En el celular: copia el enlace y pégalo. Todo viene escrito: solo revisa y envía. Si falta algo, envíalo igual: el gerente lo completa.', function () { App.go('capturar'); }),
+        paso('➕', 'Cotizar desde una página web', 'En el computador: arrastra el botón ➕ Cotizar a tu barra de favoritos y úsalo en la página del producto. En el celular: copia el enlace y pégalo. Todo viene escrito: solo revisa y envía. Si falta algo, envíalo igual: el gerente lo completa. Si la página ya estaba cotizada (🔁), envíala igual con el precio de hoy.', function () { App.go('capturar'); }),
         paso('🏷️', 'Cotizar a mano', 'Insumo, lugar y precio. Si es oferta por pocos días, marca "Es oferta temporal 🔥" y la fecha. En carne molida elige el % de grasa y si es refrigerada o congelada. Si es de una campaña del lugar (ej. Barato a un click), elígela en "¿Es de una campaña?"; si no existe, marca "nueva". Si avisa un descuento por monto de compra, anota el precio normal: el descuento lo pone la app.', function () { App.go('cotizaciones'); }),
         h('h4', null, 'Ver recetas'),
         paso('📖', 'Cocina', 'Ingredientes y pasos. Elige las porciones y las cantidades se ajustan.', function () { App.go('cocina'); }),
