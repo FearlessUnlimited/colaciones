@@ -278,9 +278,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T12:21:09Z">
+<meta name="build" content="2026-10-05T12:27:35Z">
 <script>
-window.BUILD = "2026-10-05T12:21:09Z";
+window.BUILD = "2026-10-05T12:27:35Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -5089,9 +5089,9 @@ window.CLOUD = {
       const esMejor = mejor && mejor.o.id === o.id && ofs.length > 1;
       const esUsada = activo.oferta && activo.oferta.id === o.id;
       return h('tr', { class: (o.disponible === false ? 'off ' : '') + (esUsada ? 'usada ' : '') + (E.enOferta(ctx, o) ? 'en-oferta' : '') },
-        h('td', null, selProveedor(o)),
+        h('td', null, selProveedor(o), o.autor ? h('div', null, h('small', { class: 'mut' }, 'cotizó ' + o.autor)) : null),
         h('td', null, App.textInput({ fk: 'o-marca-' + o.id, value: o.marca, ph: 'Marca / detalle', onChange: function (v) { upO(o, function (x) { x.marca = v; }, 'mc' + o.id); } }),
-          o.pendiente ? h('div', null, App.badge('por revisar', 'warn')) : null, o.autor ? h('div', null, h('small', null, 'cotizó ' + o.autor)) : null,
+          o.pendiente ? h('div', null, App.badge('por revisar', 'warn')) : null,
           App.badgesCanal(o), App.badgeOpinion ? App.badgeOpinion(o) : null,
           h('div', { class: 'row gap wrap mini' },
             (function () { const ec = E.campanaDe(ctx, o), fo = ec && ec.c.canal && ec.c.canal !== 'todos' ? ec.c.canal : null;   // la campaña lo define: casilla marcada y bloqueada
