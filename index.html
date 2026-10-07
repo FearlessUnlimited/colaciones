@@ -317,9 +317,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-05T23:55:39Z">
+<meta name="build" content="2026-10-07T05:04:56Z">
 <script>
-window.BUILD = "2026-10-05T23:55:39Z";
+window.BUILD = "2026-10-07T05:04:56Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -640,9 +640,12 @@ window.CLOUD = {
   }
   // una oferta que exige membresía (ella o su campaña) solo vale si la membresía de su proveedor está activa
   // la oferta exige membresía por sí misma o porque su campaña la exige
-  function exigeMembresia(ctx, o) { const e = campanaDe(ctx, o); return !!(o && (o.requiereMembresia || (e && e.c.requiereMembresia))); }
+  // proveedores donde solo compran los socios (mayoristas como Central Mayorista): todo su precio exige la membresía activa
+  function membresiaObligatoria(p) { return tieneMembresia(p) && !!p.membresia.obligatoria; }
+  function exigeMembresia(ctx, o) { const e = campanaDe(ctx, o); return !!(o && (o.requiereMembresia || (e && e.c.requiereMembresia) || membresiaObligatoria(proveedorDe(ctx, o)))); }
   function ofertaHabilitada(ctx, o) {
-    if (o.requiereMembresia && !membresiaActiva(ctx, proveedorDe(ctx, o))) return false;
+    const pv = proveedorDe(ctx, o);
+    if ((o.requiereMembresia || membresiaObligatoria(pv)) && !membresiaActiva(ctx, pv)) return false;
     const e = campanaDe(ctx, o);
     return !(e && e.c.requiereMembresia && !membresiaActiva(ctx, e.p));
   }
@@ -1278,14 +1281,60 @@ window.CLOUD = {
       grasaPct: grasaDe(ins), conservacion: cons || null, sinConservacion: c.sinConservacion || null };
   }
 
+  /* ---------- platos armables (pasta × salsa) ----------
+   * Un plato armable tiene espacios para elegir: r.opciones = [{ clave: 'pasta', nombre: 'Pasta', etiqueta: 'pasta',
+   * permitidas: [ids de recetas], defecto: id, cantidad: porciones de la sub-receta por plato (1) }].
+   * La elección de un plato es { clave: recetaId }; lo que falta se completa con el defecto (o la primera permitida).
+   * Cada receta elegible puede llevar recargoOpcion (CLP fijo sobre el PVP del plato) y aPedido (no va al menú normal). */
+  function esArmable(r) { return !!(r && r.opciones && r.opciones.length); }
+
+  function resolverEleccion(ctx, r, eleccion) {
+    if (!esArmable(r)) return [];
+    eleccion = eleccion || {};
+    return r.opciones.map(function (op) {
+      const perm = (op.permitidas || []).filter(function (x) { return ctx.recetas.has(x); });
+      const pedida = eleccion[op.clave];
+      const id = pedida && ctx.recetas.has(pedida) ? pedida : (op.defecto && ctx.recetas.has(op.defecto) ? op.defecto : perm[0] || null);
+      const rr = id ? ctx.recetas.get(id) : null;
+      return { clave: op.clave, nombre: op.nombre || op.clave, id: id, receta: rr, cantidad: Number(op.cantidad) > 0 ? Number(op.cantidad) : 1,
+        recargo: rr ? Number(rr.recargoOpcion) || 0 : 0, fueraDeLista: !!(id && perm.indexOf(id) < 0), aPedido: !!(rr && rr.aPedido) };
+    });
+  }
+
+  // "Espirales con salsa boloñesa": formatoNombre con {clave} o, si no tiene, las elegidas unidas con "con"
+  function nombreCombinacion(ctx, r, eleccion) {
+    const ops = resolverEleccion(ctx, r, eleccion);
+    if (!ops.length) return r ? r.nombre : '';
+    const nom = function (o) { return o.receta ? o.receta.nombre : '(' + o.nombre + ')'; };
+    let t = r.formatoNombre ? ops.reduce(function (s, o) { return s.split('{' + o.clave + '}').join(nom(o)); }, r.formatoNombre) : ops.map(nom).join(' con ');
+    if (!ctx.propios) ctx.propios = propiosDe(ctx.state);
+    return oracion(t, ctx.propios);
+  }
+
   /* ---------- plato (receta vendible) ---------- */
-  function costoPlato(ctx, id, guarnicionId) {
+  function costoPlato(ctx, id, guarnicionId, eleccion) {
     const r = ctx.recetas.get(id);
     const p = ctx.p;
-    const rc = costoReceta(ctx, id);
+    const rc0 = costoReceta(ctx, id);
     const gid = guarnicionId !== undefined ? guarnicionId : (r ? r.guarnicionDefault : null);
     const g = gid ? costoReceta(ctx, gid) : null;
     const guarn = g ? g.porPorcion : 0;
+    // espacios elegibles: su costo entra a los ingredientes del plato y su recargo al PVP
+    const ops = resolverEleccion(ctx, r, eleccion);
+    const rc = ops.length ? Object.assign({}, rc0, { faltantes: rc0.faltantes.slice() }) : rc0;
+    const opciones = ops.map(function (o) {
+      const sub = o.id ? costoReceta(ctx, o.id) : null;
+      const costo = sub ? sub.porPorcion * o.cantidad : 0;
+      if (sub) {
+        rc.porPorcion += costo; rc.minPorPorcion += sub.minPorPorcion * o.cantidad; rc.maxPorPorcion += sub.maxPorPorcion * o.cantidad;
+        rc.extraGrasaPorPorcion = (rc.extraGrasaPorPorcion || 0) + (sub.extraGrasaPorPorcion || 0) * o.cantidad;
+        sub.faltantes.forEach(function (f) { rc.faltantes.push(f); });
+        if (sub.ciclo) rc.ciclo = true;
+      } else rc.faltantes.push('(sin ' + o.nombre.toLowerCase() + ' elegida)');
+      return { clave: o.clave, nombre: o.nombre, id: o.id, receta: o.receta ? o.receta.nombre : null, costo: costo, recargo: o.recargo,
+        fueraDeLista: o.fueraDeLista, aPedido: o.aPedido };
+    });
+    const recargo = opciones.reduce(function (s, o) { return s + o.recargo; }, 0);
 
     let envase = 0, envaseFalta = false;
     if (r && r.envaseId) {
@@ -1303,7 +1352,7 @@ window.CLOUD = {
     const insumosTot = base + imprev;
     const sinGas = r && /^(entrada|ensalada|postre)$/.test(r.tipo) && !p.gasOpcionales;
     const overhead = envasado ? 0 : (sinGas ? 0 : p.gasPorPorcion || 0) + (p.manoObraPorPorcion || 0);
-    const pvp = r ? precioPlato(ctx, r) : 0;
+    const pvp = r ? precioPlato(ctx, r) + recargo : 0;
     const pvpNeto = p.ivaOn ? pvp / (1 + p.ivaPct / 100) : pvp;
     const comision = pvp * p.comisionPct / 100;
     const costoDirecto = insumosTot + envase;
@@ -1338,8 +1387,41 @@ window.CLOUD = {
       pvpDeLinea: !!(r && r.tipo === 'plato' && (r.pvp == null || r.pvp === '')), pvpLinea: r && r.tipo === 'plato' ? precioLinea(ctx, r.linea) : null,
       rango: { min: (rc.minPorPorcion + guarn) * (1 + p.imprevistosPct / 100) + envase + overhead + comision,
                max: (rc.maxPorPorcion + guarn) * (1 + p.imprevistosPct / 100) + envase + overhead + comision },
-      faltantes: rc.faltantes.concat(g ? g.faltantes : []), envaseFalta: envaseFalta, ciclo: rc.ciclo
+      faltantes: rc.faltantes.concat(g ? g.faltantes : []), envaseFalta: envaseFalta, ciclo: rc.ciclo,
+      opciones: opciones, recargo: recargo, nombreCombinacion: ops.length ? nombreCombinacion(ctx, r, eleccion) : (r ? r.nombre : '')
     };
+  }
+
+  // todas las combinaciones de un plato armable con su costo y margen; las recetas "a pedido" solo si opts.aPedido.
+  // alerta: food cost sobre el umbral o margen negativo; recargoSugerido: lo que faltaría al PVP para llegar al food cost objetivo.
+  function combinaciones(ctx, id, opts) {
+    opts = opts || {};
+    const r = ctx.recetas.get(id);
+    if (!esArmable(r)) return [];
+    const listas = r.opciones.map(function (op) {
+      const ids = (op.permitidas || []).filter(function (x) { const rr = ctx.recetas.get(x); return rr && rr.activo !== false && (opts.aPedido || !rr.aPedido); });
+      if (opts.aPedido && op.etiqueta) ctx.state.recetas.forEach(function (rr) { if (rr.aPedido && rr.etiqueta === op.etiqueta && rr.activo !== false && ids.indexOf(rr.id) < 0) ids.push(rr.id); });
+      return { clave: op.clave, ids: ids };
+    });
+    if (listas.some(function (l) { return !l.ids.length; })) return [];
+    let elecciones = [{}];
+    listas.forEach(function (l) {
+      const sig = [];
+      elecciones.forEach(function (e) { l.ids.forEach(function (x) { const n = Object.assign({}, e); n[l.clave] = x; sig.push(n); }); });
+      elecciones = sig;
+    });
+    const p = ctx.p, rnd = p.redondeo > 0 ? p.redondeo : 1;
+    return elecciones.map(function (e) {
+      const c = costoPlato(ctx, id, undefined, e);
+      const falta = c.pvpSugerido - c.pvp;
+      return Object.assign(c, { eleccion: e, alerta: (c.foodCostPct != null && c.foodCostPct > p.foodCostAlerta) || c.margen < 0,
+        recargoSugerido: c.pvp > 0 && falta > 0 ? Math.ceil(falta / rnd) * rnd : 0 });
+    }).sort(function (a, b) { return a.costoTotal - b.costoTotal; });
+  }
+
+  // clave estable de una elección (para sumar porciones de la misma combinación)
+  function claveEleccion(e) {
+    return e ? Object.keys(e).sort().filter(function (k) { return e[k]; }).map(function (k) { return k + '=' + e[k]; }).join('&') : '';
   }
 
   function esVendible(r) { return TIPOS_VENDIBLES.indexOf(r.tipo) >= 0; }
@@ -1386,13 +1468,48 @@ window.CLOUD = {
     return acc;
   }
 
-  // insumos por 1 porción vendida (incluye guarnición por defecto y envase)
-  function explotarPlato(ctx, id, porciones) {
+  // insumos por 1 porción vendida (incluye guarnición por defecto, lo elegido en un plato armable y envase)
+  function explotarPlato(ctx, id, porciones, eleccion) {
     porciones = porciones == null ? 1 : porciones;
     const r = ctx.recetas.get(id);
     const acc = explotar(ctx, id, porciones, new Map(), []);
     if (r && r.guarnicionDefault) explotar(ctx, r.guarnicionDefault, porciones, acc, []);
+    resolverEleccion(ctx, r, eleccion).forEach(function (o) { if (o.id) explotar(ctx, o.id, porciones * o.cantidad, acc, [id]); });
     if (r && r.envaseId) acc.set(r.envaseId, (acc.get(r.envaseId) || 0) + (r.envaseCant || 1) * porciones);
+    return acc;
+  }
+
+  // Lotes de las recetas elegidas en platos armables (una salsa se hace por ollas de 6): por día, redondeando hacia arriba.
+  // items: [{recetaId, porciones, eleccion, dia}]; los que no traen día se juntan en un solo grupo.
+  // → [{ dia, recetaId, nombre, porciones (las que piden los platos), lote, lotes, sobra (porciones de más por redondear) }]
+  function lotesOpciones(ctx, items) {
+    const acc = new Map();
+    (items || []).forEach(function (it) {
+      const r = ctx.recetas.get(it.recetaId), q = Number(it.porciones) || 0;
+      if (q <= 0) return;
+      resolverEleccion(ctx, r, it.eleccion).forEach(function (o) {
+        if (!o.id) return;
+        const k = (it.dia || '') + '|' + o.id;
+        const x = acc.get(k) || { dia: it.dia || null, recetaId: o.id, nombre: o.receta.nombre, porciones: 0 };
+        x.porciones += q * o.cantidad; acc.set(k, x);
+      });
+    });
+    return Array.from(acc.values()).map(function (x) {
+      const rr = ctx.recetas.get(x.recetaId), lote = rr.porciones > 0 ? rr.porciones : 1;
+      const lotes = Math.ceil(x.porciones / lote - 1e-9);
+      return Object.assign(x, { lote: lote, lotes: lotes, sobra: Math.max(0, lotes * lote - x.porciones) });
+    });
+  }
+
+  // insumos utilizables de una lista de platos (con lo que sobra al redondear los lotes de las recetas elegidas)
+  function explotarItems(ctx, items) {
+    const acc = new Map();
+    const sumar = function (ex) { ex.forEach(function (q, ins) { acc.set(ins, (acc.get(ins) || 0) + q); }); unirConservacion(acc, ex); };
+    items.forEach(function (it) {
+      if (!ctx.recetas.get(it.recetaId)) return;
+      sumar(explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0, it.eleccion));
+    });
+    lotesOpciones(ctx, items).forEach(function (l) { if (l.sobra > 0) sumar(explotar(ctx, l.recetaId, l.sobra, new Map(), [])); });
     return acc;
   }
 
@@ -1516,27 +1633,31 @@ window.CLOUD = {
   // porciones semanales por plato: plan semanal si existe, si no reparto parejo de porcionesSemana
   function volumenSemanal(ctx) {
     const vol = new Map();
-    let usoPlan = false;
+    let items = [];
     if (ctx.state.plan) {
       DIAS.forEach(function (dia) {
         itemsDelDia(ctx, dia).forEach(function (it) {
-          vol.set(it.recetaId, (vol.get(it.recetaId) || 0) + it.porciones); usoPlan = true;
+          vol.set(it.recetaId, (vol.get(it.recetaId) || 0) + it.porciones); items.push(it);
         });
       });
     }
+    const usoPlan = items.length > 0;
     if (!usoPlan) {
       const activos = ctx.state.recetas.filter(function (r) { return r.tipo === 'plato' && r.activo !== false; });
       activos.forEach(function (r) { vol.set(r.id, ctx.p.porcionesSemana / (activos.length || 1)); });
+      items = Array.from(vol).map(function (x) { return { recetaId: x[0], porciones: x[1] }; });
     }
-    return { vol: vol, usoPlan: usoPlan };
+    // items: con la elección de los platos armables y el día (para los lotes)
+    return { vol: vol, items: items, usoPlan: usoPlan };
   }
 
   function usoSemanalInsumos(ctx) {
     if (ctx.memoUso) return ctx.memoUso;
     const v = volumenSemanal(ctx);
-    const total = new Map();
-    v.vol.forEach(function (porc, rid) {
-      const ex = explotarPlato(ctx, rid, porc);
+    // sin plan es un supuesto parejo: no se redondean lotes
+    const total = v.usoPlan ? explotarItems(ctx, v.items) : new Map();
+    if (!v.usoPlan) v.items.forEach(function (it) {
+      const ex = explotarPlato(ctx, it.recetaId, it.porciones);
       ex.forEach(function (q, ins) { total.set(ins, (total.get(ins) || 0) + q); });
       unirConservacion(total, ex);
     });
@@ -1624,13 +1745,7 @@ window.CLOUD = {
     return out;
   }
   function filasCompra(ctx, items) {
-    const acc = new Map();
-    items.forEach(function (it) {
-      if (!ctx.recetas.get(it.recetaId)) return;
-      const ex = explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0);
-      ex.forEach(function (q, ins) { acc.set(ins, (acc.get(ins) || 0) + q); });
-      unirConservacion(acc, ex);
-    });
+    const acc = explotarItems(ctx, items);
     const filas = [], stock = sobrestockVigente(ctx);
     acc.forEach(function (necesario, insId) {
       const ins = ctx.insumos.get(insId); if (!ins) return;
@@ -1722,7 +1837,7 @@ window.CLOUD = {
       const c = compraConOferta(ctx, o, usable), div = c.sinFactura ? 1 : divisorIva(ctx, p);
       const base = { oferta: o, proveedor: p, packs: c.packs, bruto: c.bruto, porRevisar: !!o.pendiente };
       if (p.retiro !== false && (!c.online || p.retiroOnline !== false)) {
-        out.push(Object.assign({ modo: c.online ? 'retirar pedido online' : 'ir a comprar', promo: null, plazoDias: 0, horaCorte: '', logBruto: 0, logCosto: Number(p.costoVisita) || 0, faltaMinimo: 0 }, base));
+        out.push(Object.assign({ modo: c.online ? 'retirar pedido online' : 'ir a comprar', promo: null, plazoDias: 0, horaCorte: '', logBruto: 0, logCosto: Number(p.costoVisita) || 0, faltaMinimo: faltaRetiro(p, c.online, c.bruto) }, base));
       }
       if (c.soloTienda) return;   // precio de campaña solo en tienda: no se despacha
       // promos de despacho que no se acumulan con la campaña de este precio no valen aquí
@@ -2051,14 +2166,9 @@ window.CLOUD = {
   /* ---------- canasta óptima ---------- */
   // cantidades utilizables por insumo: del plan dado o, si no hay, del volumen semanal supuesto
   function necesidades(ctx, items) {
-    const acc = new Map();
+    let acc = new Map();
     if (items && items.length) {
-      items.forEach(function (it) {
-        if (!ctx.recetas.get(it.recetaId)) return;
-        const ex = explotarPlato(ctx, it.recetaId, Number(it.porciones) || 0);
-        ex.forEach(function (q, ins) { acc.set(ins, (acc.get(ins) || 0) + q); });
-        unirConservacion(acc, ex);
-      });
+      acc = explotarItems(ctx, items);
     } else {
       const u = usoSemanalInsumos(ctx);
       u.uso.forEach(function (q, id) { acc.set(id, q); });
@@ -2101,7 +2211,7 @@ window.CLOUD = {
       const b = gratis ? 0 : c.costo;
       ops.push({ modo: gratis || b === 0 ? 'despacho gratis' : 'despacho', bruto: b, costo: b / div, promo: c.nombre, promoId: c.id || null, plazoDias: dias, horaCorte: c.horaCorte || '' });
     });
-    if (prov.retiro !== false && (!online || prov.retiroOnline !== false)) ops.push({ modo: online ? 'retiro pedido online' : 'retiro', bruto: 0, costo: Number(prov.costoVisita) || 0, promo: null, plazoDias: 0 });
+    if (prov.retiro !== false && (!online || prov.retiroOnline !== false) && !faltaRetiro(prov, online, bruto)) ops.push({ modo: online ? 'retiro pedido online' : 'retiro', bruto: 0, costo: Number(prov.costoVisita) || 0, promo: null, plazoDias: 0 });
     if (!ops.length) return null;
     // a igual costo, gana la que llega antes
     const r = ops.reduce(function (a, b) { return b.costo < a.costo - 0.01 || (Math.abs(b.costo - a.costo) <= 0.01 && (b.plazoDias == null ? 99 : b.plazoDias) < (a.plazoDias == null ? 99 : a.plazoDias)) ? b : a; });
@@ -2116,9 +2226,14 @@ window.CLOUD = {
     r.faltaMinimo = fm.length && !conds.some(function (c) { return !(c.minimoPedido > base(c)); }) ? Math.min.apply(null, fm) : 0;
     return r;
   }
-  function faltaMinimoDespacho(ctx, prov, bruto, brutoSel) {
+  // lo que falta para el mínimo de un pedido online que se retira en tienda (Central Mayorista: $150.000); en tienda no hay mínimo
+  function faltaRetiro(prov, online, bruto) {
+    const rm = Number(prov && prov.retiroMinimoOnline) || 0;
+    return online && rm > bruto ? rm - bruto : 0;
+  }
+  function faltaMinimoDespacho(ctx, prov, bruto, brutoSel, online) {
     const fm = condicionesDespacho(ctx, prov).map(function (c) { const m = c.alcance === 'seleccionados' ? (Number(brutoSel) || 0) : bruto; return c.minimoPedido > m ? c.minimoPedido - m : 0; })
-      .filter(function (x) { return x > 0; });
+      .concat(prov.retiro !== false && prov.retiroOnline !== false ? [faltaRetiro(prov, online, bruto)] : []).filter(function (x) { return x > 0; });
     return fm.length ? Math.min.apply(null, fm) : 0;
   }
   // monto de los ítems cuyas ofertas entran en las promociones de "productos seleccionados"
@@ -2153,7 +2268,7 @@ window.CLOUD = {
       }
       if (!g.logistica) {
         viable = false;
-        g.logistica = { modo: 'bajo el mínimo', bruto: 0, costo: 0, faltaGratis: 0, faltaMinimo: faltaMinimoDespacho(ctx, g.proveedor, g.bruto, g.brutoSel), online: g.online };
+        g.logistica = { modo: 'bajo el mínimo', bruto: 0, costo: 0, faltaGratis: 0, faltaMinimo: faltaMinimoDespacho(ctx, g.proveedor, g.bruto, g.brutoSel, g.online), online: g.online };
       }
       totalItems += g.costo;
       totalLog += g.logistica.costo;
@@ -2654,15 +2769,18 @@ window.CLOUD = {
   function itemsDelDia(ctx, dia) {
     const plan = ctx.state.plan || {};
     const acc = new Map();
-    const sumar = function (id, q, origen) {
-      const x = acc.get(id) || { recetaId: id, porciones: 0, manual: 0, combo: 0 };
-      x[origen] += q; acc.set(id, x);
+    // un plato armable suma aparte cada combinación elegida (espirales boloñesa ≠ tallarines pesto)
+    const sumar = function (id, q, origen, eleccion) {
+      const ce = esArmable(ctx.recetas.get(id)) ? claveEleccion(eleccion) : '', k = id + (ce ? '|' + ce : '');
+      const x = acc.get(k) || { recetaId: id, porciones: 0, manual: 0, combo: 0, dia: dia };
+      if (ce) x.eleccion = Object.assign({}, eleccion);
+      x[origen] += q; acc.set(k, x);
     };
     const porLinea = new Map();
     (plan[dia] || []).forEach(function (it) {
       const r = ctx.recetas.get(it.recetaId), q = Number(it.porciones) || 0;
       if (!r || q <= 0) return;
-      sumar(r.id, q, 'manual');
+      sumar(r.id, q, 'manual', it.eleccion);
       if (r.tipo === 'plato') porLinea.set(r.linea, (porLinea.get(r.linea) || 0) + q);
     });
     const combos = combosActivos(ctx);
@@ -2700,7 +2818,7 @@ window.CLOUD = {
     const enMenu = menu[r.tipo] || [];
     const esEnvase = function (id) { const i = ctx.insumos.get(id); return !i || i.categoria === 'Envases'; };
     const usados = new Set();
-    if (dia) itemsDelDia(ctx, dia).forEach(function (it) { explotarPlato(ctx, it.recetaId, 1).forEach(function (q, id) { if (!esEnvase(id)) usados.add(id); }); });
+    if (dia) itemsDelDia(ctx, dia).forEach(function (it) { explotarPlato(ctx, it.recetaId, 1, it.eleccion).forEach(function (q, id) { if (!esEnvase(id)) usados.add(id); }); });
     const out = [];
     ctx.state.recetas.forEach(function (x) {
       if (x.tipo !== r.tipo || x.id === r.id || x.activo === false || enMenu.indexOf(x.id) >= 0) return;
@@ -2721,7 +2839,7 @@ window.CLOUD = {
     if (!r) return out;
     const rc = costoReceta(ctx, id);
     const nIns = (r.lineas || []).length;
-    if (r.tipo === 'plato' && nIns < 5 && !rc.manual) out.push({ nivel: 'warn', msg: 'Pocos ingredientes (' + nIns + '): revisa condimentos, sofrito y verduras' });
+    if (r.tipo === 'plato' && !esArmable(r) && nIns < 5 && !rc.manual) out.push({ nivel: 'warn', msg: 'Pocos ingredientes (' + nIns + '): revisa condimentos, sofrito y verduras' });
     if (rc.manual) out.push({ nivel: 'info', msg: 'Costo manual: conviértela en receta para que reaccione a los precios' });
     if (rc.faltantes.length) out.push({ nivel: 'error', msg: 'Insumos sin precio: ' + rc.faltantes.join(', ') });
     if (rc.ciclo) out.push({ nivel: 'error', msg: 'Referencia circular entre sub-recetas' });
@@ -2732,6 +2850,28 @@ window.CLOUD = {
     }
     const dv = violacionesDieta(ctx, id);
     if (dv.length) out.push({ nivel: 'error', msg: 'Incompatible con línea ' + r.linea + ': ' + dv.join(', ') });
+    // plato armable: cada espacio necesita opciones, y ninguna puede romper la línea dietaria
+    if (esArmable(r)) r.opciones.forEach(function (op) {
+      const nom = op.nombre || op.clave;
+      const perm = (op.permitidas || []).filter(function (x) { return ctx.recetas.has(x); });
+      if (!perm.length) out.push({ nivel: 'error', msg: 'Sin opciones de ' + nom.toLowerCase() + ' para elegir' });
+      else if (!op.defecto || perm.indexOf(op.defecto) < 0) out.push({ nivel: 'info', msg: 'Sin ' + nom.toLowerCase() + ' por defecto: se usa ' + ctx.recetas.get(perm[0]).nombre });
+      perm.forEach(function (x) {
+        const f = costoReceta(ctx, x).faltantes;
+        if (f.length) out.push({ nivel: 'error', msg: 'Insumos sin precio en "' + ctx.recetas.get(x).nombre + '": ' + f.join(', ') });
+      });
+      if (LINEA_NIVEL_MAX[r.linea] == null) return;
+      const def = resolverEleccion(ctx, r).find(function (o) { return o.clave === op.clave; });
+      perm.forEach(function (x) {
+        if (def && def.id === x) return;   // la por defecto ya la revisa violacionesDieta
+        const malos = [];
+        explotar(ctx, x, 1, new Map(), [id]).forEach(function (q, insId) {
+          const ins = ctx.insumos.get(insId);
+          if (ins && ins.categoria !== 'Envases' && nivelDieta(ins) > LINEA_NIVEL_MAX[r.linea]) malos.push(ins.nombre);
+        });
+        if (malos.length) out.push({ nivel: 'error', msg: '"' + ctx.recetas.get(x).nombre + '" no sirve para la línea ' + r.linea + ': ' + malos.join(', ') });
+      });
+    });
     // % de grasa y conservación exigidos (por la línea de menú o por la receta)
     rc.lineas.forEach(function (f) {
       if (f.tipo !== 'insumo') return;
@@ -2764,6 +2904,8 @@ window.CLOUD = {
     makeCtx: makeCtx, params: params, hoyISO: hoyISO, diasEntre: diasEntre,
     costoNetoOferta: costoNetoOferta, ofertasDisponibles: ofertasDisponibles, costoInsumo: costoInsumo,
     costoReceta: costoReceta, costoPlato: costoPlato, calcularTodo: calcularTodo, esVendible: esVendible,
+    esArmable: esArmable, resolverEleccion: resolverEleccion, nombreCombinacion: nombreCombinacion, combinaciones: combinaciones, claveEleccion: claveEleccion,
+    lotesOpciones: lotesOpciones, explotarItems: explotarItems,
     opcionesGuarnicion: opcionesGuarnicion, explotar: explotar, explotarPlato: explotarPlato, usosDeInsumo: usosDeInsumo,
     impacto: impacto, violacionesDieta: violacionesDieta, dietaCompatible: dietaCompatible, asegurarDietas: asegurarDietas, etiquetarSalsas: etiquetarSalsas,
     alternativasReceta: alternativasReceta, volumenSemanal: volumenSemanal, usoSemanalInsumos: usoSemanalInsumos,
@@ -2773,7 +2915,7 @@ window.CLOUD = {
     normNombre: normNombre, canonico: canonico, parecidos: parecidos, unificarTextos: unificarTextos, idProveedor: idProveedor, nuevoProveedor: nuevoProveedor, asegurarProveedores: asegurarProveedores,
     proveedorDe: proveedorDe, daFactura: daFactura, costoBrutoOferta: costoBrutoOferta,
     historialPrecios: historialPrecios, variacionInsumo: variacionInsumo, inflacionCanasta: inflacionCanasta,
-    tieneMembresia: tieneMembresia, membresiaActiva: membresiaActiva, ofertaHabilitada: ofertaHabilitada, estadoPromo: estadoPromo,
+    tieneMembresia: tieneMembresia, membresiaObligatoria: membresiaObligatoria, membresiaActiva: membresiaActiva, ofertaHabilitada: ofertaHabilitada, estadoPromo: estadoPromo,
     condicionesDespacho: condicionesDespacho, radarPromosDespacho: radarPromosDespacho, promoPrimeraUsada: promoPrimeraUsada, pedidoOnline: pedidoOnline, plazoEntrega: plazoEntrega, brutoSeleccionado: brutoSeleccionado, evaluarMembresias: evaluarMembresias,
     promoCantidadVigente: promoCantidadVigente, precioPorPack: precioPorPack, opcionesUrgencia: opcionesUrgencia, quiebresProximos: quiebresProximos,
     ofertaVencida: ofertaVencida, diasParaVencer: diasParaVencer, oportunidadActiva: oportunidadActiva, fueraDeVigencia: fueraDeVigencia,
@@ -2820,7 +2962,7 @@ window.CLOUD = {
   // tablas agregadas después (04_proveedores_compras.sql): si aún no existen, la app sigue funcionando sin guardarlas
   const OPCIONALES = ['proveedores', 'proveedores_privado', 'compras', 'urgencias'];
   const NO_EXISTE = /PGRST205|42P01|does not exist|Could not find the table|schema cache/i;
-  const CAMPOS_PRECIO = ['pvp', 'costoManual', 'envaseManual', 'recargoCombo'];
+  const CAMPOS_PRECIO = ['pvp', 'costoManual', 'envaseManual', 'recargoCombo', 'recargoOpcion'];
   const CAMPOS_PROV_PRIVADOS = ['emailFacturacion', 'contacto', 'nota'];   // de un proveedor, solo para admin/gerente
   const LOTE = 200;
 
@@ -4247,6 +4389,9 @@ window.CLOUD = {
     ['pv-contacto-', 'Teléfono o persona de contacto. Solo lo ven admin y gerente.'],
     ['pv-nota-', 'Cualquier dato útil: horarios, cómo pedir la factura, vendedor. Solo lo ven admin y gerente.'],
     ['pv-mn-', 'Nombre del programa de socio del proveedor (ej. Jumbo Prime, inscripción en Central Mayorista). Vacío = no tiene membresía.'],
+    ['pv-mo-', 'Solo se puede comprar siendo socio (mayoristas como Central Mayorista). Todos sus precios cuentan solo con la membresía activa; si está inactiva, ninguno entra a los costos.'],
+    ['pv-mq-', 'Lo que piden para inscribirse (documentos, trámites). Solo informativo.'],
+    ['pv-rm-', 'Compra mínima para retirar en tienda un pedido hecho por internet (Central Mayorista: $150.000). Comprando en el local no hay mínimo. Vacío = sin mínimo.'],
     ['pv-mc-', 'Lo que cuesta la membresía al mes, en pesos. Se usa para ver si te conviene activarla. 0 si es gratis.'],
     ['av-ins', 'Insumo que se acabó, queda poco o faltó. Escribe y elige de la lista.'],
     ['av-rec', 'Receta que no alcanzó para las porciones planificadas.'],
@@ -5653,7 +5798,8 @@ window.CLOUD = {
   const App = window.App, h = App.h, E = window.Engine, Store = window.Store;
   const TIPOS = [['plato', 'Plato'], ['base', 'Base / sub-receta'], ['acompanamiento', 'Acompañamiento'], ['entrada', 'Entrada'], ['ensalada', 'Ensalada'], ['postre', 'Postre'], ['bebestible', 'Bebestible']];
   const LINEAS = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína'];
-  const FILTROS = [['plato', 'Platos'], ['base', 'Bases'], ['salsa', 'Salsas'], ['acompanamiento', 'Guarniciones'], ['opc', 'Opcionales'], ['bebestible', 'Bebestibles'], ['', 'Todas']];
+  const ETIQUETAS = [['', 'Sin etiqueta'], ['pasta', 'Pasta'], ['salsa', 'Salsa']];
+  const FILTROS = [['plato', 'Platos'], ['base', 'Bases'], ['pasta', 'Pastas'], ['salsa', 'Salsas'], ['acompanamiento', 'Guarniciones'], ['opc', 'Opcionales'], ['bebestible', 'Bebestibles'], ['', 'Todas']];
 
   // envasadoId: insumo que se vende tal cual (bebida, jugo en caja); sin él, el bebestible es una receta propia (jugo natural)
   App.nuevaReceta = function (nombre, tipo, envasadoId) {
@@ -5695,7 +5841,7 @@ window.CLOUD = {
     const F = App.ui.filtros.rec = App.ui.filtros.rec || { q: '', tipo: 'plato' };
     const q = (F.q || '').toLowerCase();
     const filas = s.recetas.filter(function (r) {
-      if (F.tipo === 'salsa' ? !(r.tipo === 'base' && r.etiqueta === 'salsa') : F.tipo === 'opc' ? !/entrada|ensalada|postre/.test(r.tipo) : (F.tipo && r.tipo !== F.tipo)) return false;
+      if (F.tipo === 'salsa' || F.tipo === 'pasta' ? !(r.tipo === 'base' && r.etiqueta === F.tipo) : F.tipo === 'opc' ? !/entrada|ensalada|postre/.test(r.tipo) : (F.tipo && r.tipo !== F.tipo)) return false;
       return !q || App.coincide(r.nombre + ' ' + (r.linea || ''), q);
     });
     return h('div', { class: 'pane-list' },
@@ -5706,7 +5852,7 @@ window.CLOUD = {
         h('tbody', null, filas.map(function (r) {
           const ch = E.chequeos(ctx, r.id).filter(function (c) { return c.nivel !== 'info'; });
           return h('tr', { class: r.id === sel ? 'on' : '', onclick: function () { App.go('recetas', r.id); } },
-            h('td', null, h('div', { class: 'nm' }, r.nombre, r.activo === false ? h('small', null, ' (inactiva)') : null), h('small', null, r.tipo === 'base' && r.etiqueta === 'salsa' ? 'Salsa' : (r.linea || r.tipo), ch.length ? ' ' : null, ch.length ? App.badge('⚠ ' + ch.length, ch.some(function (c) { return c.nivel === 'error'; }) ? 'bad' : 'warn') : null)),
+            h('td', null, h('div', { class: 'nm' }, r.nombre, r.activo === false ? h('small', null, ' (inactiva)') : null), h('small', null, r.tipo === 'base' && r.etiqueta === 'salsa' ? 'Salsa' : r.tipo === 'base' && r.etiqueta === 'pasta' ? 'Pasta' : (r.linea || r.tipo), ch.length ? ' ' : null, ch.length ? App.badge('⚠ ' + ch.length, ch.some(function (c) { return c.nivel === 'error'; }) ? 'bad' : 'warn') : null)),
             h('td', { class: 'r' }, App.clp(costoFila(r, calc, ctx))));
         })))));
   }
@@ -5736,6 +5882,44 @@ window.CLOUD = {
     setTimeout(function () { inp.focus(); }, 30);
   }
 
+  const RE_PASTA = /fideo|pasta|spaghetti|espagueti|espiral|tallarin|noqui|corbata|penne|fusilli|macarr|lasana|canelon/;
+
+  // Separa un plato en pasta (por porción) y salsa (lote de 6) y lo deja armable
+  function separar(r) {
+    const s = Store.get();
+    const nombreLinea = function (l) { const x = l.tipo === 'insumo' ? s.insumos.find(function (i) { return i.id === l.ref; }) : s.recetas.find(function (i) { return i.id === l.ref; }); return x ? x.nombre : ''; };
+    const marca = r.lineas.map(function (l) { return l.tipo === 'insumo' && RE_PASTA.test(E.normNombre(nombreLinea(l))); });
+    const nPasta = h('input', { type: 'text', class: 'wide', value: 'Espirales' });
+    const nSalsa = h('input', { type: 'text', class: 'wide', value: App.oracion(r.nombre.replace(/^(espirales|fideos|tallarines|spaghetti|espagueti|pasta)\s+(con|de|al)\s+/i, '')) });
+    const nPlato = h('input', { type: 'text', class: 'wide', value: 'Pasta del día' });
+    const checks = r.lineas.map(function (l, i) { return h('input', { type: 'checkbox', checked: marca[i], onchange: function (ev) { marca[i] = ev.target.checked; } }); });
+    App.modal('Separar en pasta y salsa', h('div', { class: 'stack' },
+      h('p', { class: 'help' }, 'Marca los ingredientes que son la pasta. El resto pasa a la salsa, que se prepara en lote de 6 porciones (cantidades × 6).'),
+      h('div', { class: 'stack mini' }, r.lineas.map(function (l, i) { return h('label', { class: 'chk' }, checks[i], ' ' + nombreLinea(l) + ' · ' + l.cantidad + (l.tipo === 'receta' ? ' porc' : '')); })),
+      h('label', null, 'Nombre de la pasta (si ya existe, se reutiliza)', nPasta),
+      h('label', null, 'Nombre de la salsa', nSalsa),
+      h('label', null, 'Nombre del plato armable', nPlato)), function (close) {
+      return [App.btn('Cancelar', close), App.btn('Separar', function () {
+        const lp = r.lineas.filter(function (l, i) { return marca[i]; }), ls = r.lineas.filter(function (l, i) { return !marca[i]; });
+        if (!nPasta.value.trim() || !nSalsa.value.trim() || !nPlato.value.trim()) return;
+        if (!lp.length || !ls.length) { App.toast('Marca al menos un ingrediente como pasta y deja otro para la salsa'); return; }
+        close();
+        const copia = function (l, f) { const c = JSON.parse(JSON.stringify(l)); c.cantidad = Math.round(l.cantidad * f * 100) / 100; return c; };
+        const nueva = function (nombre, etiqueta, porciones, lineas) { return { id: Store.uid('R'), tipo: 'base', etiqueta: etiqueta, linea: 'Base / sub-receta', nombre: App.oracion(nombre), descripcion: '', porciones: porciones, lineas: lineas, pvp: 0, activo: true, pasos: '', montaje: '' }; };
+        let idPasta = null, idSalsa = null;
+        Store.mutate(function (st) {
+          const ya = st.recetas.find(function (x) { return x.tipo === 'base' && x.etiqueta === 'pasta' && E.normNombre(x.nombre) === E.normNombre(nPasta.value); });
+          if (ya) idPasta = ya.id; else { const p = nueva(nPasta.value, 'pasta', 1, lp.map(function (l) { return copia(l, 1); })); st.recetas.push(p); idPasta = p.id; }
+          const sa = nueva(nSalsa.value, 'salsa', 6, ls.map(function (l) { return copia(l, 6); })); st.recetas.push(sa); idSalsa = sa.id;
+          const x = st.recetas.find(function (y) { return y.id === r.id; });
+          x.lineas = []; x.nombre = App.oracion(nPlato.value); x.formatoNombre = '{pasta} con {salsa}';
+          x.opciones = [{ clave: 'pasta', nombre: 'Pasta', etiqueta: 'pasta', permitidas: [idPasta], defecto: idPasta, cantidad: 1 }, { clave: 'salsa', nombre: 'Salsa', etiqueta: 'salsa', permitidas: [idSalsa], defecto: idSalsa, cantidad: 1 }];
+        });
+        App.toast('Listo: pasta y salsa separadas. Agrega más opciones en "Plato armable"');
+      }, 'primary')];
+    });
+  }
+
   function duplicar(r) {
     const id = Store.uid('R');
     Store.mutate(function (s) {
@@ -5747,7 +5931,7 @@ window.CLOUD = {
 
   function usosComoSub(r) {
     return Store.get().recetas.filter(function (x) {
-      return x.id !== r.id && (x.lineas.some(function (l) { return l.tipo === 'receta' && l.ref === r.id; }) || x.guarnicionDefault === r.id || (x.guarnicionesPermitidas || []).indexOf(r.id) >= 0);
+      return x.id !== r.id && (x.lineas.some(function (l) { return l.tipo === 'receta' && l.ref === r.id; }) || x.guarnicionDefault === r.id || (x.guarnicionesPermitidas || []).indexOf(r.id) >= 0 || (x.opciones || []).some(function (o) { return (o.permitidas || []).indexOf(r.id) >= 0 || o.defecto === r.id; }));
     });
   }
 
@@ -5759,10 +5943,14 @@ window.CLOUD = {
       (x.lineas || []).forEach(function (l) { if (l.tipo === 'receta' && l.ref === id) l.ref = destinoId; });
       if (x.guarnicionDefault === id) x.guarnicionDefault = destinoId;
       if (x.guarnicionesPermitidas) x.guarnicionesPermitidas = sinDup(x.guarnicionesPermitidas.map(cambia));
+      (x.opciones || []).forEach(function (o) { o.permitidas = sinDup((o.permitidas || []).map(cambia)); if (o.defecto === id) o.defecto = destinoId; });
     });
+    // sin reemplazo: la receta sale de las opciones de los platos armables (y de sus elecciones guardadas en el plan)
+    s.recetas.forEach(function (x) { (x.opciones || []).forEach(function (o) { o.permitidas = (o.permitidas || []).filter(function (v) { return v !== id; }); if (o.defecto === id) o.defecto = o.permitidas[0] || null; }); });
     s.recetas = s.recetas.filter(function (x) { return x.id !== id; });
     s.plan && E.DIAS.forEach(function (d) {
       s.plan[d] = (s.plan[d] || []).filter(function (i) { return i.recetaId !== id; });
+      (s.plan[d] || []).forEach(function (i) { if (i.eleccion) Object.keys(i.eleccion).forEach(function (k) { if (i.eleccion[k] === id) { if (destinoId) i.eleccion[k] = destinoId; else delete i.eleccion[k]; } }); });
       const m = s.plan.menu && s.plan.menu[d];
       if (m) Object.keys(m).forEach(function (t) { m[t] = destinoId ? sinDup(m[t].map(cambia)) : m[t].filter(function (v) { return v !== id; }); });
     });
@@ -5837,7 +6025,10 @@ window.CLOUD = {
         h('label', null, 'Nombre', App.textInput({ fk: 'r-nombre', value: r.nombre, onChange: function (v) { upd(function (x) { x.nombre = v; }, 'rn'); },
           onCommit: function (v) { const n = App.oracion(v); if (n !== v) upd(function (x) { x.nombre = n; }); } })),
         h('label', null, 'Tipo', App.select({ fk: 'r-tipo', value: r.tipo, options: TIPOS, onChange: function (v) { upd(function (x) { x.tipo = v; }); } })),
-        r.tipo === 'base' ? h('label', null, 'Etiqueta', App.select({ fk: 'r-etq', value: r.etiqueta || '', options: [['', 'Sin etiqueta'], ['salsa', 'Salsa']], onChange: function (v) { upd(function (x) { if (v) x.etiqueta = v; else delete x.etiqueta; }); } })) : null,
+        r.tipo === 'base' ? h('label', null, 'Etiqueta', App.select({ fk: 'r-etq', value: r.etiqueta || '', options: ETIQUETAS, onChange: function (v) { upd(function (x) { if (v) x.etiqueta = v; else { delete x.etiqueta; delete x.aPedido; delete x.recargoOpcion; } }); } })) : null,
+        r.tipo === 'base' && r.etiqueta ? h('label', null, 'Recargo si se elige (CLP)', App.numInput({ fk: 'r-recop', value: r.recargoOpcion || 0, onChange: function (n) { upd(function (x) { x.recargoOpcion = n; }, 'rro'); }, onEmpty: function () { upd(function (x) { x.recargoOpcion = 0; }, 'rro'); } }),
+          h('small', null, 'Se suma al PVP del plato armable. 0 = sin recargo.')) : null,
+        r.tipo === 'base' && r.etiqueta ? h('label', { class: 'chk' }, h('input', { type: 'checkbox', 'data-fk': 'r-apedido', checked: !!r.aPedido, onchange: function (ev) { upd(function (x) { if (ev.target.checked) x.aPedido = true; else delete x.aPedido; }); } }), ' Solo a pedido: no sale en el menú normal (insumos especiales)') : null,
         h('label', null, 'Línea de menú', r.tipo === 'plato' ? App.select({ fk: 'r-linea', value: r.linea, options: LINEAS.map(function (l) { return [l, l]; }), onChange: function (v) { upd(function (x) { x.linea = v; }); } })
           : App.textInput({ fk: 'r-linea2', value: r.linea || '', onChange: function (v) { upd(function (x) { x.linea = v; }, 'rl'); },
             onCommit: function (v) { const c = E.canonico(s.recetas.filter(function (x) { return x.id !== r.id; }).map(function (x) { return x.linea; }), App.oracion(v)); if (c !== v) upd(function (x) { x.linea = c; }); } })),
@@ -5993,13 +6184,55 @@ window.CLOUD = {
       if (rc.lineas.length) costos.appendChild(composicion(rc) || h('span'));
     }
 
+    // ---- plato armable: espacios para elegir (pasta, salsa…) ----
+    let armable = null;
+    if (r.tipo === 'plato') {
+      const bases = s.recetas.filter(function (x) { return x.id !== r.id && (x.tipo === 'base' || x.tipo === 'acompanamiento'); });
+      const clave = function (x, nombre) { const b = E.normNombre(nombre).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'espacio'; let k = b, n = 2; while ((x.opciones || []).some(function (o) { return o.clave === k; })) k = b + '-' + n++; return k; };
+      if (!E.esArmable(r)) {
+        armable = App.card('Plato armable', h('div', { class: 'stack' },
+          h('p', { class: 'help' }, 'Para fideos y pastas: la pasta y la salsa son recetas separadas y el plato se arma eligiendo una de cada una. Las combinaciones se calculan solas.'),
+          h('div', { class: 'row gap wrap' },
+            App.btn('Separar esta receta en pasta y salsa', function () { separar(r); }, 'small primary', 'Mueve los ingredientes a una pasta y a una salsa (en lote de 6) y deja este plato armable'),
+            App.btn('Hacerlo armable (pasta y salsa vacías)', function () {
+              upd(function (x) { x.opciones = [{ clave: 'pasta', nombre: 'Pasta', etiqueta: 'pasta', permitidas: [], defecto: null, cantidad: 1 }, { clave: 'salsa', nombre: 'Salsa', etiqueta: 'salsa', permitidas: [], defecto: null, cantidad: 1 }]; x.formatoNombre = '{pasta} con {salsa}'; });
+            }, 'small'))));
+      } else {
+        armable = App.card('Plato armable: espacios para elegir', h('div', { class: 'stack' },
+          h('label', null, 'Nombre de cada combinación', App.textInput({ fk: 'r-fmt', value: r.formatoNombre || '', ph: '{pasta} con {salsa}', onChange: function (v) { upd(function (x) { if (v.trim()) x.formatoNombre = v; else delete x.formatoNombre; }, 'rfm'); } }),
+            h('small', null, 'Usa el nombre de cada espacio entre llaves. Vacío = se unen con "con".')),
+          r.opciones.map(function (op, oi) {
+            const cand = bases.filter(function (b) { return !op.etiqueta || b.etiqueta === op.etiqueta; });
+            (op.permitidas || []).forEach(function (id) { const b = s.recetas.find(function (x) { return x.id === id; }); if (b && cand.indexOf(b) < 0) cand.push(b); });
+            const perm = (op.permitidas || []).map(function (id) { return s.recetas.find(function (x) { return x.id === id; }); }).filter(Boolean);
+            return h('div', { class: 'block' },
+              h('div', { class: 'row gap wrap' },
+                h('label', null, 'Espacio', App.textInput({ fk: 'op-n-' + r.id + '-' + oi, cls: 'w140', value: op.nombre || '', onChange: function (v) { upd(function (x) { x.opciones[oi].nombre = v; }, 'opn' + oi); } })),
+                h('label', null, 'Elegir entre', App.select({ fk: 'op-e-' + r.id + '-' + oi, cls: 'w140', value: op.etiqueta || '', options: [['pasta', 'Pastas'], ['salsa', 'Salsas'], ['', 'Cualquier base']], onChange: function (v) { upd(function (x) { x.opciones[oi].etiqueta = v; }); } })),
+                h('label', null, 'Por defecto', App.select({ fk: 'op-d-' + r.id + '-' + oi, cls: 'w140', value: op.defecto || '', options: [['', '(la primera)']].concat(perm.map(function (b) { return [b.id, b.nombre]; })), onChange: function (v) { upd(function (x) { x.opciones[oi].defecto = v || null; }); } })),
+                h('label', null, 'Porciones por plato', App.numInput({ fk: 'op-q-' + r.id + '-' + oi, cls: 'w60', value: op.cantidad || 1, onChange: function (n) { if (n > 0) upd(function (x) { x.opciones[oi].cantidad = n; }, 'opq' + oi); } })),
+                App.btn('Quitar espacio', function () { upd(function (x) { x.opciones.splice(oi, 1); if (!x.opciones.length) { delete x.opciones; delete x.formatoNombre; } }); }, 'small ghost')),
+              h('small', { class: 'mut' }, 'Opciones que salen en el menú (marca las que se ofrecen):'),
+              h('div', { class: 'chips' }, cand.length ? cand.map(function (b) {
+                const on = (op.permitidas || []).indexOf(b.id) >= 0;
+                return App.chip((on ? '✓ ' : '') + b.nombre + (b.aPedido ? ' · a pedido' : '') + (b.recargoOpcion ? ' · +' + App.clp(b.recargoOpcion) : ''), on, function () {
+                  upd(function (x) { const o = x.opciones[oi], a = o.permitidas || []; o.permitidas = on ? a.filter(function (y) { return y !== b.id; }) : a.concat(b.id); if (on && o.defecto === b.id) o.defecto = null; if (!on && !o.defecto) o.defecto = b.id; });
+                });
+              }) : h('small', { class: 'warn-t' }, 'No hay recetas base con esa etiqueta. Crea una (Recetas → Nueva → Base) y márcala como pasta o salsa.')));
+          }),
+          h('div', { class: 'row gap wrap' },
+            App.btn('+ Espacio', function () { upd(function (x) { x.opciones.push({ clave: clave(x, 'Espacio'), nombre: 'Espacio', etiqueta: '', permitidas: [], defecto: null, cantidad: 1 }); }); }, 'small'),
+            App.btn('Dejar de ser armable', function () { App.confirm('¿Quitar los espacios de "' + r.nombre + '"? Las pastas y salsas siguen existiendo, pero el plato ya no las suma.', function () { upd(function (x) { delete x.opciones; delete x.formatoNombre; }); }, 'Quitar', true); }, 'small ghost'))));
+      }
+    }
+
     const cocina = App.card('Para la cocina (sin costos)', h('div', { class: 'stack' },
       h('label', { class: 'block' }, 'Pasos de preparación', h('textarea', { rows: 5, 'data-fk': 'r-pasos', placeholder: 'Describe el procedimiento…', oninput: function (ev) { upd(function (x) { x.pasos = ev.target.value; x.pasosBorrador = false; }, 'rps'); } }, r.pasos || '')),
       h('label', { class: 'block' }, 'Sugerencia de montaje / empaque', h('textarea', { rows: 2, 'data-fk': 'r-mont', oninput: function (ev) { upd(function (x) { x.montaje = ev.target.value; }, 'rmo'); } }, r.montaje || '')),
       r.pasosBorrador ? h('div', { class: 'row gap wrap' }, h('small', { class: 'warn-t' }, 'Los pasos son un borrador generado: revísalos antes de entregarlos al personal.'),
         App.btn('✓ Pasos revisados', function () { upd(function (x) { x.pasosBorrador = false; }); }, 'small', 'Quita la marca de borrador sin cambiar el texto')) : null));
 
-    return h('div', { class: 'stack' }, cab, alerta, r.revisar ? h('div', { class: 'checks' }, h('div', { class: 'chk-warn' }, '📝 Revisión de migración: ' + r.revisar)) : null, tablaLineas, costos, cocina);
+    return h('div', { class: 'stack' }, cab, alerta, r.revisar ? h('div', { class: 'checks' }, h('div', { class: 'chk-warn' }, '📝 Revisión de migración: ' + r.revisar)) : null, tablaLineas, armable, costos, cocina);
   }
 
   App.views.recetas = function (arg) {
@@ -6080,7 +6313,7 @@ window.CLOUD = {
         const manual = (!r.lineas.length && r.costoManual != null);
         return h('tr', { class: (F.sel === r.id ? 'on ' : '') + (r.activo === false ? 'off' : '') },
           h('td', { onclick: function () { F.sel = F.sel === r.id ? null : r.id; App.render(); }, class: 'link' },
-            h('div', { class: 'nm' }, r.nombre), h('small', null, r.linea, manual ? ' ' : null, manual ? App.badge('costo manual', 'info') : null,
+            h('div', { class: 'nm' }, r.nombre), h('small', null, r.linea, E.esArmable(r) ? ' ' : null, E.esArmable(r) ? App.badge('armable', 'info') : null, manual ? ' ' : null, manual ? App.badge('costo manual', 'info') : null,
               c.faltantes.length ? ' ' : null, c.faltantes.length ? App.badge('sin precio', 'bad') : null)),
           h('td', { class: 'r' }, App.clp(c.insumos + c.guarnicion + c.imprevistos)),
           h('td', { class: 'r' }, App.clp(c.envase)),
@@ -6114,6 +6347,34 @@ window.CLOUD = {
       h('div', { class: 'legend' }, partes.filter(function (x) { return x[2] > 0.5; }).map(function (x) { return h('span', null, h('i', { class: 'dot wf-' + x[0] }), x[1] + ' ' + App.clp(x[2]) + ' (' + Math.round(x[2] / pvp * 100) + '%)'); })));
   }
 
+  // plato armable: todas las combinaciones con su costo, margen y lo que falta para llegar al food cost objetivo
+  function grillaCombinaciones(r, F, ctx) {
+    const todas = E.combinaciones(ctx, r.id, { aPedido: !!F.comboAPedido });
+    const p = ctx.p;
+    const malas = todas.filter(function (c) { return c.alerta; });
+    const nombreOp = function (c) { return c.opciones.map(function (o) { return o.receta || '—'; }).join(' + '); };
+    return h('div', { class: 'stack' },
+      h('h4', null, 'Combinaciones (' + todas.length + ')'),
+      h('div', { class: 'row gap wrap' },
+        App.chip('Incluir salsas y pastas a pedido', !!F.comboAPedido, function () { F.comboAPedido = !F.comboAPedido; App.render(); }),
+        malas.length ? App.badge(malas.length + ' no alcanzan el margen', 'warn') : (todas.length ? App.badge('todas alcanzan', 'good') : null)),
+      todas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
+        h('thead', null, h('tr', null, h('th', null, 'Combinación'), h('th', { class: 'r', title: 'Ingredientes con imprevistos' }, 'Ingred.'), h('th', { class: 'r' }, 'PVP'), h('th', { class: 'r' }, 'Margen'),
+          h('th', { class: 'r' }, 'Food cost'), h('th', { class: 'r', title: 'PVP que cumple el food cost objetivo' }, 'Sugerido'), h('th', { class: 'r', title: 'Lo que faltaría al PVP actual para llegar al sugerido' }, 'Recargo falta'))),
+        h('tbody', null, todas.map(function (c) {
+          const marcas = c.opciones.filter(function (o) { return o.aPedido; }).length ? App.badge('a pedido', 'info') : null;
+          return h('tr', { class: c.margen < 0 ? 'warnrow' : '' },
+            h('td', null, c.nombreCombinacion, c.recargo ? h('small', { class: 'mut' }, ' +' + App.clp(c.recargo)) : null, marcas ? ' ' : null, marcas, c.faltantes.length ? ' ' : null, c.faltantes.length ? App.badge('sin precio', 'bad') : null),
+            h('td', { class: 'r' }, App.clp(c.insumos + c.imprevistos)),
+            h('td', { class: 'r' }, App.clp(c.pvp)),
+            h('td', { class: 'r ' + (c.margen < 0 ? 'bad-t' : '') }, App.clp(c.margen) + ' · ' + App.pct(c.margenPct)),
+            h('td', { class: 'r ' + (c.alerta ? 'bad-t' : '') }, App.pct(c.foodCostPct)),
+            h('td', { class: 'r' }, c.pvpSugerido ? App.clp(c.pvpSugerido) : '—'),
+            h('td', { class: 'r ' + (c.recargoSugerido ? 'warn-t' : 'mut') }, c.recargoSugerido ? '+' + App.clp(c.recargoSugerido) : '—'));
+        })))) : App.empty('Sin combinaciones: cada espacio necesita al menos una opción activa.'),
+      h('div', { class: 'help' }, 'El PVP del plato cubre a todas las combinaciones del menú. Si una no alcanza el food cost objetivo (' + p.foodCostObjetivo + '%), pon un recargo a su pasta o salsa en Recetas, o muévela a otro plato.'));
+  }
+
   function drawer(r, F, ctx) {
     const c = App.calc().get(r.id), rc = E.costoReceta(ctx, r.id), p = ctx.p;
     const opcs = E.opcionesGuarnicion(ctx, r.id);
@@ -6132,7 +6393,9 @@ window.CLOUD = {
         h('div', { class: 'tot' }, h('small', null, 'Costo total'), h('b', null, App.clp(c.costoTotal))),
         h('div', null, h('small', null, 'PVP'), h('b', null, App.clp(c.pvp))),
         h('div', null, h('small', null, 'Margen'), h('b', { class: c.margen < 0 ? 'bad-t' : 'good-t' }, App.clp(c.margen) + ' · ' + App.pct(c.margenPct)))),
+      E.esArmable(r) ? h('div', { class: 'help' }, 'Costo y PVP de la combinación por defecto: ' + c.nombreCombinacion + '.') : null,
       waterfall(c),
+      E.esArmable(r) ? grillaCombinaciones(r, F, ctx) : null,
       h('h4', null, 'Simulador de precio'),
       h('div', { class: 'row gap' }, h('input', { type: 'range', min: Math.round(c.costoTotal * 0.8 / 100) * 100, max: Math.round(Math.max(c.pvp, c.pvpSugerido) * 1.6 / 100) * 100, step: 100, value: simPvp, 'data-fk': 'sim-pvp-' + r.id,
         oninput: function (ev) { F.simPvp = parseFloat(ev.target.value); App.render(); } }),
@@ -6140,12 +6403,12 @@ window.CLOUD = {
       h('div', { class: 'help' }, 'Con ese precio: margen ' + App.clp(simMargen) + ' (' + App.pct(simNeto > 0 ? simMargen / simNeto * 100 : null) + ')  ',
         simPvp !== c.pvp ? App.btn('Usar este PVP', function () { Store.mutate(function (st) { st.recetas.find(function (x) { return x.id === r.id; }).pvp = simPvp; }); F.simPvp = null; }, 'small') : null),
       c.extraGrasa > 0.5 ? h('div', { class: 'aviso' }, h('b', null, '🥩 Carne más magra: '), '+' + App.clp(c.extraGrasa) + ' de costo por porción frente a la carne más barata de su familia. Precio sugerido ' + App.clp(c.pvpSugerido) + ' (sería ' + App.clp(c.pvpSugeridoSinExtraGrasa) + ' sin ese extra).') : null,
-      h('h4', null, 'Dónde se va el costo'),
-      h('table', { class: 'tbl compact' }, h('tbody', null, lineas.slice(0, 8).map(function (l) {
+      lineas.length ? h('h4', null, 'Dónde se va el costo') : null,
+      lineas.length ? h('table', { class: 'tbl compact' }, h('tbody', null, lineas.slice(0, 8).map(function (l) {
         return h('tr', null, h('td', null, l.nombre, l.tipo === 'receta' ? h('small', null, ' (sub-receta)') : null), h('td', { class: 'r' }, App.cantidad(l.cantidad, l.unidad)),
           h('td', { class: 'r' }, l.missing ? App.badge('sin precio', 'bad') : App.clp(l.subtotal / (rc.lote > 0 && r.porciones > 0 ? r.porciones : 1))),
           h('td', { class: 'r mut' }, rc.lote > 0 ? Math.round(l.subtotal / rc.lote * 100) + '%' : ''));
-      }))),
+      }))) : null,
       opcs.length ? h('div', null, h('h4', null, 'Guarnición a elegir'), h('table', { class: 'tbl compact' }, h('tbody', null, opcs.map(function (o) {
         return h('tr', null, h('td', null, o.nombre, o.esDefecto ? ' ✓' : ''), h('td', { class: 'r' }, App.clp(o.costoGuarnicion)), h('td', { class: 'r' }, App.pct(o.margenPct)));
       })))) : null,
@@ -6703,13 +6966,20 @@ window.CLOUD = {
     return out;
   }
 
-  function ficha(s, r, porciones) {
-    const lineas = lineasEscaladas(s, r, porciones);
+  function ficha(s, r, porciones, eleccion) {
+    // plato armable: la pasta y la salsa elegidas como sub-recetas (el detalle va en la ficha de cada lote)
+    let titulo = r.nombre, lineas;
+    if (E.esArmable(r)) {
+      const ctx = E.makeCtx(s), ops = E.resolverEleccion(ctx, r, eleccion).filter(function (o) { return o.id; });
+      titulo = E.nombreCombinacion(ctx, r, eleccion);
+      lineas = lineasEscaladas(s, Object.assign({}, r, { lineas: r.lineas.concat(ops.map(function (o) { return { tipo: 'receta', ref: o.id, cantidad: o.cantidad }; })) }), porciones);
+      if (!r.lineas.length) lineas = lineas.filter(function (l) { return !l.hijo; });
+    } else lineas = lineasEscaladas(s, r, porciones);
     const guar = r.guarnicionDefault && s.recetas.find(function (x) { return x.id === r.guarnicionDefault; });
     const permitidas = (r.guarnicionesPermitidas || []).map(function (g) { const x = s.recetas.find(function (y) { return y.id === g; }); return x ? x.nombre : null; }).filter(Boolean);
     const env = r.envaseId && s.insumos.find(function (i) { return i.id === r.envaseId; });
     return h('article', { class: 'ficha' },
-      h('div', { class: 'ficha-h' }, h('h2', null, r.nombre), h('div', { class: 'mut' }, r.linea, ' · ', porciones + (porciones === 1 ? ' porción' : ' porciones'),
+      h('div', { class: 'ficha-h' }, h('h2', null, titulo), h('div', { class: 'mut' }, r.linea, ' · ', porciones + (porciones === 1 ? ' porción' : ' porciones'),
         ' ', App.btn('🍳 No alcanzó', function () { App.avisarNoAlcanzo(r.id, porciones); }, 'small ghost noprint', 'Avisar a compras que esta receta no alcanzó'))),
       r.descripcion ? h('p', { class: 'desc' }, r.descripcion) : null,
       h('table', { class: 'tbl ficha-t' }, h('thead', null, h('tr', null, h('th', null, 'Ingrediente'), h('th', { class: 'r' }, 'Cantidad'), h('th', null, 'Corte / uso'))),
@@ -6727,7 +6997,7 @@ window.CLOUD = {
     const q = (F.q || '').toLowerCase();
     const filtrados = platos.filter(function (r) { return !q || App.coincide(r.nombre, q); });
     const grupos = {};
-    filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? (r.etiqueta === 'salsa' ? 'Salsas' : 'Bases y sub-recetas') : r.tipo === 'acompanamiento' ? 'Guarniciones' : r.tipo === 'bebestible' ? 'Bebestibles' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
+    filtrados.forEach(function (r) { const g = r.tipo === 'plato' ? r.linea : (r.tipo === 'base' ? (r.etiqueta === 'salsa' ? 'Salsas' : r.etiqueta === 'pasta' ? 'Pastas' : 'Bases y sub-recetas') : r.tipo === 'acompanamiento' ? 'Guarniciones' : r.tipo === 'bebestible' ? 'Bebestibles' : 'Opcionales'); (grupos[g] = grupos[g] || []).push(r); });
     const sel = platos.find(function (r) { return r.id === F.id; }) || filtrados.find(function (r) { return r.tipo === 'plato'; }) || filtrados[0];
     const ORDEN = ['Tradicional', 'Gourmet / premium', 'Vegano', 'Vegetariano', 'Hipocalórico', 'Alto en proteína', 'Guarniciones', 'Opcionales', 'Bebestibles', 'Bases y sub-recetas'];
     return h('div', { class: 'split cocina' },
@@ -6754,9 +7024,11 @@ window.CLOUD = {
     const todos = E.itemsDelDia(ctx, F.dia).map(function (it) { return Object.assign({ r: ctx.recetas.get(it.recetaId) }, it); }).filter(function (x) { return x.r; })
       .sort(function (a, b) { return ORDEN_T.indexOf(a.r.tipo) - ORDEN_T.indexOf(b.r.tipo) || a.r.nombre.localeCompare(b.r.nombre); });
     const items = todos.filter(function (x) { return !x.r.envasado; });
+    // pastas y salsas de los platos armables: se preparan por lotes (siempre hacia arriba)
+    const lotes = E.lotesOpciones(ctx, items).sort(function (a, b) { return a.nombre.localeCompare(b.nombre); });
     const envasados = todos.filter(function (x) { return x.r.envasado; });
     const total = new Map();
-    items.forEach(function (it) { E.explotarPlato(ctx, it.recetaId, it.porciones).forEach(function (q, id) { total.set(id, (total.get(id) || 0) + q); }); });
+    E.explotarItems(ctx, items).forEach(function (q, id) { total.set(id, (total.get(id) || 0) + q); });
     const filasTotal = Array.from(total.entries()).map(function (e) { return { ins: s.insumos.find(function (i) { return i.id === e[0]; }), q: e[1] }; }).filter(function (x) { return x.ins; })
       .sort(function (a, b) { return a.ins.categoria.localeCompare(b.ins.categoria) || a.ins.nombre.localeCompare(b.ins.nombre); });
     return h('div', { class: 'stack' },
@@ -6766,14 +7038,21 @@ window.CLOUD = {
         App.card('Producción del ' + DIAS.find(function (d) { return d[0] === F.dia; })[1], h('div', null,
           items.length ? h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Preparación'), h('th', { class: 'r' }, 'Porciones'))),
             h('tbody', null, items.map(function (it) {
-              return h('tr', null, h('td', null, it.r.nombre, it.r.tipo !== 'plato' ? h('small', { class: 'mut' }, ' · ' + (TIPO_TXT[it.r.tipo] || it.r.tipo)) : null),
+              return h('tr', null, h('td', null, E.esArmable(it.r) ? E.nombreCombinacion(ctx, it.r, it.eleccion) : it.r.nombre, it.r.tipo !== 'plato' ? h('small', { class: 'mut' }, ' · ' + (TIPO_TXT[it.r.tipo] || it.r.tipo)) : null),
                 h('td', { class: 'r strong' }, it.porciones, it.combo ? h('div', null, h('small', { class: 'mut' }, it.manual ? it.combo + ' para combos + ' + it.manual + ' sueltos' : 'estimado para combos')) : null));
             }))) : null,
+          lotes.length ? h('div', null, h('h4', null, 'Pastas y salsas a preparar (por lotes)'),
+            h('table', { class: 'tbl compact' }, h('thead', null, h('tr', null, h('th', null, 'Preparación'), h('th', { class: 'r' }, 'Pedidas'), h('th', { class: 'r' }, 'Lotes'), h('th', { class: 'r' }, 'Sobran'))),
+              h('tbody', null, lotes.map(function (l) {
+                return h('tr', null, h('td', null, l.nombre), h('td', { class: 'r' }, Math.round(l.porciones * 10) / 10 + ' porc'),
+                  h('td', { class: 'r strong' }, l.lotes + ' × ' + l.lote + ' porc'), h('td', { class: 'r mut' }, l.sobra > 0 ? Math.round(l.sobra * 10) / 10 + ' porc' : '—'));
+              })))) : null,
           envasados.length ? h('div', null, h('h4', null, 'Bebestibles a despachar (envasados)'),
             h('table', { class: 'tbl compact' }, h('tbody', null, envasados.map(function (it) { return h('tr', null, h('td', null, it.r.nombre), h('td', { class: 'r strong' }, it.porciones + ' un')); })))) : null,
           filasTotal.length ? h('h4', null, 'Insumos totales a preparar (peso utilizable)') : null,
           h('table', { class: 'tbl compact' }, h('tbody', null, filasTotal.map(function (x) { return h('tr', null, h('td', null, x.ins.nombre), h('td', { class: 'r' }, App.cantidad(x.q, x.ins.unidad))); }))))),
-        items.map(function (it) { return ficha(s, it.r, it.porciones || 1); }))
+        items.map(function (it) { return ficha(s, it.r, it.porciones || 1, it.eleccion); }),
+        lotes.map(function (l) { const sub = ctx.recetas.get(l.recetaId); return sub ? ficha(s, sub, l.lotes * l.lote) : null; }))
         : App.empty('No hay platos planificados para este día. Arma el plan en “Lista de compras”.'),
       todos.some(function (x) { return x.combo; }) ? h('p', { class: 'help' }, 'Las entradas, ensaladas, postres y bebestibles "para combos" son una estimación según los combos que se suelen pedir.') : null);
   }
@@ -6895,7 +7174,7 @@ window.CLOUD = {
   };
   // 🌐 solo online · ⭐ requiere membresía (avisa si está inactiva: así no entra a los costos)
   App.badgesCanal = function (o) {
-    const ctx0 = App.ctx(), onl = !!o && E.esSoloOnline(ctx0, o), ec = o && E.campanaDe(ctx0, o), socio = !!o && (o.requiereMembresia || (ec && ec.c.requiereMembresia));
+    const ctx0 = App.ctx(), onl = !!o && E.esSoloOnline(ctx0, o), ec = o && E.campanaDe(ctx0, o), socio = !!o && E.exigeMembresia(ctx0, o);
     if (!o || (!onl && !socio && !o.promoCantidad && !o.conservacion)) return null;
     const ctx = App.ctx(), habil = E.ofertaHabilitada(ctx, o);
     return h('div', { class: 'row gap wrap' }, o.conservacion ? App.badge(o.conservacion === 'congelado' ? '🧊 congelado' : '❄️ refrigerado', 'info') : null, onl ? App.badge('🌐 solo online', 'info') : null,
@@ -7337,7 +7616,7 @@ window.CLOUD = {
       ['Promo por cantidad', o.promoCantidad ? 'desde ' + o.promoCantidad.minimo + ' un: ' + App.clp(o.promoCantidad.precio) + ' c/u' + (o.promoCantidad.hasta ? ' · hasta ' + App.fechaCorta(o.promoCantidad.hasta) : '') : null],
       ['Campaña', ec ? '🎯 ' + (ec.c.nombre || 'campaña') : o.campanaPropuesta ? '🎯 por completar' + (o.campanaPropuesta.nombre ? ': ' + o.campanaPropuesta.nombre : '') : null],
       ['Válida hasta', E.esTemporal(o) ? (o.hastaPorConfirmar ? '📅 fecha por confirmar' : hasta ? App.fechaCorta(hasta) : 'sin fecha de término') : null],
-      ['Condiciones', [E.esSoloOnline(ctx, o) ? '🌐 solo online' : '', o.requiereMembresia || (ec && ec.c.requiereMembresia) ? '⭐ requiere membresía' : '', o.promoSeleccionado ? 'en promo de despacho' : '', o.disponible === false ? 'no disponible' : ''].filter(Boolean).join(' · ') || null],
+      ['Condiciones', [E.esSoloOnline(ctx, o) ? '🌐 solo online' : '', E.exigeMembresia(ctx, o) ? '⭐ requiere membresía' : '', o.promoSeleccionado ? 'en promo de despacho' : '', o.disponible === false ? 'no disponible' : ''].filter(Boolean).join(' · ') || null],
       ['Fuente', ({ estimado: 'estimado', comprado: 'comprado', cotizacion: 'cotización', ODEPA: 'ODEPA', web: 'página web' })[o.fuente] || o.fuente || null],
       ['Cotizó', (o.autor || '—') + (o.fecha ? ' · ' + o.fecha : '')],
       ['Revisó', o.revisadoPor || null],
@@ -7814,6 +8093,24 @@ window.CLOUD = {
       }));
   }
 
+  // plato armable en el plan: una lista por espacio (pasta, salsa…); las "a pedido" van al final de cada lista
+  function eleccionArmable(s, ctx, r, it, dia, i) {
+    const ops = E.resolverEleccion(ctx, r, it.eleccion);
+    const c = E.costoPlato(ctx, r.id, undefined, it.eleccion);
+    return h('div', { class: 'stack mini' },
+      r.opciones.map(function (op, k) {
+        const o = ops[k], ids = (op.permitidas || []).filter(function (id) { return ctx.recetas.has(id); });
+        const aPedido = op.etiqueta ? s.recetas.filter(function (x) { return x.aPedido && x.etiqueta === op.etiqueta && x.activo !== false && ids.indexOf(x.id) < 0; }) : [];
+        if (o.id && ids.indexOf(o.id) < 0 && !aPedido.some(function (x) { return x.id === o.id; })) ids.push(o.id);
+        const nom = function (id) { const x = ctx.recetas.get(id); return x ? x.nombre + (x.aPedido ? ' (a pedido)' : '') + (x.recargoOpcion ? ' +' + App.clp(x.recargoOpcion) : '') : id; };
+        return h('label', { class: 'row gap' }, h('small', { class: 'mut w60' }, o.nombre),
+          App.select({ fk: 'plan-el-' + dia + '-' + i + '-' + op.clave, cls: 'grow', value: o.id || '',
+            options: ids.map(function (id) { return [id, nom(id)]; }).concat(aPedido.map(function (x) { return [x.id, nom(x.id)]; })),
+            onChange: function (v) { Store.mutate(function (st) { const x = st.plan[dia][i]; x.eleccion = Object.assign({}, x.eleccion); if (v) x.eleccion[op.clave] = v; else delete x.eleccion[op.clave]; }); } }));
+      }),
+      h('small', { class: c.margen < 0 ? 'bad-t' : c.alerta ? 'warn-t' : 'mut' }, 'PVP ' + App.clp(c.pvp) + ' · margen ' + App.clp(c.margen) + ' (' + App.pct(c.margenPct) + ')' + (c.faltantes.length ? ' · falta precio de ' + c.faltantes.join(', ') : '')));
+  }
+
   // ventas y margen esperados: cada colación se reparte entre los combos según la mezcla esperada
   function esperado(ctx, calc, itemsPorDia) {
     const combos = E.combosActivos(ctx);
@@ -7875,9 +8172,10 @@ window.CLOUD = {
         lista.map(function (it, i) {
           const r = s.recetas.find(function (x) { return x.id === it.recetaId; });
           if (!r) return null;
-          return h('div', { class: 'plan-it' }, h('span', { class: 'nm' }, r.nombre),
+          const fila = h('div', { class: 'plan-it' }, h('span', { class: 'nm' }, r.nombre),
             App.numInput({ fk: 'plan-' + d[0] + '-' + i, cls: 'w60', value: it.porciones, onChange: function (n) { Store.mutate(function (st) { st.plan[d[0]][i].porciones = n; }, 'pl' + d[0] + i); } }),
             App.btn('✕', function () { Store.mutate(function (st) { st.plan[d[0]].splice(i, 1); }); }, 'small ghost'));
+          return E.esArmable(r) ? h('div', { class: 'stack mini' }, fila, eleccionArmable(s, ctx, r, it, d[0], i)) : fila;
         }), sel, opcionalesDia(s, ctx, F, d, derivadas),
         bebs ? h('small', { class: 'mut' }, '≈ ' + bebs + ' bebestibles para los combos') : null);
     };
@@ -8039,7 +8337,7 @@ window.CLOUD = {
         (c.minimoPedido > 0 ? ', mínimo ' + App.clp(c.minimoPedido) : '') + (c.alcance === 'seleccionados' ? ' en productos seleccionados' : '') +
         (c.plazoDias === 0 ? ', recibe hoy' + (c.horaCorte ? ' comprando antes de ' + c.horaCorte : '') : '') + (c.hasta ? ' (hasta ' + fmtFecha(c.hasta) + ')' : ''));
     });
-    if (p.retiro !== false) out.push('ir a buscar' + (Number(p.costoVisita) > 0 ? ' (' + App.clp(p.costoVisita) + ')' : ''));
+    if (p.retiro !== false) out.push('ir a buscar' + (Number(p.costoVisita) > 0 ? ' (' + App.clp(p.costoVisita) + ')' : '') + (p.retiroMinimoOnline > 0 && p.retiroOnline !== false ? ' · pedido online desde ' + App.clp(p.retiroMinimoOnline) : ''));
     return out.join(' · ') || '—';
   }
   function fmtFecha(iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(2, 4) : ''; }
@@ -8061,7 +8359,7 @@ window.CLOUD = {
   };
   App.badgeMembresia = function (p) {
     if (!E.tieneMembresia(p)) return null;
-    return E.membresiaActiva(App.ctx(), p) ? App.badge('⭐ ' + p.membresia.nombre, 'good') : App.badge('⭐ ' + p.membresia.nombre + ' (inactiva)', '');
+    return E.membresiaActiva(App.ctx(), p) ? App.badge('⭐ ' + p.membresia.nombre, 'good') : App.badge('⭐ ' + p.membresia.nombre + (E.membresiaObligatoria(p) ? ' (inactiva: no se compra aquí)' : ' (inactiva)'), E.membresiaObligatoria(p) ? 'warn' : '');
   };
   const ESTADO_PROMO = { vigente: ['vigente', 'good'], programada: ['programada', 'info'], vencida: ['vencida', ''], inactiva: ['desactivada', ''], 'sin-membresia': ['requiere membresía activa', 'warn'], usada: ['ya usada', ''] };
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -8202,7 +8500,10 @@ window.CLOUD = {
         h('div', { class: 'form-grid' },
           h('label', null, 'Nombre de la membresía', App.textInput({ fk: 'pv-mn-' + p.id, value: m.nombre || '', ph: 'ej. Jumbo Prime, socio Central Mayorista', onChange: function (v) { setM('nombre', v, 'pmn' + p.id); } })),
           h('label', null, 'Costo mensual (CLP)', App.numInput({ fk: 'pv-mc-' + p.id, value: m.costoMensual || 0, onChange: function (n) { setM('costoMensual', n, 'pmc' + p.id); } })),
-          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!m.activa, disabled: !E.tieneMembresia(p), onchange: function (e) { setM('activa', e.target.checked); } }), ' Membresía activa')),
+          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!m.activa, disabled: !E.tieneMembresia(p), onchange: function (e) { setM('activa', e.target.checked); } }), ' Membresía activa'),
+          h('label', { class: 'chk', 'data-fk': 'pv-mo-' + p.id }, h('input', { type: 'checkbox', checked: !!m.obligatoria, disabled: !E.tieneMembresia(p), onchange: function (e) { setM('obligatoria', e.target.checked); } }), ' Solo compran socios (todo precio la exige)'),
+          h('label', null, 'Requisitos para inscribirse (opcional)', App.textInput({ fk: 'pv-mq-' + p.id, value: m.requisitos || '', ph: 'ej. cédula + patente o rol del SII', onChange: function (v) { setM('requisitos', v, 'pmq' + p.id); } }))),
+        E.membresiaObligatoria(p) && !E.membresiaActiva(App.ctx(), p) ? h('div', { class: 'aviso warn' }, '⭐ Aquí solo compran socios y la membresía está inactiva: ningún precio de ' + p.nombre + ' entra a los costos ni a la lista de compras.') : null,
         ev ? h('div', { class: 'help' }, ev.activa
           ? (ev.ahorroMes > 0 ? 'Con tus precios de socio ahorras ~' + App.clp(ev.ahorroMes) + '/mes' + (ev.costoMensual ? ' (cuesta ' + App.clp(ev.costoMensual) + '/mes)' : '') + '.' : 'Aún no hay precios de socio registrados para insumos que usas.')
           : (ev.ahorroMes > 0 ? h('span', { class: ev.neto > 0 ? 'good-t' : '' }, 'Activarla te ahorraría ~' + App.clp(ev.ahorroMes) + '/mes en ' + ev.insumos.length + ' insumo(s)' + (ev.costoMensual ? ', menos ' + App.clp(ev.costoMensual) + ' que cuesta = ' + App.sg(ev.neto) + '/mes' : '') + '.')
@@ -8216,6 +8517,9 @@ window.CLOUD = {
             onchange: function (e) { upd(p, function (x) { x.despacho = Object.assign({ ofrece: false }, x.despacho || {}); x.despacho.horaCorte = e.target.value || ''; }); } }))),
         h('h4', null, 'Compras online'),
         h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: p.retiroOnline !== false, onchange: function (e) { upd(p, function (x) { x.retiroOnline = e.target.checked; }); } }), ' Se pueden retirar en tienda los pedidos online'),
+        h('label', { class: 'row gap wrap' }, h('span', { class: 'mut' }, 'Compra mínima para retirar un pedido online'),
+          App.numInput({ fk: 'pv-rm-' + p.id, cls: 'w100', value: p.retiroMinimoOnline, ph: '—', onChange: function (n) { upd(p, function (x) { x.retiroMinimoOnline = n > 0 ? n : undefined; }, 'prm' + p.id); },
+            onEmpty: function () { upd(p, function (x) { delete x.retiroMinimoOnline; }); } }), h('small', { class: 'mut' }, 'En el local no hay mínimo.')),
         h('p', { class: 'help' }, 'Los precios marcados "solo online" obligan a pedir online a este proveedor: se reciben con despacho o, si lo permite, retirando el pedido.'),
         h('h4', null, 'Promociones de despacho'),
         promos.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl compact' },
