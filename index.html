@@ -49,10 +49,50 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 input.wide { width: 100%; } input.ing { width: 100%; min-width: 180px; } input.alt { width: 120px; }
 
 /* header */
-.top { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 16px; }
+.cab { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); }
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 16px; }
+.cab > .esc-banner, .cab > .demo-banner { margin: 0 16px 8px; }
+.menu-ctl { display: flex; gap: 4px; }
+/* deshacer siempre a la vista: abajo a la derecha, por debajo de avisos, ventanas y visores */
+.undo-flota { position: fixed; z-index: 150; right: 16px; bottom: 16px; display: flex; gap: 4px; align-items: center; padding: 5px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; box-shadow: 0 4px 18px rgba(0,0,0,.25); }
+.undo-flota .btn { border-radius: 999px; }
+.undo-flota .undo-btn:not(:disabled) { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+@media (max-width: 600px) { .undo-flota { right: 10px; bottom: 10px; } }
+.tab .ico { display: none; }
+.tab { display: flex; align-items: center; gap: 8px; }
+.menu-compacto .tab .ico, .menu-lat .tab .ico { display: inline-block; width: 1.4em; text-align: center; }
+.menu-compacto .tab .lbl, .menu-compacto .brand-txt { display: none; }
+.menu-compacto .tab { padding: 7px 10px; } .menu-compacto .brand { min-width: 0; }
+.menu-compacto .tab .count { margin-left: 0; }
+@media (min-width: 981px) {
+  #app.menu-lat { --nav-w: 232px; padding-left: var(--nav-w); }
+  #app.menu-lat.menu-compacto { --nav-w: 64px; }
+  .menu-lat .cab { display: contents; }
+  .menu-lat .top { position: fixed; z-index: 20; left: 0; top: 0; bottom: 0; width: var(--nav-w); flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 10px; padding: 12px 10px; overflow-y: auto; background: var(--surface); border-right: 1px solid var(--line); }
+  .menu-lat .brand { min-width: 0; }
+  .menu-lat .tabs { flex: 1 1 auto; flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+  .menu-lat .tab { position: relative; }
+  .menu-lat.menu-compacto .tab { justify-content: center; padding: 8px 0; }
+  .menu-lat.menu-compacto .tab .count { position: absolute; top: 0; right: 4px; margin: 0; min-width: 16px; font-size: 10px; }
+  .menu-lat.menu-compacto .brand { flex-direction: column; gap: 4px; }
+  .menu-lat.menu-compacto .brand-btn { flex: none; margin: 0; padding: 0 8px; }
+  .menu-lat.menu-compacto .brand, .menu-lat.menu-compacto .menu-ctl { justify-content: center; }
+  .menu-lat.menu-compacto .menu-ctl { flex-direction: column; }
+  .menu-lat.menu-compacto .tools { display: none; }
+  .menu-lat .tools { flex-direction: column; align-items: stretch; }
+  .menu-lat .tools .user { flex-wrap: wrap; }
+  .menu-lat .cab > .esc-banner, .menu-lat .cab > .demo-banner { margin: 8px 16px 0; }
+}
 .brand { display: flex; align-items: center; gap: 10px; min-width: 190px; }
+.brand-btn { flex: 1 1 auto; display: flex; align-items: center; background: none; border: 0; border-radius: 8px; padding: 4px 6px; margin: -4px -6px -4px 0; color: inherit; text-align: left; cursor: pointer; }
+.brand-btn:hover { background: var(--surface2); }
+.brand-txt { display: block; }
+.brand-chev { margin-left: auto; padding-left: 6px; font-size: 20px; line-height: 1; color: var(--mut); }
+.brand-btn:hover .brand-chev { color: var(--accent); }
+.logo { text-decoration: none; border-radius: 8px; }
+.logo:hover { background: var(--surface2); }
 .brand b { display: block; font-size: 15px; } .brand small { display: block; line-height: 1.1; }
-.logo { font-size: 24px; }
+.logo { font-size: 30px; line-height: 1; }   /* más grande que antes, pero sin pasar el alto del título de dos líneas */
 .tabs { display: flex; gap: 2px; overflow-x: auto; flex: 1 1 auto; scrollbar-width: thin; }
 .tab { padding: 7px 12px; border-radius: 8px; color: var(--ink); text-decoration: none; white-space: nowrap; font-weight: 500; }
 .tab:hover { background: var(--surface2); }
@@ -267,11 +307,12 @@ select.w-prov { width: 160px; }
   .split, .split.wide, .split.wide:has(.drawer) { grid-template-columns: minmax(0, 1fr); }
   .pane-list, .drawer { position: static; max-height: none; } .pane-list .scroll { max-height: 320px; }
   .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); }
-  .top { position: static; } .tabs { flex-wrap: wrap; overflow: visible; } .main { padding: 10px; } .top { padding: 8px 10px; } .brand small { display: none; } .brand { min-width: 0; }
+  .cab { position: static; } .menu-pos { display: none; } .tabs { flex-wrap: wrap; overflow: visible; } .main { padding: 10px; } .top { padding: 8px 10px; } .brand small { display: none; } .brand { min-width: 0; }
   .ficha { padding: 14px; } .param { flex-direction: column; align-items: flex-start; }
 }
 @media print {
-  body { background: #fff; color: #000; } .ac-lista, .ac-ghost, .ayuda-tip, .pie, .top, .noprint, .pane-list, .btn, .toast, .esc-banner { display: none !important; }
+  body { background: #fff; color: #000; } .ac-lista, .ac-ghost, .ayuda-tip, .pie, .cab, .top, .noprint, .pane-list, .btn, .toast, .esc-banner { display: none !important; }
+  #app.menu-lat { padding-left: 0; }
   .main { padding: 0; max-width: none; } .split, .split.cocina { display: block; } .card, .ficha { box-shadow: none; border: 0; break-inside: avoid; }
   .ficha { page-break-after: always; padding: 0; } .tbl td, .tbl th { color: #000; }
 }
@@ -319,9 +360,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-10T00:42:20Z">
+<meta name="build" content="2026-10-10T03:25:41Z">
 <script>
-window.BUILD = "2026-10-10T00:42:20Z";
+window.BUILD = "2026-10-10T03:25:41Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -4416,30 +4457,69 @@ window.CLOUD = {
     try { if (f.s != null) el.setSelectionRange(f.s, f.e); } catch (e) { /* inputs sin selección */ }
   }
 
-  const NAV = [['panel', 'Panel'], ['platos', 'Platos y PVP'], ['recetas', 'Recetas'], ['insumos', 'Insumos y compras'], ['alternativas', 'Alternativas'],
-    ['cocina', 'Cocina'], ['cotizaciones', 'Cotizaciones'], ['compras', 'Lista de compras'], ['proveedores', 'Proveedores'], ['ajustes', 'Ajustes'], ['guia', '❓ Guía'], ['historial', 'Historial'], ['usuarios', 'Usuarios']];
+  // [ruta, texto, ícono]: el ícono es lo único visible en el modo compacto
+  const NAV = [['panel', 'Panel', '📊'], ['platos', 'Platos y PVP', '🍽'], ['recetas', 'Recetas', '📖'], ['insumos', 'Insumos y compras', '🥕'], ['alternativas', 'Alternativas', '🔀'],
+    ['cocina', 'Cocina', '🍳'], ['cotizaciones', 'Cotizaciones', '💬'], ['compras', 'Lista de compras', '🛒'], ['proveedores', 'Proveedores', '🚚'], ['ajustes', 'Ajustes', '⚙'], ['guia', 'Guía', '❓'], ['historial', 'Historial', '🕘'], ['usuarios', 'Usuarios', '👥']];
+
+  // preferencia de menú (posición y compacto): vive solo en este navegador, no en los datos del negocio
+  const NAV_KEY = 'colaciones.menu';
+  function leerNav() {
+    try { const v = JSON.parse(localStorage.getItem(NAV_KEY) || '{}'); return { pos: v.pos === 'lat' ? 'lat' : 'top', compacto: !!v.compacto }; }
+    catch (e) { return { pos: 'top', compacto: false }; }
+  }
+  App.menu = leerNav();
+  App.cambiarMenu = function (cambio) {
+    Object.assign(App.menu, cambio);
+    try { localStorage.setItem(NAV_KEY, JSON.stringify(App.menu)); } catch (e) { /* sin almacenamiento: vale solo mientras la página siga abierta */ }
+    App.render();
+  };
 
   function headerNode() {
     const s = Store.get(), esc = App.escenario(), staff = App.esStaff();
     const guardado = App.nube.activo ? App.textoGuardado() : Store.storageOk() ? (Store.lastSaved() ? 'Guardado ' + Store.lastSaved().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' }) : 'Autoguardado activo') : 'Sin autoguardado: exporta un respaldo';
-    return h('header', { class: 'top' },
-      h('div', { class: 'brand' }, h('span', { class: 'logo' }, '🍲'), h('div', null, h('b', null, 'Colaciones Cerro Jiménez'), h('small', null, 'Costeo, recetas y compras'))),
+    const compacto = App.menu.compacto, lat = App.menu.pos === 'lat';
+    // un clic en un hueco del menú (no sobre un enlace, botón o texto) hace lo mismo que el título
+    const huecoMenu = function (ev) { if (ev.target === ev.currentTarget || ev.target.matches('.brand, .tabs, .tools, .menu-ctl')) App.cambiarMenu({ compacto: !compacto }); };
+    return h('div', { class: 'cab' }, h('header', { class: 'top', onclick: huecoMenu },
+      // el título es el control para minimizar / expandir el menú
+      // el ícono lleva a la página de inicio; el resto del título minimiza / expande
+      h('div', { class: 'brand' },
+        h('a', { class: 'logo', href: '#/' + App.vistaInicial(), title: 'Ir al inicio', 'aria-label': 'Ir al inicio' }, '🍲'),
+        h('button', { class: 'brand-btn', type: 'button', onclick: function () { App.cambiarMenu({ compacto: !compacto }); }, 'aria-expanded': compacto ? 'false' : 'true',
+          title: compacto ? 'Expandir el menú' : 'Minimizar el menú (solo íconos)' },
+          h('span', { class: 'brand-txt' }, h('b', null, 'Colaciones Cerro Jiménez'), h('small', null, 'Costeo, recetas y compras')),
+          h('span', { class: 'brand-chev', 'aria-hidden': 'true' }, compacto ? '›' : '‹'))),
+      h('div', { class: 'menu-ctl' },
+        h('button', { class: 'btn ghost small menu-pos', type: 'button', onclick: function () { App.cambiarMenu({ pos: lat ? 'top' : 'lat' }); },
+          title: lat ? 'Mover el menú arriba' : 'Mover el menú al costado' }, lat ? '⬒' : '◧', compacto ? null : h('span', { class: 'menu-pos-txt' }, lat ? ' Menú arriba' : ' Menú al costado'))),
       h('nav', { class: 'tabs', role: 'tablist' }, NAV.filter(function (n) { return App.puedeVer(n[0]); }).map(function (n) {
         const pend = n[0] === 'cotizaciones' && App.cotizacionesPendientes ? App.cotizacionesPendientes() : n[0] === 'proveedores' && App.urgenciasAbiertas ? App.urgenciasAbiertas() + (App.campanasPorCompletar ? App.campanasPorCompletar() : 0) : 0;
-        return h('a', { href: '#/' + n[0], class: 'tab' + (App.route.name === n[0] ? ' on' : ''), role: 'tab' }, n[1], pend ? h('span', { class: 'count' }, pend) : null);
+        return h('a', { href: '#/' + n[0], class: 'tab' + (App.route.name === n[0] ? ' on' : ''), role: 'tab', 'aria-label': n[1], title: compacto ? n[1] : null },
+          h('span', { class: 'ico', 'aria-hidden': 'true' }, n[2]), h('span', { class: 'lbl' }, n[1]), pend ? h('span', { class: 'count' }, pend) : null);
       })),
       h('div', { class: 'tools' },
         !staff ? null : App.select({ cls: 'esc-sel', fk: 'esc-sel', value: s.escenarioActivo || '', options: [['', 'Datos reales']].concat(s.escenarios.map(function (e) { return [e.id, '🧪 ' + e.nombre]; })),
           onChange: function (v) { Store.mutate(function (st) { st.escenarioActivo = v || null; }); } }),
-        !staff ? null : h('button', { class: 'btn ghost', onclick: function () { Store.undo(); }, disabled: !Store.canUndo(), title: 'Deshacer (Ctrl+Z)' }, '↶ Deshacer'),
         !(staff || App.nube.activo) ? null : h('small', { class: 'saved' + ((App.nube.activo ? App.nube.guardado.estado === 'error' : !Store.storageOk()) ? ' bad' : '') }, guardado),
-        App.usuarioHeader ? App.usuarioHeader() : null),
+        App.usuarioHeader ? App.usuarioHeader() : null)),
       esc ? h('div', { class: 'esc-banner' }, h('b', null, '🧪 Simulación: ' + esc.nombre), ' — los números de toda la app incluyen este escenario; tus datos reales no cambian.',
         App.btn('Aplicar a datos reales', function () { App.confirm('¿Aplicar los cambios de "' + esc.nombre + '" a tus precios y recetas reales?', function () { App.aplicarEscenario(esc.id); }, 'Aplicar'); }, 'small primary'),
         App.btn('Salir', function () { Store.mutate(function (st) { st.escenarioActivo = null; }); }, 'small'),
         App.btn('Descartar', function () { Store.mutate(function (st) { st.escenarios = st.escenarios.filter(function (x) { return x.id !== esc.id; }); st.escenarioActivo = null; }); }, 'small danger')) : null,
       App.bannerDemo ? App.bannerDemo() : null, App.bannerVersion ? App.bannerVersion() : null);
   }
+  // panel flotante de deshacer/rehacer: siempre a la vista, en cualquier página y con cualquier menú
+  function panelDeshacer() {
+    if (!App.esStaff()) return null;
+    const hay = Store.canUndo(), rehay = Store.canRedo();
+    return h('div', { class: 'undo-flota noprint', role: 'group', 'aria-label': 'Deshacer y rehacer' },
+      h('button', { class: 'btn undo-btn', type: 'button', disabled: !hay, onclick: function () { Store.undo(); },
+        title: hay ? 'Deshacer el último cambio (Ctrl+Z)' : 'No hay cambios que deshacer' }, '↶ Deshacer'),
+      h('button', { class: 'btn ghost small', type: 'button', disabled: !rehay, onclick: function () { Store.redo(); },
+        title: rehay ? 'Rehacer lo que deshiciste' : 'No hay nada que rehacer', 'aria-label': 'Rehacer' }, '↷'));
+  }
+  // clases del menú sobre #app; la pantalla de acceso (sin menú) las quita
+  function claseMenu(root, con) { root.classList.toggle('menu-lat', con && App.menu.pos === 'lat'); root.classList.toggle('menu-compacto', con && App.menu.compacto); }
 
   App.render = function () {
     const f = captureFocus();
@@ -4447,12 +4527,13 @@ window.CLOUD = {
     document.querySelectorAll('[data-sk]').forEach(function (el) { scrolls[el.dataset.sk] = el.scrollTop; });
     const y = window.scrollY;
     const root = document.getElementById('app');
-    if (App.nube.activo && App.nube.fase !== 'listo') { root.replaceChildren(App.pantallaAcceso()); document.title = 'Colaciones'; return; }
+    if (App.nube.activo && App.nube.fase !== 'listo') { claseMenu(root, false); root.replaceChildren(App.pantallaAcceso()); document.title = 'Colaciones'; return; }
+    claseMenu(root, true);
     const view = App.views[App.route.name] || App.views.panel;
     let body;
     try { body = view(App.route.arg); }
     catch (err) { console.error(err); body = h('div', { class: 'card' }, h('h3', null, 'Error al mostrar la vista'), h('pre', null, String(err && err.stack || err))); }
-    root.replaceChildren(headerNode(), h('main', { class: 'main view-' + App.route.name }, body), App.pieAyudas ? App.pieAyudas() : null);
+    root.replaceChildren(headerNode(), h('main', { class: 'main view-' + App.route.name }, body), App.pieAyudas ? App.pieAyudas() : null, panelDeshacer());
     if (App.aplicarAC) App.aplicarAC(root);   // antes de restaurar el foco
     if (App.aplicarAyudas) App.aplicarAyudas(root);   // antes de restaurar el foco: la ayuda del campo en edición reaparece sola
     document.querySelectorAll('[data-sk]').forEach(function (el) { if (scrolls[el.dataset.sk] != null) el.scrollTop = scrolls[el.dataset.sk]; });
@@ -4516,7 +4597,7 @@ window.CLOUD = {
   }
 
   function offsetSuperior() {
-    const top = document.querySelector('.top');
+    const top = document.querySelector('.cab');   // con el menú lateral es "display: contents": no es sticky y no resta alto
     return top && getComputedStyle(top).position === 'sticky' ? top.getBoundingClientRect().height : 0;
   }
 
