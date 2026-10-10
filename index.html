@@ -155,6 +155,8 @@ label.chk { flex-direction: row; align-items: center; gap: 6px; color: var(--ink
 .tbl.compact td { padding: 4px 6px; } .tbl.compact th { padding: 4px 6px; }
 .tbl tfoot td { font-weight: 600; border-top: 2px solid var(--line); }
 .tbl.sel tbody tr { cursor: pointer; } .tbl.sel tbody tr:hover, .tbl tr.link:hover { background: var(--surface2); }
+.th-flota { position: fixed; z-index: 15; overflow: hidden; background: var(--surface); box-shadow: 0 2px 6px rgba(0,0,0,.18); } .th-flota[hidden] { display: none; } .th-flota table { max-width: none; }
+@media print { .th-flota { display: none !important; } }
 .tbl tr.link { cursor: pointer; } .tbl td.link { cursor: pointer; }
 .tbl tr.on { background: var(--accent-soft); } .tbl tr.off { opacity: .55; } .tbl tr.en-oferta td { background: var(--oferta-soft); } .tbl tr.usada-normal td { background: var(--uso-soft); } .tbl tr.usada-temp td { background: var(--uso-temp-soft); } .tbl tr.warnrow td { background: var(--warn-soft); } .tbl tr.usada td:first-child { border-left: 3px solid var(--accent); }
 .tbl th.sortable { cursor: pointer; user-select: none; } .tbl th.on { color: var(--ink); }
@@ -317,9 +319,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-07T05:04:56Z">
+<meta name="build" content="2026-10-10T00:42:20Z">
 <script>
-window.BUILD = "2026-10-07T05:04:56Z";
+window.BUILD = "2026-10-10T00:42:20Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -364,6 +366,8 @@ window.CLOUD = {
     toleranciaAlternativasPct: 10, // ± % de costo para sugerir una entrada/ensalada/postre alternativa del día
     ivaRecuperable: 'potencial', // no | potencial | si — 'si': lo comprado con factura se costea sin IVA (crédito fiscal)
     grasaMaxLinea: { 'Gourmet / premium': 7, 'Alto en proteína': 4 }, // % máximo de grasa (carnes molidas) que exige cada línea de menú
+    organicoLineas: [],       // líneas de menú cuyos platos usan verduras y frutas orgánicas
+    cleanLineas: [],          // líneas de menú cuyos platos usan procesados y envasados clean food
     hoy: null                 // ISO yyyy-mm-dd; null = fecha actual
   };
 
@@ -740,9 +744,11 @@ window.CLOUD = {
     ctx.memoMinimos = ctx.memoMinimos || new Map();
     if (ctx.memoMinimos.has(e.c.id)) return ctx.memoMinimos.get(e.c.id);
     const cx = variante(ctx, { minimosCumplidos: true }), items = [];
-    usoSemanalInsumos(cx).uso.forEach(function (q, id) {
-      const o = q > 0 ? costoInsumo(cx, id).oferta : null, pv = o && proveedorDe(cx, o);
-      if (pv && pv.id === e.p.id && o.formatoQty > 0) items.push(compraConOferta(cx, o, q));
+    const uso = usoSemanalInsumos(cx).uso;
+    uso.forEach(function (q, id) {
+      const rq = q > 0 ? conservacionCompra(uso, id).cons : null;
+      const o = q > 0 ? costoInsumo(cx, id, rq).oferta : null, pv = o && proveedorDe(cx, o);
+      if (pv && pv.id === e.p.id && o.formatoQty > 0) items.push(compraConOferta(cx, o, q, rq ? rq.uso : null));
     });
     const monto = montoParaMinimo(items, e.c);
     const r = { alcanza: monto >= minimo, minimo: minimo, monto: monto, falta: monto >= minimo ? 0 : minimo - monto };
@@ -827,11 +833,12 @@ window.CLOUD = {
             if (!(x.formatoQty > 0) || !(x.precio > 0)) return;
             const px = proveedorDe(cx, x);
             if (!px || px.id !== p.id) return;
-            const cc = compraConOferta(cx, x, it.usable);
+            if (!sirveOferta(x, it.req)) return;
+            const cc = compraConOferta(cx, x, it.usable, it.uso);
             if (!c || cc.bruto < c.bruto) c = cc;
           });
           if (!c) { ok = false; return; }
-        } else if (excl.length && o) c = compraConOferta(cx, o, it.usable);
+        } else if (excl.length && o) c = compraConOferta(cx, o, it.usable, it.uso);
         its.push(Object.assign({}, it, c));
       });
       if (!ok) continue;
@@ -890,7 +897,7 @@ window.CLOUD = {
             if (o.disponible === false || o.pendiente || fueraDeVigencia(cx, o) || !ofertaHabilitada(cx, o) || !(o.formatoQty > 0) || !(o.precio > 0) || !sirveParaFila(o, f)) return;
             const pv = proveedorDe(cx, o);
             if (!pv || pv.id !== prov.id) return;
-            const c = compraConOferta(cx, o, f.usable);
+            const c = compraConOferta(cx, o, f.usable, f.uso);
             if (!mejor || c.bruto < mejor.bruto) mejor = c;
           });
           if (aqui) { cesta += f.costo; productos.push({ nombre: f.nombre, bruto: f.costo, ahorro: 0, yaAqui: true }); }
@@ -971,18 +978,26 @@ window.CLOUD = {
   function infoCostos(ctx, o) { return infoPrecio(ctx, o, promoCantidadVigente(ctx, o) ? packsSemanales(ctx, o) : 0, true); }
   function precioOferta(ctx, o) { return infoCostos(ctx, o).precio; }
 
-  // costo por unidad base utilizable de una oferta, tal como se paga (IVA incluido si lo trae)
-  function costoBrutoOferta(ctx, o) {
+  // parte utilizable de lo comprado: la de la cotización, o la del insumo. Una verdura puede rendir distinto según el uso
+  // (oferta.rendimientoUso: zapallo entero asado y raspado para puré rinde más que pelado en cubos). La pulpa o el puré
+  // pueden pasar de 100%: es la verdura cruda utilizable que reemplaza cada kilo.
+  function rendOferta(ctx, o, uso) {
+    const ru = uso && o.rendimientoUso ? num(o.rendimientoUso[uso]) : null;
+    if (ru > 0) return ru;
     const ins = ctx.insumos.get(o.insumoId);
     const rend = o.rendimiento != null ? o.rendimiento : (ins && ins.rendimiento != null ? ins.rendimiento : 1);
-    const denom = (o.formatoQty || 0) * (rend || 1);
+    return rend || 1;
+  }
+  // costo por unidad base utilizable de una oferta, tal como se paga (IVA incluido si lo trae)
+  function costoBrutoOferta(ctx, o, uso) {
+    const denom = (o.formatoQty || 0) * rendOferta(ctx, o, uso);
     return denom > 0 ? precioOferta(ctx, o) / denom : 0;
   }
 
   // costo neto (después de merma y, si el negocio recupera IVA y el proveedor da factura, sin IVA) por unidad base.
   // Una campaña que excluye las compras con factura no da crédito fiscal: se costea con IVA.
-  function costoNetoOferta(ctx, o) {
-    return costoBrutoOferta(ctx, o) / (infoCostos(ctx, o).sinFactura ? 1 : divisorIva(ctx, proveedorDe(ctx, o)));
+  function costoNetoOferta(ctx, o, uso) {
+    return costoBrutoOferta(ctx, o, uso) / (infoCostos(ctx, o).sinFactura ? 1 : divisorIva(ctx, proveedorDe(ctx, o)));
   }
   // productos en pack (3 latas, 6 bebidas): cuántas unidades trae el formato y lo de cada una.
   // En un insumo contado por unidad, el formato ya son unidades (pack de 6 = 6 un).
@@ -1001,9 +1016,7 @@ window.CLOUD = {
   }
   // precio de lista por unidad base utilizable (sin promociones; para comparar campañas)
   function unitLista(ctx, o) {
-    const ins = ctx.insumos.get(o.insumoId);
-    const rend = o.rendimiento != null ? o.rendimiento : (ins && ins.rendimiento != null ? ins.rendimiento : 1);
-    const denom = (o.formatoQty || 0) * (rend || 1);
+    const denom = (o.formatoQty || 0) * rendOferta(ctx, o);
     return denom > 0 && o.precio > 0 ? o.precio / denom : null;
   }
 
@@ -1037,33 +1050,50 @@ window.CLOUD = {
   }
 
   // oferta/costo vigente de un insumo según modo (preferida | barata | promedio) o fijación de escenario.
-  // cons ('refrigerado' | 'congelado'): solo las cotizaciones con esa conservación; si no hay ninguna, se costea con
-  // las que hay y el resultado lo dice (sinConservacion) para avisar.
+  // cons: exigencias a la cotización ({ conservacion, uso, organico, clean }, o solo la conservación como texto). Solo valen
+  // las cotizaciones que las cumplen; si ninguna cumple alguna, esa se deja de exigir (en el orden de ORDEN_REQ), se costea
+  // con las que hay y el resultado lo dice (sinCumplir, y sinConservacion si es la conservación) para avisar.
   function costoInsumo(ctx, insumoId, cons) {
-    cons = CONSERVACIONES.indexOf(cons) >= 0 ? cons : null;
-    const mk = cons ? insumoId + '@' + cons : insumoId;
+    const req = normReq(cons);
+    const mk = req ? insumoId + '@' + claveReq(req) : insumoId;
     if (ctx.memoInsumo.has(mk)) return ctx.memoInsumo.get(mk);
-    const sirve = function (o) { return !cons || o.conservacion === cons; };
+    let res;
+    if (!req) res = costoInsumoFiltrado(ctx, insumoId, null);
+    else {
+      const e = reqPosible(req, candidatasInsumo(ctx, insumoId));
+      res = Object.assign({}, e.req ? costoInsumoFiltrado(ctx, insumoId, e.req) : costoInsumo(ctx, insumoId), { reqEfectivo: e.req });
+      if (e.faltan.length) {
+        res.sinCumplir = e.faltan;
+        if (e.faltan.indexOf('conservacion') >= 0) res.sinConservacion = req.conservacion;
+      }
+    }
+    ctx.memoInsumo.set(mk, res);
+    return res;
+  }
+  // todas las cotizaciones que podrían entrar a los costos de un insumo (para saber qué exigencias se pueden cumplir)
+  function candidatasInsumo(ctx, insumoId) {
+    const todas = ctx.ofertasPorInsumo.get(insumoId) || [], disp = ofertasDisponibles(ctx, insumoId);
+    return todas.filter(function (o) {
+      return disp.indexOf(o) >= 0 || (!o.pendiente && ofertaHabilitada(ctx, o) && (!esTemporal(o) || oportunidadActiva(ctx, o)));
+    });
+  }
+  function costoInsumoFiltrado(ctx, insumoId, req) {
+    const sirve = function (o) { return !req || sirveOferta(o, req); }, uso = req ? req.uso : null;
     let res = { unit: 0, oferta: null, missing: true, modo: ctx.p.modoOferta };
     const pin = ctx.opts.ofertaElegida && ctx.opts.ofertaElegida[insumoId];
     let lista = ofertasDisponibles(ctx, insumoId).filter(sirve);
     if (!lista.length) lista = (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return !o.pendiente && !esTemporal(o) && ofertaHabilitada(ctx, o) && sirve(o); });
     // escenario (simulación) > oferta temporal o de campaña en uso mientras dure > modo normal
     const oport = ctx.opts.sinOportunidades || ctx.opts.sinPromos ? [] : (ctx.ofertasPorInsumo.get(insumoId) || []).filter(function (o) { return oportunidadActiva(ctx, o) && sirve(o); })
-      .map(function (o) { return { o: o, c: costoNetoOferta(ctx, o) }; }).filter(function (x) { return x.c > 0; });
-    if (cons && !(pin && ctx.ofertas.get(pin)) && !oport.length && !lista.length) {
-      res = Object.assign({}, costoInsumo(ctx, insumoId), { sinConservacion: cons });
-      ctx.memoInsumo.set(mk, res);
-      return res;
-    }
+      .map(function (o) { return { o: o, c: costoNetoOferta(ctx, o, uso) }; }).filter(function (x) { return x.c > 0; });
     if (pin && ctx.ofertas.get(pin)) {
       const o = ctx.ofertas.get(pin);
-      res = { unit: costoNetoOferta(ctx, o), oferta: o, missing: false, modo: 'fijada' };
+      res = { unit: costoNetoOferta(ctx, o, uso), oferta: o, missing: false, modo: 'fijada' };
     } else if (oport.length) {
       const b = oport.reduce(function (a, x) { return x.c < a.c ? x : a; });
       res = { unit: b.c, oferta: b.o, missing: false, modo: 'oportunidad' };
     } else if (lista.length) {
-      const costos = lista.map(function (o) { return { o: o, c: costoNetoOferta(ctx, o) }; });
+      const costos = lista.map(function (o) { return { o: o, c: costoNetoOferta(ctx, o, uso) }; });
       const barata = costos.reduce(function (a, b) { return b.c < a.c ? b : a; });
       if (ctx.p.modoOferta === 'barata') {
         res = { unit: barata.c, oferta: barata.o, missing: false, modo: 'barata' };
@@ -1076,8 +1106,142 @@ window.CLOUD = {
       }
       if (res.unit <= 0) res.missing = true; // precio 0 = sin precio
     }
-    ctx.memoInsumo.set(mk, res);
     return res;
+  }
+
+  /* ---------- exigencias a la cotización: conservación, uso, orgánico y clean food ----------
+   * Verduras y frutas (insumo.vegetal): un solo insumo con una cotización por cada forma de comprarlo:
+   *   oferta.forma = 'entero' | 'trozos' (porcionado, cubos, granos, picado) | 'pulpa' (puré, molido, pastelera),
+   *   oferta.pelado (true; false = con cáscara), oferta.organico, oferta.rendimientoUso = { trozos, molido } (si rinde distinto).
+   *   Fresco primero: si la línea o el insumo no admiten congelado, solo valen las cotizaciones frescas (conservación 'fresco').
+   * Procesados y envasados (insumo.procesado): oferta.clean = pocos ingredientes, sin colorantes, saborizantes ni preservantes artificiales.
+   * Línea de receta: uso ('trozos': la pulpa no sirve | 'molido': sirve todo), admiteCongelado, organico, clean.
+   * Una receta (r.organico, r.clean) o su línea de menú (params.organicoLineas / cleanLineas) exige orgánico o clean food en
+   * todo lo que lo admite, incluidas sus sub-recetas y la guarnición: se calcula en una variante del contexto (opts.exigir). */
+  const USOS = ['trozos', 'molido'];
+  const FORMAS = ['entero', 'trozos', 'pulpa'];
+  const REQ_CONSERVACION = ['refrigerado', 'congelado', 'fresco'];
+  // si ninguna cotización cumple todo, se mantienen las primeras: el uso es físico, la preferencia por fresco es lo primero que cede
+  const ORDEN_REQ = ['uso', 'organico', 'clean', 'conservacion'];
+  function normReq(x) {
+    if (!x) return null;
+    if (typeof x === 'string') return REQ_CONSERVACION.indexOf(x) >= 0 ? { conservacion: x } : null;
+    const r = {};
+    if (REQ_CONSERVACION.indexOf(x.conservacion) >= 0) r.conservacion = x.conservacion;
+    if (USOS.indexOf(x.uso) >= 0) r.uso = x.uso;
+    if (x.organico) r.organico = true;
+    if (x.clean) r.clean = true;
+    return Object.keys(r).length ? r : null;
+  }
+  // nombres para mostrar: 'congelado' → 🧊 congelado / congeladas; 'fresco' → 🌱 fresco / frescas
+  const NOMBRE_CONS = { congelado: ['🧊 congelado', 'congeladas', 'congelada'], refrigerado: ['❄️ refrigerado', 'refrigeradas', 'refrigerada'], fresco: ['🌱 fresco', 'frescas', 'fresca'] };
+  function etiquetaConservacion(c) { return NOMBRE_CONS[c] ? NOMBRE_CONS[c][0] : c || ''; }
+  function conservacionPlural(c) { return NOMBRE_CONS[c] ? NOMBRE_CONS[c][1] : c || ''; }
+  function conservacionSingular(c) { return NOMBRE_CONS[c] ? NOMBRE_CONS[c][2] : c || ''; }
+  function claveReq(r) { return r ? [r.conservacion || '', r.uso || '', r.organico ? 'org' : '', r.clean ? 'clean' : ''].join('|') : ''; }
+  function cumpleCampo(o, campo, v) {
+    if (campo === 'conservacion') return v === 'fresco' ? o.conservacion !== 'congelado' : o.conservacion === v;
+    if (campo === 'uso') return v !== 'trozos' || o.forma !== 'pulpa';
+    if (campo === 'organico') return o.organico === true;
+    if (campo === 'clean') return o.clean === true;
+    return true;
+  }
+  function sirveOferta(o, req) {
+    req = normReq(req);
+    return !req || ORDEN_REQ.every(function (k) { return req[k] == null || cumpleCampo(o, k, req[k]); });
+  }
+  // las exigencias que alguna de estas cotizaciones cumple (todas juntas); las demás quedan en faltan
+  function reqPosible(req, ofertas) {
+    req = normReq(req);
+    const keep = {}, faltan = [];
+    if (req) ORDEN_REQ.forEach(function (k) {
+      if (req[k] == null) return;
+      const prueba = Object.assign({}, keep); prueba[k] = req[k];
+      if (ofertas.some(function (o) { return sirveOferta(o, prueba); })) keep[k] = req[k]; else faltan.push(k);
+    });
+    return { req: normReq(keep), faltan: faltan };
+  }
+  function lineaEnLista(lista, linea) {
+    const k = normNombre(linea);
+    return !!k && (lista || []).some(function (x) { return normNombre(x) === k; });
+  }
+  // orgánico o clean food que una receta exige a todo lo suyo (además de lo que ya exige el contexto); null = nada nuevo
+  function exigenciasReceta(ctx, r) {
+    if (!r || ctx.opts.sinExigencias) return null;
+    const ex = ctx.opts.exigir || {};
+    const org = !!(r.organico || lineaEnLista(ctx.p.organicoLineas, r.linea)), cl = !!(r.clean || lineaEnLista(ctx.p.cleanLineas, r.linea));
+    if ((!org || ex.organico) && (!cl || ex.clean)) return null;
+    return { organico: !!(ex.organico || org), clean: !!(ex.clean || cl) };
+  }
+  // el contexto en que se calcula una receta: el mismo, o una variante que exige orgánico o clean food
+  function ctxPara(ctx, r) {
+    const x = exigenciasReceta(ctx, r);
+    if (!x) return ctx;
+    const v = variante(ctx, { exigir: x });
+    v.errors = ctx.errors;   // los avisos (ciclos) quedan en el contexto de quien pregunta
+    return v;
+  }
+  // texto: forma de compra de una verdura (entero | trozos | pulpa), orgánico, pelado / con cáscara; null si no lo dice
+  function formaEnTexto(texto) {
+    const t = normNombre(texto);
+    if (/\b(pure|pulpa|pastelera|molid[oa]s?|rallad[oa]s?)\b/.test(t)) return 'pulpa';
+    if (/\b(cubos?|trozos?|trozad[oa]s?|porcionad[oa]s?|picad[oa]s?|pluma|rodajas?|granos?|desgranad[oa]s?|bastones|laminad[oa]s?|juliana|en tiras)\b/.test(t)) return 'trozos';
+    if (/\b(enter[oa]s?|granel|unidad|1 un|x un|malla|atado)\b/.test(t)) return 'entero';
+    return null;
+  }
+  function organicoEnTexto(texto) { return /\borganic[oa]s?\b/.test(normNombre(texto)) || null; }
+  function peladoEnTexto(texto) {
+    const t = normNombre(texto);
+    if (/\bcon (cascara|piel)\b/.test(t)) return false;
+    if (/\b(pelad[oa]s?|sin (cascara|piel))\b/.test(t)) return true;
+    return null;
+  }
+  // una vez: qué insumos son verduras o frutas (orgánico, forma de compra, fresco primero) y cuáles procesados o envasados
+  // (clean food), según su categoría; un insumo con "congelado" en el nombre admite congelado. Las cotizaciones de verduras
+  // toman su forma, si son orgánicas y si vienen peladas de lo que dicen (marca, formato, nota o título de la página).
+  // Es una sugerencia: todo se puede cambiar en Insumos.
+  function asegurarVerduras(state) {
+    state.params = state.params || {};
+    if (state.params.verdurasV1) return;
+    const vegetales = {};
+    (state.insumos || []).forEach(function (i) {
+      const cat = normNombre(i.categoria), nom = normNombre(i.nombre);
+      if (i.vegetal == null && /\b(verduras?|frutas?|hortalizas?)\b/.test(cat)) i.vegetal = true;
+      if (i.procesado == null && i.vegetal !== true && (/\b(abarrotes?|conservas?|lacteos?|embutidos?|salsas?)\b/.test(cat) || /\b(longaniza|choricillo|tocino|salchichas?|jamon|vienesas?)\b/.test(nom)) &&
+        !/\bhuevos?\b/.test(nom)) i.procesado = true;
+      if (i.vegetal && i.admiteCongelado == null && /\bcongelad[oa]s?\b/.test(nom)) i.admiteCongelado = true;
+      if (i.vegetal) vegetales[i.id] = true;
+    });
+    (state.ofertas || []).forEach(function (o) {
+      if (!vegetales[o.insumoId]) return;
+      const t = [o.marca, o.formatoLabel, o.nota, o.tituloWeb].filter(Boolean).join(' ');
+      if (o.forma == null) { const f = formaEnTexto(t); if (f) o.forma = f; }
+      if (o.organico == null && organicoEnTexto(t)) o.organico = true;
+      if (o.pelado == null) { const pl = peladoEnTexto(t); if (pl != null) o.pelado = pl; }
+    });
+    state.params.verdurasV1 = true;
+  }
+  // ¿hay que revisar el rendimiento de esta cotización? (verduras: con cáscara o entera y sin merma, pelada con mucha merma,
+  // o marcado por revisar al cargarla con un rendimiento estimado). null = se ve bien.
+  function revisarRendimiento(ctx, o) {
+    const ins = ctx.insumos.get(o.insumoId);
+    if (!ins) return null;
+    const rd = rendOferta(ctx, o), propio = o.rendimiento != null;
+    if (o.rendimientoPorRevisar) return 'rendimiento estimado: pésalo al limpiar y corrígelo';
+    if (!ins.vegetal) return null;
+    if ((o.pelado === false || o.forma === 'entero') && rd >= 0.98) return 'viene ' + (o.pelado === false ? 'con cáscara' : 'entero') + ' y rinde ' + Math.round(rd * 100) + '%: revisa la merma';
+    if (o.pelado === true && rd < 0.9) return 'viene pelado y rinde ' + Math.round(rd * 100) + '%' + (propio ? '' : ' (el del insumo entero)') + ': revisa el rendimiento';
+    if (o.forma === 'pulpa' && rd < 1) return 'es pulpa o puré y rinde ' + Math.round(rd * 100) + '%: suele rendir 100% o más (verdura cruda que reemplaza)';
+    return null;
+  }
+  function rendimientosPorRevisar(ctx) {
+    const out = [];
+    (ctx.state.ofertas || []).forEach(function (o) {
+      if (o.disponible === false || ofertaVencida(ctx, o)) return;
+      const m = revisarRendimiento(ctx, o);
+      if (m) out.push({ oferta: o, insumoId: o.insumoId, msg: m });
+    });
+    return out;
   }
 
   /* ---------- calidad: % de grasa (carnes molidas) y conservación (refrigerado / congelado) ----------
@@ -1099,13 +1263,24 @@ window.CLOUD = {
     const v = key != null ? num(m[key]) : null;
     return v != null && v >= 0 ? v : null;
   }
+  // lo que exige una línea de receta: % de grasa máximo y, a la cotización, conservación, uso, orgánico y clean food.
+  // Las verduras van frescas salvo que la línea, el insumo o el contexto (una ocasión) admitan congelado.
+  // Orgánico y clean food que vienen de la receta o del contexto solo alcanzan a lo que los admite (verduras / procesados);
+  // marcados en la línea, valen para cualquier insumo.
   function requisitosLinea(ctx, r, ln) {
-    const esIns = !!ln && ln.tipo === 'insumo';
+    const esIns = !!ln && ln.tipo === 'insumo', ins = esIns ? ctx.insumos.get(ln.ref) : null;
     const gl = esIns ? num(ln.grasaMax) : null, gm = esIns ? grasaMaxLinea(ctx, r && r.linea) : null;
     const grasaMax = gl == null ? gm : gm == null ? gl : Math.min(gl, gm);
+    const ex = (!ctx.opts.sinExigencias && ctx.opts.exigir) || {};
+    let conservacion = esIns && REQ_CONSERVACION.indexOf(ln.conservacion) >= 0 ? ln.conservacion : null;
+    if (!conservacion && ins && ins.vegetal && !ins.admiteCongelado && !ln.admiteCongelado && !ctx.opts.admiteCongelado) conservacion = 'fresco';
     return { grasaMax: grasaMax, origenGrasa: grasaMax == null ? null : (gl != null && gl === grasaMax ? 'receta' : 'linea'),
-      conservacion: esIns && CONSERVACIONES.indexOf(ln.conservacion) >= 0 ? ln.conservacion : null };
+      conservacion: conservacion, uso: esIns && USOS.indexOf(ln.uso) >= 0 ? ln.uso : null,
+      organico: esIns && !!(ln.organico || (ex.organico && ins && ins.vegetal)),
+      clean: esIns && !!(ln.clean || (ex.clean && ins && ins.procesado)) };
   }
+  // lo que la línea exige a la cotización (para costoInsumo y las compras)
+  function reqDeLinea(req) { return normReq({ conservacion: req.conservacion, uso: req.uso, organico: req.organico, clean: req.clean }); }
   // insumos de la misma familia y unidad (sustitutos)
   function hermanosFamilia(ctx, ins) {
     if (!ins || !normNombre(ins.familia)) return [];
@@ -1131,14 +1306,14 @@ window.CLOUD = {
         // con un tope de grasa, una carne de la familia sin % de grasa no entra sola (solo si la línea la nombra: el insumo o sus alternativas)
         const nombrada = id === ln.ref || (ln.alternativas || []).indexOf(id) >= 0;
         if (!cumpleGrasa(ctx.insumos.get(id), req.grasaMax) || (req.grasaMax != null && !nombrada && grasaDe(ctx.insumos.get(id)) == null)) return;
-        const c = costoInsumo(ctx, id, req.conservacion);
+        const c = costoInsumo(ctx, id, reqDeLinea(req));
         if (c.missing) return;
         if (!mejor || c.unit < mejor.unit - 1e-9) mejor = { id: id, unit: c.unit };
       });
       if (mejor) { ref = mejor.id; elegida = mejor.id !== ln.ref; }
     }
     const ins = ln.tipo === 'insumo' ? ctx.insumos.get(ref) : null;
-    const res = { ref: ref, cons: req.conservacion, req: req, elegida: elegida, sustituida: !!sust, cumpleGrasa: !ins || cumpleGrasa(ins, req.grasaMax) };
+    const res = { ref: ref, cons: reqDeLinea(req), req: req, elegida: elegida, sustituida: !!sust, cumpleGrasa: !ins || cumpleGrasa(ins, req.grasaMax) };
     ctx.memoLinea.set(k, res);
     return res;
   }
@@ -1178,23 +1353,39 @@ window.CLOUD = {
     });
     state.params.grasaV1 = true;
   }
-  // conservación de las compras: la que exige alguna receta; si unas piden refrigerado y otras congelado, ninguna (y se avisa)
+  // exigencias de las compras: lo que piden las recetas que usan el insumo (acc.cons: insumo → claveReq → exigencias)
   function marcarConservacion(acc, insId, cons) {
-    if (!cons) return;
+    const req = normReq(cons);
+    if (!req) return;
     if (!acc.cons) acc.cons = new Map();
-    if (!acc.cons.has(insId)) acc.cons.set(insId, new Set());
-    acc.cons.get(insId).add(cons);
+    if (!acc.cons.has(insId)) acc.cons.set(insId, new Map());
+    acc.cons.get(insId).set(claveReq(req), req);
   }
-  function unirConservacion(dest, acc) { if (acc && acc.cons) acc.cons.forEach(function (s, id) { s.forEach(function (c) { marcarConservacion(dest, id, c); }); }); }
+  function unirConservacion(dest, acc) { if (acc && acc.cons) acc.cons.forEach(function (m, id) { m.forEach(function (r) { marcarConservacion(dest, id, r); }); }); }
+  // una sola compra por insumo cumple a todas: trozos sirve también para molido, y basta que una receta pida orgánico o clean.
+  // Si unas piden congelado y otras refrigerado o fresco, la conservación no se exige (conflicto: se avisa).
   function conservacionCompra(acc, insId) {
-    const s = acc && acc.cons && acc.cons.get(insId);
-    if (!s || !s.size) return { cons: null, conflicto: false };
-    return s.size === 1 ? { cons: s.values().next().value, conflicto: false } : { cons: null, conflicto: true };
+    const m = acc && acc.cons && acc.cons.get(insId);
+    if (!m || !m.size) return { cons: null, conflicto: false };
+    const cs = new Set(), u = {};
+    m.forEach(function (r) {
+      if (r.conservacion) cs.add(r.conservacion);
+      if (r.uso === 'trozos' || (r.uso && !u.uso)) u.uso = r.uso;
+      if (r.organico) u.organico = true;
+      if (r.clean) u.clean = true;
+    });
+    const conflicto = cs.has('congelado') && cs.size > 1;
+    if (!conflicto && cs.size) u.conservacion = cs.has('refrigerado') ? 'refrigerado' : cs.values().next().value;
+    return { cons: normReq(u), conflicto: conflicto };
   }
   // la que pide el plan semanal (urgencias, ficha del insumo)
   function conservacionInsumo(ctx, insId) { return conservacionCompra(necesidades(ctx), insId); }
-  // ¿sirve esta cotización para una fila de compra que exige una conservación? (si ninguna la cumple, sirven todas y la fila lo avisa)
-  function sirveParaFila(o, f) { return !f || !f.conservacion || !!f.sinConservacion || o.conservacion === f.conservacion; }
+  // ¿sirve esta cotización para una fila de compra? f.req = lo que se le pudo exigir (si ninguna cotización cumplía algo, eso ya no está)
+  function sirveParaFila(o, f) {
+    if (!f) return true;
+    if (f.req !== undefined) return sirveOferta(o, f.req);
+    return !f.conservacion || !!f.sinConservacion || cumpleCampo(o, 'conservacion', f.conservacion);
+  }
   // costo extra por unidad de usar una carne más magra que la más barata de su familia (solo insumos con % de grasa)
   function extraPorGrasa(ctx, insId, unit, cons) {
     const ins = ctx.insumos.get(insId);
@@ -1212,6 +1403,8 @@ window.CLOUD = {
   /* ---------- recetas ---------- */
   function costoReceta(ctx, id, stack) {
     stack = stack || [];
+    const cx = ctxPara(ctx, ctx.recetas.get(id));
+    if (cx !== ctx) return costoReceta(cx, id, stack);
     if (ctx.memoReceta.has(id)) return ctx.memoReceta.get(id);
     const r = ctx.recetas.get(id);
     const vacio = { id: id, lote: 0, porPorcion: 0, min: 0, max: 0, lineas: [], faltantes: [], ciclo: false };
@@ -1276,9 +1469,11 @@ window.CLOUD = {
     }
     const ins = ctx.insumos.get(ref);
     const c = costoInsumo(ctx, ref, cons);
+    const req = normReq(cons);
     return { tipo: 'insumo', ref: ref, nombre: ins ? ins.nombre : ('(insumo ' + ref + ')'), cantidad: cantidad,
       unidad: ins ? ins.unidad : '', unitCost: c.unit, subtotal: cantidad * c.unit, oferta: c.oferta, missing: c.missing || !ins,
-      grasaPct: grasaDe(ins), conservacion: cons || null, sinConservacion: c.sinConservacion || null };
+      grasaPct: grasaDe(ins), conservacion: req ? req.conservacion || null : null, sinConservacion: c.sinConservacion || null,
+      sinCumplir: c.sinCumplir || null };
   }
 
   /* ---------- platos armables (pasta × salsa) ----------
@@ -1314,6 +1509,12 @@ window.CLOUD = {
   /* ---------- plato (receta vendible) ---------- */
   function costoPlato(ctx, id, guarnicionId, eleccion) {
     const r = ctx.recetas.get(id);
+    // plato orgánico o clean food: todo se calcula exigiéndolo; extraExigencias = lo que cuesta de más (con imprevistos)
+    const cx = ctxPara(ctx, r);
+    if (cx !== ctx) {
+      const c = costoPlato(cx, id, guarnicionId, eleccion);
+      return Object.assign(c, conExtraExigencias(c, costoPlato(variante(ctx, { sinExigencias: true }), id, guarnicionId, eleccion), cx.opts.exigir));
+    }
     const p = ctx.p;
     const rc0 = costoReceta(ctx, id);
     const gid = guarnicionId !== undefined ? guarnicionId : (r ? r.guarnicionDefault : null);
@@ -1392,6 +1593,19 @@ window.CLOUD = {
     };
   }
 
+  function conExtraExigencias(c, sin, exigir) {
+    const extra = Math.max(0, (c.insumos + c.guarnicion + c.imprevistos) - (sin.insumos + sin.guarnicion + sin.imprevistos));
+    return { exigencias: exigir, extraExigencias: extra, costoSinExigencias: sin.costoTotal, pvpSugeridoSinExigencias: sin.pvpSugerido };
+  }
+  // el mismo plato exigiendo orgánico y/o clean food aunque no lo pida (una versión a pedido, una ocasión)
+  function costoPlatoExigiendo(ctx, id, exigir, guarnicionId, eleccion) {
+    const x = { organico: !!(exigir && exigir.organico), clean: !!(exigir && exigir.clean) };
+    if (!x.organico && !x.clean) return costoPlato(ctx, id, guarnicionId, eleccion);
+    const cx = variante(ctx, { exigir: x, sinExigencias: false });
+    const c = costoPlato(cx, id, guarnicionId, eleccion);
+    return Object.assign(c, conExtraExigencias(c, costoPlato(variante(ctx, { sinExigencias: true }), id, guarnicionId, eleccion), x));
+  }
+
   // todas las combinaciones de un plato armable con su costo y margen; las recetas "a pedido" solo si opts.aPedido.
   // alerta: food cost sobre el umbral o margen negativo; recargoSugerido: lo que faltaría al PVP para llegar al food cost objetivo.
   function combinaciones(ctx, id, opts) {
@@ -1452,6 +1666,8 @@ window.CLOUD = {
     acc = acc || new Map(); stack = stack || [];
     const r = ctx.recetas.get(id);
     if (!r || stack.indexOf(id) >= 0) return acc;
+    const cx = ctxPara(ctx, r);
+    if (cx !== ctx) return explotar(cx, id, mult, acc, stack);
     const porciones = r.porciones > 0 ? r.porciones : 1;
     (r.lineas || []).forEach(function (ln, idx) {
       const rl = resolverLinea(ctx, r, ln, idx), ref = rl.ref;
@@ -1472,6 +1688,7 @@ window.CLOUD = {
   function explotarPlato(ctx, id, porciones, eleccion) {
     porciones = porciones == null ? 1 : porciones;
     const r = ctx.recetas.get(id);
+    ctx = ctxPara(ctx, r);   // plato orgánico o clean food: la guarnición y lo elegido también
     const acc = explotar(ctx, id, porciones, new Map(), []);
     if (r && r.guarnicionDefault) explotar(ctx, r.guarnicionDefault, porciones, acc, []);
     resolverEleccion(ctx, r, eleccion).forEach(function (o) { if (o.id) explotar(ctx, o.id, porciones * o.cantidad, acc, [id]); });
@@ -1607,10 +1824,10 @@ window.CLOUD = {
       (ctx.ofertasPorInsumo.get(ref) || []).forEach(function (o) {
         if (o.disponible === false || o.pendiente) return;
         if (actual.oferta && o.id === actual.oferta.id) return;
-        const c = costoNetoOferta(ctx, o);
+        const c = costoNetoOferta(ctx, o, rl.cons && rl.cons.uso);
         opciones.push({ tipo: 'oferta', insumoId: ref, ofertaId: o.id, nombre: ins.nombre, lugar: o.lugar, marca: o.marca,
           unit: c, enOferta: enOferta(ctx, o), deltaPorPorcion: (c - actual.unit) * q, grasaPct: grasaDe(ins),
-          conservacion: o.conservacion || null, cumple: !rl.cons || o.conservacion === rl.cons });
+          conservacion: o.conservacion || null, forma: o.forma || null, organico: !!o.organico, clean: !!o.clean, cumple: sirveOferta(o, rl.cons) });
       });
       hermanosFamilia(ctx, ins).forEach(function (s) {
         if (!dietaCompatible(ctx, r, s)) return;
@@ -1619,9 +1836,10 @@ window.CLOUD = {
         opciones.push({ tipo: 'sustituto', insumoId: s.id, ofertaId: c.oferta ? c.oferta.id : null, nombre: s.nombre,
           lugar: c.oferta ? c.oferta.lugar : '', marca: c.oferta ? c.oferta.marca : '', unit: c.unit, enOferta: c.modo === 'oportunidad' || enOferta(ctx, c.oferta),
           deltaPorPorcion: (c.unit - actual.unit) * q, grasaPct: grasaDe(s), conservacion: c.oferta ? c.oferta.conservacion || null : null,
-          cumple: cumpleGrasa(s, rl.req.grasaMax) && !(rl.req.grasaMax != null && grasaDe(s) == null) && !c.sinConservacion, sinGrasa: grasaDe(s) == null && rl.req.grasaMax != null });
+          forma: c.oferta ? c.oferta.forma || null : null, organico: !!(c.oferta && c.oferta.organico), clean: !!(c.oferta && c.oferta.clean),
+          cumple: cumpleGrasa(s, rl.req.grasaMax) && !(rl.req.grasaMax != null && grasaDe(s) == null) && !c.sinCumplir, sinGrasa: grasaDe(s) == null && rl.req.grasaMax != null });
       });
-      // de más barato a más caro; las que no cumplen el % de grasa o la conservación exigidos, al final
+      // de más barato a más caro; las que no cumplen el % de grasa o lo exigido a la cotización, al final
       opciones.sort(function (a, b) { return (b.cumple - a.cumple) || (a.unit - b.unit); });
       res.push({ idx: idx, ref: ref, refOriginal: ln.ref, elegir: ln.elegir || null, elegida: rl.elegida, req: rl.req, cumpleGrasa: rl.cumpleGrasa,
         grasaPct: grasaDe(ins), nombre: ins.nombre, cantidad: ln.cantidad, unidad: ins.unidad, actual: actual,
@@ -1728,7 +1946,7 @@ window.CLOUD = {
     filas.forEach(function (f) {
       if (!f.proveedorId || !f.ofertaId || !(f.packs > 0)) return;
       if (!porProv.has(f.proveedorId)) porProv.set(f.proveedorId, []);
-      porProv.get(f.proveedorId).push(compraConOferta(ctx, ctx.ofertas.get(f.ofertaId), f.usable));
+      porProv.get(f.proveedorId).push(compraConOferta(ctx, ctx.ofertas.get(f.ofertaId), f.usable, f.uso));
     });
     const out = [];
     porProv.forEach(function (its, pid) {
@@ -1754,8 +1972,8 @@ window.CLOUD = {
       const usable = necesario - cubierto;
       const cc = conservacionCompra(acc, insId);
       const c = costoInsumo(ctx, insId, cc.cons);
-      const o = c.oferta;
-      const rend = o ? (o.rendimiento != null ? o.rendimiento : (ins.rendimiento != null ? ins.rendimiento : 1)) : 1;
+      const o = c.oferta, uso = cc.cons ? cc.cons.uso || null : null;
+      const rend = o ? rendOferta(ctx, o, uso) : 1;
       const comprarBase = rend > 0 ? usable / rend : usable;
       const formato = o && o.formatoQty > 0 ? o.formatoQty : 0;
       const packs = formato > 0 && comprarBase > 0 ? Math.ceil(comprarBase / formato - 1e-9) : 0;
@@ -1766,16 +1984,17 @@ window.CLOUD = {
         costo: formato > 0 ? packs * precioPorPack(ctx, o, packs) : usable * c.unit, costoTeorico: usable * c.unit, missing: c.missing,
         promoCantidad: o ? promoCantidadVigente(ctx, o) : null,
         necesario: necesario, cubiertoStock: cubierto, oportunidad: c.modo === 'oportunidad' ? hastaOferta(ctx, o) : null,
-        grasaPct: grasaDe(ins), conservacion: cc.cons, conflictoConservacion: cc.conflicto, sinConservacion: c.sinConservacion || null,
-        conservacionOferta: o ? o.conservacion || null : null });
+        grasaPct: grasaDe(ins), conservacion: cc.cons ? cc.cons.conservacion || null : null, conflictoConservacion: cc.conflicto, sinConservacion: c.sinConservacion || null,
+        conservacionOferta: o ? o.conservacion || null : null, exige: cc.cons, req: c.reqEfectivo || null, uso: uso, sinCumplir: c.sinCumplir || null,
+        forma: o ? o.forma || null : null, organico: !!(o && o.organico), clean: !!(o && o.clean) });
     });
     // descuentos a la vista: lo mismo a precio normal (sin campañas, ofertas temporales ni promos) y qué promociones bajan el precio
     if (!ctx.opts.sinPromos) {
       const normal = variante(ctx, { sinPromos: true });
       filas.forEach(function (f) {
         const o = f.ofertaId ? ctx.ofertas.get(f.ofertaId) : null;
-        const n = costoInsumo(normal, f.insumoId, f.conservacion), on = n.oferta;
-        f.costoNormal = on && on.formatoQty > 0 ? compraConOferta(normal, on, f.usable).bruto : (n.missing ? null : f.usable * n.unit);
+        const n = costoInsumo(normal, f.insumoId, f.exige), on = n.oferta;
+        f.costoNormal = on && on.formatoQty > 0 ? compraConOferta(normal, on, f.usable, f.uso).bruto : (n.missing ? null : f.usable * n.unit);
         f.ahorroPromo = f.costoNormal != null && f.costoNormal > f.costo + 0.5 ? f.costoNormal - f.costo : 0;
         f.promos = [];
         if (!o) return;
@@ -1824,17 +2043,19 @@ window.CLOUD = {
     const ins = ctx.insumos.get(insumoId);
     if (!ins || !(usable > 0)) return { opciones: [], normal: null };
     if (cons === undefined) cons = conservacionInsumo(ctx, insumoId).cons;
+    const req = normReq(cons), uso = req ? req.uso || null : null;
     const todas0 = ctx.ofertasPorInsumo.get(insumoId) || [];
-    const fc = { conservacion: cons || null };
-    fc.sinConservacion = !!cons && !todas0.some(function (o) { return o.conservacion === cons; });
-    const c0 = costoInsumo(ctx, insumoId, cons);
-    const normalTotal = c0.oferta ? compraConOferta(ctx, c0.oferta, usable).bruto : null;
+    const ef = reqPosible(req, todas0);
+    const fc = { conservacion: req ? req.conservacion || null : null, req: ef.req };
+    fc.sinConservacion = ef.faltan.indexOf('conservacion') >= 0;
+    const c0 = costoInsumo(ctx, insumoId, req);
+    const normalTotal = c0.oferta ? compraConOferta(ctx, c0.oferta, usable, uso).bruto : null;
     const out = [];
     todas0.forEach(function (o) {
       if (o.disponible === false || fueraDeVigencia(ctx, o) || !ofertaHabilitada(ctx, o) || !(o.formatoQty > 0) || !(o.precio > 0) || !sirveParaFila(o, fc)) return;
       const p = proveedorDe(ctx, o);
       if (!p || p.activo === false) return;
-      const c = compraConOferta(ctx, o, usable), div = c.sinFactura ? 1 : divisorIva(ctx, p);
+      const c = compraConOferta(ctx, o, usable, uso), div = c.sinFactura ? 1 : divisorIva(ctx, p);
       const base = { oferta: o, proveedor: p, packs: c.packs, bruto: c.bruto, porRevisar: !!o.pendiente };
       if (p.retiro !== false && (!c.online || p.retiroOnline !== false)) {
         out.push(Object.assign({ modo: c.online ? 'retirar pedido online' : 'ir a comprar', promo: null, plazoDias: 0, horaCorte: '', logBruto: 0, logCosto: Number(p.costoVisita) || 0, faltaMinimo: faltaRetiro(p, c.online, c.bruto) }, base));
@@ -1865,7 +2086,7 @@ window.CLOUD = {
     const todas = out.filter(function (x) { return x.viable; });
     const mejorHasta = function (d) { return todas.filter(function (x) { return x.plazoDias != null && x.plazoDias <= d; }).reduce(function (a, x) { return !a || x.total < a.total ? x : a; }, null); };
     return { insumo: ins, usable: usable, opciones: lista, masRapida: masRapida, masBarata: masBarata, normalTotal: normalTotal,
-      conservacion: fc.conservacion, sinConservacion: fc.sinConservacion,
+      conservacion: fc.conservacion, sinConservacion: fc.sinConservacion, exige: req, sinCumplir: ef.faltan.length ? ef.faltan : null,
       mejorHoy: mejorHasta(0), mejorManana: mejorHasta(1), mejorSinApuro: todas.reduce(function (a, x) { return !a || x.total < a.total ? x : a; }, null) };
   }
   // insumos cuyo sobrestock se acaba en `dias` días o menos (posibles quiebres)
@@ -2178,14 +2399,13 @@ window.CLOUD = {
   }
 
   // cubrir `usable` con una oferta, en formatos enteros (con las promociones que le aplican y sus condiciones)
-  function compraConOferta(ctx, o, usable) {
-    const ins = ctx.insumos.get(o.insumoId);
-    const rend = o.rendimiento != null ? o.rendimiento : (ins && ins.rendimiento != null ? ins.rendimiento : 1);
+  function compraConOferta(ctx, o, usable, uso) {
+    const rend = rendOferta(ctx, o, uso);
     const base = rend > 0 ? usable / rend : usable;
     const packs = o.formatoQty > 0 ? Math.ceil(base / o.formatoQty - 1e-9) : 0;
     const info = infoPrecio(ctx, o, packs, false), bruto = packs * info.precio;
     const prov = proveedorDe(ctx, o);
-    return { ofertaId: o.id, proveedorId: prov ? prov.id : null, packs: packs, bruto: bruto, costo: bruto / (info.sinFactura ? 1 : divisorIva(ctx, prov)),
+    return { ofertaId: o.id, proveedorId: prov ? prov.id : null, uso: uso || null, packs: packs, bruto: bruto, costo: bruto / (info.sinFactura ? 1 : divisorIva(ctx, prov)),
       campanas: info.campanas, descuentos: info.descuentos.map(function (d) { return Object.assign({}, d, { monto: d.monto * packs }); }),
       sinFactura: info.sinFactura, online: info.online, soloTienda: info.soloTienda };
   }
@@ -2288,14 +2508,14 @@ window.CLOUD = {
     const cand = new Map(), sinOferta = [];
     nec.forEach(function (q, id) {
       if (!(q > 0)) return;
-      const m = new Map(), fc = { conservacion: conservacionCompra(nec, id).cons };
+      const rq = conservacionCompra(nec, id).cons, uso = rq ? rq.uso || null : null;
       const ofs = ofertasDisponibles(ctx, id);
-      fc.sinConservacion = !ofs.some(function (o) { return sirveParaFila(o, fc); });
+      const m = new Map(), fc = { req: reqPosible(rq, ofs).req };
       ofs.filter(function (o) { return sirveParaFila(o, fc); }).forEach(function (o) {
         if (!(o.formatoQty > 0) || !(precioOferta(ctx, o) > 0)) return;
         const p = proveedorDe(ctx, o);
         if (!p || p.activo === false) return;
-        const c = compraConOferta(ctx, o, q), prev = m.get(p.id);
+        const c = Object.assign(compraConOferta(ctx, o, q, uso), { req: fc.req }), prev = m.get(p.id);
         if (!prev || c.costo < prev.costo) m.set(p.id, c);
       });
       if (m.size) cand.set(id, m); else sinOferta.push(id);
@@ -2380,8 +2600,9 @@ window.CLOUD = {
     // referencias: lo que compras hoy (ofertas en uso) y lo más barato ítem por ítem
     const elActual = new Map();
     insIds.forEach(function (id) {
-      const o = costoInsumo(ctx, id, conservacionCompra(nec, id).cons).oferta;
-      if (o && o.formatoQty > 0) elActual.set(id, compraConOferta(ctx, o, nec.get(id)));
+      const rq = conservacionCompra(nec, id).cons;
+      const o = costoInsumo(ctx, id, rq).oferta;
+      if (o && o.formatoQty > 0) elActual.set(id, Object.assign(compraConOferta(ctx, o, nec.get(id), rq ? rq.uso : null), { req: reqPosible(rq, ofertasDisponibles(ctx, id)).req }));
     });
     const elBarato = elegir(new Set(cuenta.keys()));
     return {
@@ -2548,7 +2769,7 @@ window.CLOUD = {
             if (o.disponible === false || o.pendiente || fueraDeVigencia(cd, o) || !ofertaHabilitada(cd, o) || !(o.formatoQty > 0) || !(o.precio > 0) || !sirveParaFila(o, f)) return;
             const pv = proveedorDe(cd, o);
             if (!pv || pv.id !== p.id) return;
-            const c = compraConOferta(cd, o, f.usable);
+            const c = compraConOferta(cd, o, f.usable, f.uso);
             if (!mejor || c.bruto < mejor.bruto) mejor = c;
           });
           if (!mejor) return;
@@ -2878,7 +3099,14 @@ window.CLOUD = {
       if (!f.cumpleGrasa) out.push({ nivel: 'warn', msg: '"' + f.nombre + '" tiene ' + textoPct(f.grasaPct) + '% de grasa; ' +
         (f.req.origenGrasa === 'linea' ? 'la línea ' + r.linea : 'esta receta') + ' pide ' + textoPct(f.req.grasaMax) + '% o menos' +
         (f.elegir ? ' y ninguna de sus opciones con precio lo cumple' : '') });
-      if (f.sinConservacion) out.push({ nivel: 'info', msg: 'No hay cotizaciones ' + (f.sinConservacion === 'congelado' ? 'congeladas' : 'refrigeradas') + ' de "' + f.nombre + '": se costea con las que hay' });
+      (f.sinCumplir || []).forEach(function (k) {
+        const msg = k === 'uso' ? 'Ninguna cotización de "' + f.nombre + '" sirve en trozos (solo hay pulpa o puré): se costea con la que hay'
+          : k === 'organico' ? 'No hay cotizaciones orgánicas de "' + f.nombre + '": se costea con las que hay'
+          : k === 'clean' ? 'No hay cotizaciones clean food de "' + f.nombre + '": se costea con las que hay'
+          : f.sinConservacion === 'fresco' ? 'No hay cotizaciones frescas de "' + f.nombre + '": se costea con la congelada (si aquí sirve, marca que admite congelado)'
+          : 'No hay cotizaciones ' + conservacionPlural(f.sinConservacion) + ' de "' + f.nombre + '": se costea con las que hay';
+        out.push({ nivel: k === 'uso' || k === 'organico' || k === 'clean' ? 'warn' : 'info', msg: msg });
+      });
     });
     if ((r.lineas || []).some(function (l) { return l.borrador; })) out.push({ nivel: 'info', msg: 'Contiene líneas en borrador por revisar' });
     return out;
@@ -2933,7 +3161,12 @@ window.CLOUD = {
     bebestiblePermitido: bebestiblePermitido, opcionesComponente: opcionesComponente, costoCombo: costoCombo, itemsDelDia: itemsDelDia, sugerirAlternativas: sugerirAlternativas,
     CONSERVACIONES: CONSERVACIONES, grasaDe: grasaDe, cumpleGrasa: cumpleGrasa, grasaMaxLinea: grasaMaxLinea, requisitosLinea: requisitosLinea,
     hermanosFamilia: hermanosFamilia, candidatosLinea: candidatosLinea, resolverLinea: resolverLinea, nombreConGrasa: nombreConGrasa, textoPct: textoPct,
-    grasaEnTexto: grasaEnTexto, conservacionEnTexto: conservacionEnTexto, asegurarGrasa: asegurarGrasa, conservacionInsumo: conservacionInsumo
+    grasaEnTexto: grasaEnTexto, conservacionEnTexto: conservacionEnTexto, asegurarGrasa: asegurarGrasa, conservacionInsumo: conservacionInsumo,
+    USOS: USOS, FORMAS: FORMAS, REQ_CONSERVACION: REQ_CONSERVACION, normReq: normReq, sirveOferta: sirveOferta, reqPosible: reqPosible, sirveParaFila: sirveParaFila,
+    reqDeLinea: reqDeLinea, exigenciasReceta: exigenciasReceta, costoPlatoExigiendo: costoPlatoExigiendo, rendOferta: rendOferta,
+    formaEnTexto: formaEnTexto, organicoEnTexto: organicoEnTexto, peladoEnTexto: peladoEnTexto, asegurarVerduras: asegurarVerduras,
+    revisarRendimiento: revisarRendimiento, rendimientosPorRevisar: rendimientosPorRevisar,
+    etiquetaConservacion: etiquetaConservacion, conservacionPlural: conservacionPlural, conservacionSingular: conservacionSingular
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;
@@ -3193,6 +3426,7 @@ window.CLOUD = {
       window.Engine.asegurarDietas(s);   // pescados y mariscos: de "con carne/pescado" a pescetariano (una vez)
       window.Engine.etiquetarSalsas(s);   // bases que son salsas → etiqueta (una vez)
       window.Engine.asegurarGrasa(s);   // % de grasa desde el nombre del insumo y congelado/refrigerado desde la cotización (una vez)
+      window.Engine.asegurarVerduras(s);   // verduras (orgánico, forma de compra, fresco primero) y procesados (clean food) según su categoría (una vez)
       window.Engine.normalizarMayusculas(s);   // mayúscula solo al iniciar oración y en nombres propios (una vez); antes de los combos: renombra las líneas
       window.Engine.asegurarCombos(s);   // combos y precio por línea (la primera vez, desde el antiguo precio de la Trilogía)
     }
@@ -4261,6 +4495,87 @@ window.CLOUD = {
     });
     parseHash();
   };
+})();
+
+/* src/ui/cabecera.js */
+/* Encabezado de tabla fijo al bajar la página.
+ * El "sticky" de CSS no sirve cuando la tabla está dentro de un contenedor con scroll horizontal (.card, .scroll-x):
+ * ese contenedor pasa a ser el ancla y, como no se desplaza hacia abajo, el encabezado nunca se fija.
+ * Aquí se muestra, bajo la barra superior, una copia del encabezado de la tabla que está en pantalla.
+ * Las tablas que ya tienen su propio scroll vertical (.scroll, .drawer, ventanas) usan el sticky de CSS. */
+(function () {
+  'use strict';
+  const PROPIO = '.scroll, .drawer, .modal, .visor-b, .overlay, .visor-fondo';
+  let caja = null, tabla = null, clave = '', pendiente = false;
+
+  function crearCaja() {
+    caja = document.createElement('div');
+    caja.className = 'th-flota';
+    caja.hidden = true;
+    document.body.appendChild(caja);
+  }
+
+  function offsetSuperior() {
+    const top = document.querySelector('.top');
+    return top && getComputedStyle(top).position === 'sticky' ? top.getBoundingClientRect().height : 0;
+  }
+
+  function candidata(off) {
+    const tablas = document.querySelectorAll('#app table.tbl');
+    for (let i = 0; i < tablas.length; i++) {
+      const t = tablas[i];
+      if (t.classList.contains('sub') || !t.tHead || t.closest(PROPIO)) continue;
+      const th = t.tHead.getBoundingClientRect(), tb = t.getBoundingClientRect();
+      if (th.height && th.top < off && tb.bottom > off + th.height + 24) return t;
+    }
+    return null;
+  }
+
+  function armar(t) {
+    const ths = t.tHead.querySelectorAll('th');
+    const anchos = Array.prototype.map.call(ths, function (th) { return th.getBoundingClientRect().width; });
+    const k = anchos.join(',') + '|' + t.tHead.textContent + '|' + t.className;
+    if (t === tabla && k === clave) return;
+    tabla = t; clave = k;
+    const copia = document.createElement('table');
+    copia.className = t.className;
+    copia.style.cssText = 'table-layout: fixed; width: ' + t.getBoundingClientRect().width + 'px; margin: 0;';
+    const cab = t.tHead.cloneNode(true);
+    const copias = cab.querySelectorAll('th');
+    Array.prototype.forEach.call(copias, function (th, i) {
+      th.style.width = anchos[i] + 'px';
+      th.style.position = 'static';
+      th.addEventListener('click', function () { ths[i].click(); });   // ordenar desde la copia = ordenar desde el original
+    });
+    copia.appendChild(cab);
+    caja.replaceChildren(copia);
+  }
+
+  function actualizar() {
+    pendiente = false;
+    if (!caja) crearCaja();
+    const off = offsetSuperior(), t = candidata(off);
+    if (!t) { caja.hidden = true; tabla = null; clave = ''; return; }
+    armar(t);
+    const ancla = t.closest('.scroll-x, .card') || t.parentElement;
+    const r = ancla.getBoundingClientRect(), rt = t.getBoundingClientRect();
+    caja.hidden = false;
+    caja.style.top = off + 'px';
+    caja.style.left = r.left + 'px';
+    caja.style.width = r.width + 'px';
+    caja.firstChild.style.transform = 'translateX(' + (rt.left - r.left) + 'px)';
+  }
+
+  function pedir() { if (!pendiente) { pendiente = true; requestAnimationFrame(actualizar); } }
+
+  function iniciar() {
+    window.addEventListener('scroll', pedir, true);
+    window.addEventListener('resize', pedir);
+    const app = document.getElementById('app');
+    if (app) new MutationObserver(pedir).observe(app, { childList: true, subtree: true });
+    pedir();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar); else iniciar();
 })();
 
 /* src/ui/ayuda.js */
@@ -6059,7 +6374,7 @@ window.CLOUD = {
             onChange: function (v) { upd(function (x) { if (v) x.lineas[i].conservacion = v; else delete x.lineas[i].conservacion; }); } })),
         usada ? h('small', { class: 'ok-t' }, '→ hoy usa ' + usada.nombre + (fila.oferta && fila.oferta.conservacion ? ' (' + fila.oferta.conservacion + ')' : '')) : null,
         fila.cumpleGrasa === false ? h('small', { class: 'bad-t' }, '⚠ ' + E.textoPct(fila.grasaPct) + '% de grasa: pide ' + E.textoPct(req.grasaMax) + '% o menos') : null,
-        fila.sinConservacion ? h('small', { class: 'warn-t' }, 'No hay cotizaciones ' + (fila.sinConservacion === 'congelado' ? 'congeladas' : 'refrigeradas') + ': se costea con las que hay') : null,
+        fila.sinConservacion ? h('small', { class: 'warn-t' }, 'No hay cotizaciones ' + E.conservacionPlural(fila.sinConservacion) + ': se costea con las que hay') : null,
         fila.extraGrasa > 0.5 ? h('small', { class: 'mut' }, 'Por ser más magra que ' + (fila.grasaBase ? fila.grasaBase.nombre : 'la más barata') + ': +' + App.clp(fila.extraGrasa / (r.porciones > 0 ? r.porciones : 1)) + ' por porción') : null);
     };
     const filaLinea = function (l, i) {
@@ -6940,7 +7255,7 @@ window.CLOUD = {
       if (otros.length) partes.push('también sirve: ' + otros.join(', '));
     }
     if (req.grasaMax != null && E.grasaDe(ctx.insumos.get(l.ref)) != null) partes.push('máx. ' + E.textoPct(req.grasaMax) + '% de grasa');
-    if (req.conservacion) partes.push('solo ' + req.conservacion);
+    if (l.conservacion) partes.push('solo ' + l.conservacion);   // lo pedido en la receta; "fresco" de las verduras es lo normal y no se repite
     return partes.join(' · ');
   }
 
@@ -8213,10 +8528,10 @@ window.CLOUD = {
     const chipsCalidad = function (f) {
       const b = [];
       if (f.grasaPct != null) b.push(App.badge(E.textoPct(f.grasaPct) + '% grasa', 'info'));
-      const cons = f.conservacion || f.conservacionOferta;
-      if (cons) b.push(App.badge(cons === 'congelado' ? '🧊 congelado' : '❄️ refrigerado', f.conservacion ? 'info' : ''));
-      if (f.conflictoConservacion) b.push(App.badge('unas recetas piden refrigerado y otras congelado: compra por separado', 'warn'));
-      if (f.sinConservacion) b.push(App.badge('sin cotización ' + (f.sinConservacion === 'congelado' ? 'congelada' : 'refrigerada'), 'warn'));
+      const cons = (f.conservacion !== 'fresco' && f.conservacion) || f.conservacionOferta;   // fresco es lo normal en las verduras: no se repite
+      if (cons) b.push(App.badge(E.etiquetaConservacion(cons), f.conservacion ? 'info' : ''));
+      if (f.conflictoConservacion) b.push(App.badge('unas recetas piden congelado y otras fresco o refrigerado: compra por separado', 'warn'));
+      if (f.sinConservacion) b.push(App.badge('sin cotización ' + E.conservacionSingular(f.sinConservacion), 'warn'));
       return b.length ? h('div', { class: 'row gap wrap' }, b) : null;
     };
     const chipsPromo0 = function (f) {
@@ -8940,8 +9255,8 @@ window.CLOUD = {
       return App.card(i.nombre, h('div', { class: 'stack' },
         u.tipo === 'no_alcanza' ? h('div', { class: 'row gap wrap' }, tipoBadge, nota) : null,
         u.tipo === 'no_alcanza' ? bloqueReceta(u) : null,
-        r.conservacion ? h('div', { class: 'row gap wrap' }, App.badge((r.conservacion === 'congelado' ? '🧊 congelado' : '❄️ refrigerado') + ': las recetas del plan lo piden así', 'info'),
-          r.sinConservacion ? App.badge('sin cotizaciones ' + (r.conservacion === 'congelado' ? 'congeladas' : 'refrigeradas') + ': se muestran todas', 'warn') : null) : null,
+        r.conservacion && (r.conservacion !== 'fresco' || r.sinConservacion) ? h('div', { class: 'row gap wrap' }, App.badge(E.etiquetaConservacion(r.conservacion) + ': las recetas del plan lo piden así', 'info'),
+          r.sinConservacion ? App.badge('sin cotizaciones ' + E.conservacionPlural(r.conservacion) + ': se muestran todas', 'warn') : null) : null,
         h('div', { class: 'row gap wrap' }, u.tipo !== 'no_alcanza' ? tipoBadge : null,
           h('span', null, 'Necesitas ', h('b', null, App.cantidad(usable, i.unidad)), u.cantidad ? '' : ' (' + u.dias + ' días de consumo)'),
           h('div', { class: 'chips' }, PLAZOS.map(function (p) { return App.chip(p[1], String(u.plazo == null ? '' : u.plazo) === p[0], function () { setU(function (x) { x.plazo = p[0]; }); }); })),
