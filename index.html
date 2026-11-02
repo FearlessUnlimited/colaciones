@@ -360,16 +360,17 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-10-10T03:25:41Z">
+<meta name="build" content="2026-11-02T08:36:05Z">
 <script>
-window.BUILD = "2026-10-10T03:25:41Z";
+window.BUILD = "2026-11-02T08:36:05Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
 /* Conexión a Supabase. La clave "publishable" es pública por diseño: la seguridad la dan el login y las reglas RLS. */
 window.CLOUD = {
-  url: 'https://mnwqlfqskmgnenvttixs.supabase.co',
-  key: 'sb_publishable_eJ7034OktygacSH63kj50A_53jlNzMP'
+  url: 'https://qzvcyjmpodfibbkqtlmo.supabase.co',
+  key: 'sb_publishable_4GUlT4wC6widSnkZ4PgSbw_EI_R_v7m',
+  schema: 'colaciones'
 };
 
 /* src/engine.js */
@@ -5468,7 +5469,7 @@ window.CLOUD = {
     if (!window.supabase || !window.supabase.createClient) {
       N.fase = 'error'; N.error = 'No se pudo cargar el servicio de datos. Revisa tu conexión a internet y recarga la página.'; App.render(); return;
     }
-    N.sb = window.supabase.createClient(window.CLOUD.url, window.CLOUD.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+    N.sb = window.supabase.createClient(window.CLOUD.url, window.CLOUD.key, { db: { schema: window.CLOUD.schema }, auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
     N.sync = window.Nube.crearSync(N.sb, onEstado);
     Store.establecer(vacio());
     Store.usarBackend(guardar);
@@ -5502,11 +5503,12 @@ window.CLOUD = {
   }
   function mensaje(txt, kind) { const m = document.getElementById('acc-msg'); if (m) { m.textContent = txt; m.className = 'acc-msg ' + (kind || ''); } }
   const val = function (id) { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const YA_TIENE_CUENTA = 'Ese correo ya tiene cuenta: inicia sesión o recupera tu contraseña.';
   const errTxt = function (e) {
     const m = (e && e.message) || String(e);
     if (/Invalid login/i.test(m)) return 'Correo o contraseña incorrectos.';
     if (/Email not confirmed/i.test(m)) return 'Falta confirmar el correo: revisa tu bandeja (y spam).';
-    if (/already registered/i.test(m)) return 'Ese correo ya tiene cuenta: inicia sesión.';
+    if (/already registered/i.test(m)) return YA_TIENE_CUENTA;
     if (/Password should be/i.test(m)) return 'La contraseña debe tener al menos 6 caracteres.';
     if (/rate limit/i.test(m)) return 'Demasiados intentos seguidos. Espera unos minutos.';
     return m;
@@ -5520,8 +5522,11 @@ window.CLOUD = {
       return caja('Crear cuenta', h('form', { class: 'stack', onsubmit: async function (ev) {
         ev.preventDefault(); mensaje('Creando…');
         const r = await N.sb.auth.signUp({ email: val('acc-email'), password: document.getElementById('acc-pass').value,
-          options: { data: { nombre: val('acc-nombre') }, emailRedirectTo: redir } });
+          // la base es compartida con otras apps: la marca app es lo que le crea un perfil aquí
+          options: { data: { nombre: val('acc-nombre'), app: 'colaciones' }, emailRedirectTo: redir } });
         if (r.error) mensaje(errTxt(r.error), 'bad');
+        // con la confirmación de correo activa, un correo ya registrado no da error ni manda correo: solo viene sin identidades
+        else if (r.data.user && r.data.user.identities && !r.data.user.identities.length) mensaje(YA_TIENE_CUENTA, 'bad');
         else if (!r.data.session) mensaje('Cuenta creada. Revisa tu correo para confirmarla y luego inicia sesión.', 'good');
       } },
         campo('Tu nombre', 'text', 'acc-nombre', 'name'), campo('Correo', 'email', 'acc-email', 'email'), campo('Contraseña (mínimo 6 caracteres)', 'password', 'acc-pass', 'new-password'),
@@ -5550,9 +5555,25 @@ window.CLOUD = {
       h('div', { class: 'row gap wrap' }, h('a', { href: '#', onclick: cambiar('crear') }, 'Crear cuenta'), h('span', { class: 'spacer' }), h('a', { href: '#', onclick: cambiar('olvide') }, '¿Olvidaste tu contraseña?'))));
   }
 
+  // quien ya tenía cuenta por otra app de la misma base entra sin perfil: el admin no lo ve hasta que lo pida
+  async function solicitarAcceso() {
+    mensaje('Enviando…');
+    const r = await N.sb.rpc('solicitar_acceso');
+    if (r.error) { mensaje(errTxt(r.error), 'bad'); return; }
+    App.toast('Solicitud enviada: el administrador la verá en Usuarios.');
+    await cargarTodo();
+  }
+
   App.pantallaAcceso = function () {
     if (N.fase === 'login') return login();
     if (N.fase === 'iniciando' || N.fase === 'cargando') return caja('Cargando…', h('p', { class: 'mut' }, N.fase === 'cargando' ? 'Trayendo los datos del negocio.' : 'Conectando.'));
+    if (N.fase === 'sinrol' && !N.perfil) {
+      return caja('Cuenta pendiente', h('div', { class: 'stack' },
+        h('p', null, 'Tu cuenta (' + (N.user ? N.user.email : '') + ') existe, pero todavía no tiene acceso a esta app.'),
+        h('p', { class: 'help' }, 'Toca “Solicitar acceso” para que el administrador te vea en la sección Usuarios y te asigne un rol.'),
+        h('div', { id: 'acc-msg', class: 'acc-msg' }),
+        h('div', { class: 'row gap' }, App.btn('Solicitar acceso', solicitarAcceso, 'primary'), App.btn('Cerrar sesión', App.salir))));
+    }
     if (N.fase === 'sinrol') {
       return caja('Cuenta pendiente', h('div', { class: 'stack' },
         h('p', null, 'Tu cuenta (' + (N.user ? N.user.email : '') + ') está creada, pero todavía no tiene un rol asignado.'),
@@ -5633,7 +5654,7 @@ window.CLOUD = {
           h('span', null, 'horas')))),
       App.card('Cómo agregar a alguien', h('ol', { class: 'help' },
         h('li', null, 'Envíale el enlace de la app.'),
-        h('li', null, 'Que toque “Crear cuenta” con su correo.'),
+        h('li', null, 'Que toque “Crear cuenta” con su correo. Si ya tiene cuenta por otra app, que inicie sesión y toque “Solicitar acceso”.'),
         h('li', null, 'Aparecerá aquí como “Sin acceso”: elige su rol. Al recargar, ya verá los datos.'))),
       App.card('Qué ve cada rol', h('table', { class: 'tbl compact' }, h('tbody', null,
         h('tr', null, h('td', null, h('b', null, 'Admin')), h('td', null, 'Todo, más esta sección de usuarios.')),
