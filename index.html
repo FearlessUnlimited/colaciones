@@ -360,9 +360,9 @@ label.row { flex-direction: row; }
 <div id="app"><p style="padding:20px">Cargando…</p></div>
 <noscript>Esta aplicación necesita JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<meta name="build" content="2026-11-02T08:36:05Z">
+<meta name="build" content="2026-11-02T09:53:34Z">
 <script>
-window.BUILD = "2026-11-02T08:36:05Z";
+window.BUILD = "2026-11-02T09:53:34Z";
 /* sin datos incrustados: vienen de la nube */
 window.SEED = null; window.INFORME = null;
 /* src/config.cloud.js */
@@ -5398,7 +5398,8 @@ window.CLOUD = {
   async function cargarTodo() {
     if (!N.user) return;
     const uid = N.user.id;
-    const vigente = function () { return N.user && N.user.id === uid; };   // la sesión pudo cerrarse mientras cargaba
+    // la sesión pudo cerrarse mientras cargaba, o llegar el aviso del enlace para cambiar la contraseña
+    const vigente = function () { return N.user && N.user.id === uid && N.fase !== 'recuperar'; };
     N.fase = 'cargando'; App.render();
     try {
       const perfil = await leerPerfil();
